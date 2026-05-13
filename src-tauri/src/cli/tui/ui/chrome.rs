@@ -336,18 +336,16 @@ pub(super) fn render_footer(
     } else {
         if theme.no_color {
             let proxy_segment = if proxy_action_available {
-                format!("  P {}", proxy_footer_label)
+                format!("P {}  ", proxy_footer_label)
             } else {
                 String::new()
             };
             vec![Span::styled(
                 format!(
-                    "{} {}  {} {}{}",
-                    texts::tui_footer_group_nav(),
+                    "{}  {}{}",
                     texts::tui_footer_nav_keys(),
-                    texts::tui_footer_group_actions(),
-                    texts::tui_footer_action_keys_global(),
                     proxy_segment,
+                    texts::tui_footer_action_keys_global(),
                 ),
                 Style::default(),
             )]
@@ -356,14 +354,6 @@ pub(super) fn render_footer(
             let act_bg = super::theme::terminal_palette_color((248, 248, 248)); // #F8F8F8
             let nav_fg = super::theme::terminal_palette_color((255, 255, 255));
             let act_fg = super::theme::terminal_palette_color((108, 108, 108));
-            let nav_label_style = Style::default()
-                .fg(nav_fg)
-                .bg(nav_bg)
-                .add_modifier(Modifier::BOLD);
-            let act_label_style = Style::default()
-                .fg(act_fg)
-                .bg(act_bg)
-                .add_modifier(Modifier::BOLD);
             let nav_key_style = Style::default()
                 .fg(nav_fg)
                 .bg(nav_bg)
@@ -401,12 +391,10 @@ pub(super) fn render_footer(
 
             let mut act_items = act_items_base.to_vec();
             if proxy_action_available {
-                act_items.push(("P", proxy_footer_label));
+                act_items.insert(0, ("P", proxy_footer_label));
             }
 
             let mut v = Vec::new();
-            // NAV block
-            v.push(Span::styled(" NAV ", nav_label_style));
             for (i, (key, desc)) in nav_items.iter().enumerate() {
                 if i > 0 {
                     v.push(nav_sep.clone());
@@ -417,8 +405,6 @@ pub(super) fn render_footer(
             v.push(Span::styled(" ", nav_desc_style));
             // gap between blocks
             v.push(Span::raw(" "));
-            // ACT block
-            v.push(Span::styled(" ACT ", act_label_style));
             for (i, (key, desc)) in act_items.iter().enumerate() {
                 if i > 0 {
                     v.push(act_sep.clone());

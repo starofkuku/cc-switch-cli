@@ -1690,8 +1690,52 @@ fn home_footer_shows_proxy_on_shortcut_when_stopped() {
     let footer = line_at(&buf, buf.area.height - 1);
 
     assert!(footer.contains("proxy on"), "{footer}");
+    assert!(!footer.contains("NAV"), "{footer}");
+    assert!(!footer.contains("ACT"), "{footer}");
     assert!(all.contains("___  ___"));
     assert!(!all.contains("Proxy Dashboard"));
+}
+
+#[test]
+fn home_footer_keeps_proxy_shortcut_visible_on_narrow_chinese_terminal() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+    let _lang = use_test_language(Language::Chinese);
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Main;
+    app.focus = Focus::Content;
+
+    let data = minimal_data(&app.app_type);
+    let buf = render_with_size(&app, &data, 80, 24);
+    let footer = line_at(&buf, buf.area.height - 1);
+    let compact_footer = footer.replace(' ', "");
+
+    assert!(footer.contains("P"), "{footer}");
+    assert!(compact_footer.contains("P代理开"), "{footer}");
+    assert!(!compact_footer.contains("导航"), "{footer}");
+    assert!(!compact_footer.contains("功能"), "{footer}");
+}
+
+#[test]
+fn home_footer_keeps_proxy_shortcut_visible_on_narrow_chinese_no_color_terminal() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+    let _lang = use_test_language(Language::Chinese);
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Main;
+    app.focus = Focus::Content;
+
+    let data = minimal_data(&app.app_type);
+    let buf = render_with_size(&app, &data, 80, 24);
+    let footer = line_at(&buf, buf.area.height - 1);
+    let compact_footer = footer.replace(' ', "");
+
+    assert!(footer.contains("P"), "{footer}");
+    assert!(compact_footer.contains("P代理开"), "{footer}");
+    assert!(!compact_footer.contains("导航"), "{footer}");
+    assert!(!compact_footer.contains("功能"), "{footer}");
 }
 
 #[test]
@@ -2718,6 +2762,8 @@ fn footer_shows_only_global_actions() {
         footer.contains("switch app") && footer.contains("/ filter"),
         "expected footer to show global actions; got: {footer:?}"
     );
+    assert!(!footer.contains("NAV"), "{footer}");
+    assert!(!footer.contains("ACT"), "{footer}");
     assert!(
         !footer.contains("clear") && !footer.contains("apply"),
         "expected footer to not show overlay/page actions; got: {footer:?}"
