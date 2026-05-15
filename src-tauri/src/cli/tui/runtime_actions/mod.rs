@@ -272,6 +272,13 @@ pub(crate) fn handle_action(
         Action::ConfigCommonSnippetApply { app_type } => {
             config::apply_common_snippet(&mut ctx, app_type)
         }
+        Action::ProviderFormExtractCommonSnippet { app_type } => {
+            config::extract_common_snippet_from_provider_form(&mut ctx, app_type)
+        }
+        Action::ConfirmCommonConfigNotice => {
+            ctx.app.common_config_notice_confirmed = true;
+            Ok(())
+        }
         Action::ConfigWebDavCheckConnection => config::webdav_check_connection(&mut ctx),
         Action::ConfigWebDavUpload => config::webdav_upload(&mut ctx),
         Action::ConfigWebDavDownload => config::webdav_download(&mut ctx),

@@ -115,7 +115,7 @@ pub(crate) fn queue_managed_proxy_action(
 }
 
 pub(super) fn refresh_common_snippet_overlay(app: &mut App, data: &UiData) {
-    let Overlay::CommonSnippetView { app_type, view } = &mut app.overlay else {
+    let Overlay::CommonSnippetView { app_type, view, .. } = &mut app.overlay else {
         return;
     };
 

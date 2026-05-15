@@ -774,6 +774,14 @@ pub fn tui_key_apply() -> &'static str {
     }
 }
 
+pub fn tui_key_extract() -> &'static str {
+    if is_chinese() {
+        "提取"
+    } else {
+        "extract"
+    }
+}
+
 pub fn tui_key_edit_snippet() -> &'static str {
     if is_chinese() {
         "编辑片段"

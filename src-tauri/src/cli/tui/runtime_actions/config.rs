@@ -7,6 +7,7 @@ use crate::settings::set_webdav_sync_settings;
 
 use super::super::app::{LoadingKind, Overlay, TextViewState, ToastKind};
 use super::super::data::{load_state, UiData};
+use super::super::form::ProviderAddFormState;
 use super::super::runtime_systems::{WebDavReq, WebDavReqKind};
 use super::helpers::{
     export_target, open_proxy_help as open_proxy_help_overlay, refresh_common_snippet_overlay,
@@ -188,6 +189,56 @@ pub(super) fn apply_common_snippet(
     ctx.app
         .push_toast(texts::common_config_snippet_applied(), ToastKind::Success);
     *ctx.data = UiData::load(&ctx.app.app_type)?;
+    Ok(())
+}
+
+pub(super) fn extract_common_snippet_from_provider_form(
+    ctx: &mut RuntimeActionContext<'_>,
+    app_type: AppType,
+) -> Result<(), AppError> {
+    let settings_config = {
+        let Some(crate::cli::tui::form::FormState::ProviderAdd(provider)) = ctx.app.form.as_ref()
+        else {
+            return Ok(());
+        };
+
+        if provider.app_type != app_type {
+            return Ok(());
+        }
+
+        let provider_value = match provider
+            .to_provider_json_value_with_common_config(&ctx.data.config.common_snippet)
+        {
+            Ok(value) => value,
+            Err(err) => {
+                ctx.app.push_toast(err, ToastKind::Error);
+                return Ok(());
+            }
+        };
+        provider_value
+            .get("settingsConfig")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}))
+    };
+
+    let extracted = ProviderService::extract_common_config_snippet_from_settings(
+        app_type.clone(),
+        &settings_config,
+    )?;
+    if !ProviderAddFormState::snippet_has_effective_common_config(&app_type, &extracted) {
+        ctx.app.push_toast(
+            texts::common_config_snippet_extract_empty(),
+            ToastKind::Info,
+        );
+        return Ok(());
+    }
+
+    let state = load_state()?;
+    ProviderService::set_common_config_snippet(&state, app_type.clone(), Some(extracted.clone()))?;
+    ctx.app
+        .push_toast(texts::common_config_snippet_extracted(), ToastKind::Success);
+    *ctx.data = UiData::load(&ctx.app.app_type)?;
+    refresh_common_snippet_overlay(ctx.app, ctx.data);
     Ok(())
 }
 

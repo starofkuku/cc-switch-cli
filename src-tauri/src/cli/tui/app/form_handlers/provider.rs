@@ -301,7 +301,7 @@ impl App {
                     let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() else {
                         return Action::None;
                     };
-                    self.open_common_snippet_editor(provider.app_type.clone(), data, None);
+                    self.open_provider_form_common_snippet_view(provider.app_type.clone(), data);
                 }
                 Action::None
             }

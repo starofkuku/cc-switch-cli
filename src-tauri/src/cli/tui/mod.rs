@@ -209,6 +209,7 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
     let _panic_hook = PanicRestoreHookGuard::install();
     let mut terminal = TuiTerminal::new()?;
     let (mut app, mut data) = initialize_app_state_with(app_override, data::UiData::load)?;
+    app.common_config_notice_confirmed = false;
     let mut proxy_open_flash = ProxyOpenFlash::default();
     app.reset_proxy_activity(
         data.proxy.estimated_input_tokens_total,

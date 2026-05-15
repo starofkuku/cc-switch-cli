@@ -97,8 +97,8 @@ pub(super) fn submit(
         EditorSubmit::ProviderEdit { id } => submit_provider_edit(ctx, id, content),
         EditorSubmit::McpAdd => submit_mcp_add(ctx, content),
         EditorSubmit::McpEdit { id } => submit_mcp_edit(ctx, id, content),
-        EditorSubmit::ConfigCommonSnippet { app_type } => {
-            submit_config_common_snippet(ctx, app_type, content)
+        EditorSubmit::ConfigCommonSnippet { app_type, source } => {
+            submit_config_common_snippet(ctx, app_type, source, content)
         }
         EditorSubmit::OpenClawWorkspaceFile { filename } => {
             submit_openclaw_workspace_file(ctx, filename, content)
@@ -718,6 +718,7 @@ fn submit_mcp_edit(
 fn submit_config_common_snippet(
     ctx: &mut RuntimeActionContext<'_>,
     app_type: AppType,
+    source: crate::cli::tui::app::CommonSnippetViewSource,
     content: String,
 ) -> Result<(), AppError> {
     let edited = content.trim().to_string();
@@ -788,6 +789,7 @@ fn submit_config_common_snippet(
     });
     ctx.app.overlay = Overlay::CommonSnippetView {
         app_type: app_type.clone(),
+        source,
         view: TextViewState {
             title: texts::tui_common_snippet_title(app_type.as_str()),
             lines: snippet.lines().map(|s| s.to_string()).collect(),
@@ -948,6 +950,49 @@ mod tests {
             webdav_loading: RequestTracker::default(),
             update_check: RequestTracker::default(),
         }
+    }
+
+    #[test]
+    #[serial(home_settings)]
+    fn submit_config_common_snippet_preserves_provider_form_source() {
+        let mut fixture = runtime_ctx(AppType::Claude);
+
+        let mut ctx = RuntimeActionContext {
+            terminal: &mut fixture.terminal,
+            app: &mut fixture.app,
+            data: &mut fixture.data,
+            speedtest_req_tx: None,
+            stream_check_req_tx: None,
+            skills_req_tx: None,
+            proxy_req_tx: None,
+            proxy_loading: &mut fixture.proxy_loading,
+            local_env_req_tx: None,
+            webdav_req_tx: None,
+            webdav_loading: &mut fixture.webdav_loading,
+            update_req_tx: None,
+            update_check: &mut fixture.update_check,
+            model_fetch_req_tx: None,
+        };
+
+        super::submit(
+            &mut ctx,
+            EditorSubmit::ConfigCommonSnippet {
+                app_type: AppType::Claude,
+                source: crate::cli::tui::app::CommonSnippetViewSource::ProviderForm,
+            },
+            r#"{"env":{"COMMON_FLAG":"1"}}"#.to_string(),
+        )
+        .expect("common snippet submit should succeed");
+
+        assert!(ctx.app.editor.is_none());
+        assert!(matches!(
+            ctx.app.overlay,
+            Overlay::CommonSnippetView {
+                app_type: AppType::Claude,
+                source: crate::cli::tui::app::CommonSnippetViewSource::ProviderForm,
+                ..
+            }
+        ));
     }
 
     #[test]

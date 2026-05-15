@@ -114,6 +114,20 @@ mod tests {
         UiData::default()
     }
 
+    fn select_provider_common_snippet_row(app: &mut App) {
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Fields;
+            form.editing = false;
+            let fields = form.fields();
+            form.field_idx = fields
+                .iter()
+                .position(|f| *f == ProviderAddField::CommonSnippet)
+                .expect("CommonSnippet field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+    }
+
     fn claude_provider_row(id: &str) -> ProviderRow {
         ProviderRow {
             id: id.to_string(),
@@ -876,7 +890,8 @@ mod tests {
     #[test]
     fn provider_add_form_notes_is_length_limited() {
         let mut app = App::new(Some(AppType::Claude));
-        app.open_provider_add_form();
+        let ui_data = UiData::default();
+        app.open_provider_add_form(&ui_data);
 
         let notes_idx = match app.form.as_ref() {
             Some(FormState::ProviderAdd(form)) => form
@@ -894,9 +909,9 @@ mod tests {
         }
 
         // Enter edit mode for Notes.
-        app.on_key(key(KeyCode::Enter), &data());
+        app.on_key(key(KeyCode::Enter), &ui_data);
         for _ in 0..(PROVIDER_NOTES_MAX_CHARS + 10) {
-            app.on_key(key(KeyCode::Char('a')), &data());
+            app.on_key(key(KeyCode::Char('a')), &ui_data);
         }
 
         let notes_len = match app.form.as_ref() {
@@ -3085,6 +3100,7 @@ mod tests {
             Overlay::CommonSnippetView {
                 app_type: AppType::Codex,
                 view,
+                ..
             } => view.lines.join("\n"),
             other => panic!("expected Codex snippet view, got {other:?}"),
         };
@@ -3155,105 +3171,193 @@ mod tests {
     }
 
     #[test]
-    fn provider_add_form_common_snippet_row_opens_editor_claude() {
+    fn provider_add_form_common_snippet_row_opens_view_claude() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
         app.focus = Focus::Content;
 
-        let data = UiData::default();
+        let data = data();
         app.on_key(key(KeyCode::Char('a')), &data);
         app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        select_provider_common_snippet_row(&mut app);
 
-        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
-            form.focus = super::super::form::FormFocus::Fields;
-            form.editing = false;
-            let fields = form.fields();
-            form.field_idx = fields
-                .iter()
-                .position(|f| *f == ProviderAddField::CommonSnippet)
-                .expect("CommonSnippet field should exist");
-        } else {
-            panic!("expected ProviderAdd form");
-        }
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::CommonSnippetView {
+                app_type: AppType::Claude,
+                source: CommonSnippetViewSource::ProviderForm,
+                ..
+            }
+        ));
 
-        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(key(KeyCode::Char('e')), &data);
+        assert!(matches!(action, Action::None));
         assert!(matches!(
             app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
             Some((
                 EditorKind::Json,
                 EditorSubmit::ConfigCommonSnippet {
-                    app_type: AppType::Claude
+                    app_type: AppType::Claude,
+                    source: CommonSnippetViewSource::ProviderForm
                 }
             ))
         ));
     }
 
     #[test]
-    fn provider_add_form_common_snippet_row_opens_editor_codex() {
+    fn provider_add_form_common_snippet_row_opens_view_codex() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
         app.focus = Focus::Content;
 
-        let data = UiData::default();
+        let data = data();
         app.on_key(key(KeyCode::Char('a')), &data);
         app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        select_provider_common_snippet_row(&mut app);
 
-        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
-            form.focus = super::super::form::FormFocus::Fields;
-            form.editing = false;
-            let fields = form.fields();
-            form.field_idx = fields
-                .iter()
-                .position(|f| *f == ProviderAddField::CommonSnippet)
-                .expect("CommonSnippet field should exist");
-        } else {
-            panic!("expected ProviderAdd form");
-        }
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::CommonSnippetView {
+                app_type: AppType::Codex,
+                source: CommonSnippetViewSource::ProviderForm,
+                ..
+            }
+        ));
 
-        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(key(KeyCode::Char('e')), &data);
+        assert!(matches!(action, Action::None));
         assert!(matches!(
             app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
             Some((
                 EditorKind::Plain,
                 EditorSubmit::ConfigCommonSnippet {
-                    app_type: AppType::Codex
+                    app_type: AppType::Codex,
+                    source: CommonSnippetViewSource::ProviderForm
                 }
             ))
         ));
     }
 
     #[test]
-    fn provider_add_form_common_snippet_row_opens_editor_gemini() {
+    fn provider_add_form_common_snippet_row_opens_view_gemini() {
         let mut app = App::new(Some(AppType::Gemini));
         app.route = Route::Providers;
         app.focus = Focus::Content;
 
-        let data = UiData::default();
+        let data = data();
         app.on_key(key(KeyCode::Char('a')), &data);
         app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        select_provider_common_snippet_row(&mut app);
 
-        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
-            form.focus = super::super::form::FormFocus::Fields;
-            form.editing = false;
-            let fields = form.fields();
-            form.field_idx = fields
-                .iter()
-                .position(|f| *f == ProviderAddField::CommonSnippet)
-                .expect("CommonSnippet field should exist");
-        } else {
-            panic!("expected ProviderAdd form");
-        }
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::CommonSnippetView {
+                app_type: AppType::Gemini,
+                source: CommonSnippetViewSource::ProviderForm,
+                ..
+            }
+        ));
 
-        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(key(KeyCode::Char('e')), &data);
+        assert!(matches!(action, Action::None));
         assert!(matches!(
             app.editor.as_ref().map(|e| (&e.kind, &e.submit)),
             Some((
                 EditorKind::Json,
                 EditorSubmit::ConfigCommonSnippet {
-                    app_type: AppType::Gemini
+                    app_type: AppType::Gemini,
+                    source: CommonSnippetViewSource::ProviderForm
                 }
             ))
         ));
+    }
+
+    #[test]
+    fn provider_form_common_snippet_view_a_extracts_from_current_form() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = data();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data); // apply template -> fields
+        select_provider_common_snippet_row(&mut app);
+        app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('a')), &data),
+            Action::ProviderFormExtractCommonSnippet {
+                app_type: AppType::Claude
+            }
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_first_open_shows_common_config_notice_for_supported_apps() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.common_config_notice_confirmed = false;
+
+        let action = app.on_key(key(KeyCode::Char('a')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                action: ConfirmAction::CommonConfigNotice,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn provider_add_form_skips_common_config_notice_after_confirmed() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = data();
+
+        let action = app.on_key(key(KeyCode::Char('a')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_add_form_skips_common_config_notice_for_unsupported_apps() {
+        let mut app = App::new(Some(AppType::OpenCode));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.common_config_notice_confirmed = false;
+
+        let action = app.on_key(key(KeyCode::Char('a')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn common_config_notice_enter_esc_and_no_all_mark_confirmed() {
+        for key_code in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n')] {
+            let mut app = App::new(Some(AppType::Claude));
+            app.overlay = Overlay::Confirm(ConfirmOverlay {
+                title: texts::tui_common_config_notice_title().to_string(),
+                message: texts::tui_common_config_notice_message(AppType::Claude.as_str()),
+                action: ConfirmAction::CommonConfigNotice,
+            });
+
+            let action = app.on_key(key(key_code), &data());
+            assert!(matches!(action, Action::ConfirmCommonConfigNotice));
+            assert!(matches!(app.overlay, Overlay::None));
+        }
     }
 
     #[test]

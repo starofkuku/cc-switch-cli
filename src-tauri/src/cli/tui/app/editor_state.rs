@@ -30,6 +30,7 @@ pub enum EditorSubmit {
     },
     ConfigCommonSnippet {
         app_type: AppType,
+        source: CommonSnippetViewSource,
     },
     OpenClawWorkspaceFile {
         filename: String,

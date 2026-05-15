@@ -451,11 +451,11 @@ fn export_provider(app_type: AppType, id: &str, output: Option<PathBuf>) -> Resu
         )
     };
 
-    let apply_common_config = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.apply_common_config)
-        .unwrap_or(true);
+    let apply_common_config = ProviderService::provider_uses_common_config_for_app(
+        &app_type,
+        &provider,
+        common_config_snippet.as_deref(),
+    );
 
     let output_path = match output {
         None => {

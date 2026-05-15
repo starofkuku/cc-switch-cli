@@ -1,5 +1,6 @@
 use super::super::theme;
 use super::super::*;
+use crate::cli::tui::app::CommonSnippetViewSource;
 
 pub(super) fn render_help_overlay(frame: &mut Frame<'_>, content_area: Rect, theme: &theme::Theme) {
     let area = centered_rect(OVERLAY_LG.0, OVERLAY_LG.1, content_area);
@@ -73,6 +74,13 @@ pub(super) fn render_confirm_overlay(
                 ("Enter", texts::tui_key_close()),
                 ("Esc", texts::tui_key_close()),
             ],
+        );
+    } else if matches!(confirm.action, ConfirmAction::CommonConfigNotice) {
+        render_key_bar_center(
+            frame,
+            chunks[0],
+            theme,
+            &[("Enter", texts::tui_key_close())],
         );
     } else {
         render_key_bar_center(
@@ -320,6 +328,7 @@ pub(super) fn render_common_snippet_view_overlay(
     title: &str,
     lines: &[String],
     scroll: usize,
+    source: CommonSnippetViewSource,
 ) {
     let area = centered_rect(OVERLAY_LG.0, OVERLAY_LG.1, content_area);
     frame.render_widget(Clear, area);
@@ -337,18 +346,24 @@ pub(super) fn render_common_snippet_view_overlay(
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(inner);
 
-    render_key_bar_center(
-        frame,
-        chunks[0],
-        theme,
-        &[
+    let keys = if matches!(source, CommonSnippetViewSource::ProviderForm) {
+        vec![
+            ("a", texts::tui_key_extract()),
+            ("c", texts::tui_key_clear()),
+            ("e", texts::tui_key_edit()),
+            ("↑↓", texts::tui_key_scroll()),
+            ("Esc", texts::tui_key_close()),
+        ]
+    } else {
+        vec![
             ("a", texts::tui_key_apply()),
             ("c", texts::tui_key_clear()),
             ("e", texts::tui_key_edit()),
             ("↑↓", texts::tui_key_scroll()),
             ("Esc", texts::tui_key_close()),
-        ],
-    );
+        ]
+    };
+    render_key_bar_center(frame, chunks[0], theme, &keys);
 
     let body_area = inset_top(chunks[1], 1);
     render_scrolling_lines(frame, body_area, lines, scroll);

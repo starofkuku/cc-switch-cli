@@ -13,14 +13,24 @@ impl App {
         match &self.overlay {
             Overlay::CommonSnippetPicker { selected } => {
                 let app_type = snippet_picker_app_type(*selected);
-                self.open_common_snippet_editor(app_type, data, None);
+                self.open_common_snippet_editor(
+                    app_type,
+                    data,
+                    None,
+                    CommonSnippetViewSource::Global,
+                );
                 Some(Action::None)
             }
-            Overlay::CommonSnippetView { app_type, view } => {
+            Overlay::CommonSnippetView {
+                app_type,
+                source,
+                view,
+            } => {
                 self.open_common_snippet_editor(
                     app_type.clone(),
                     data,
                     Some(view.lines.join("\n")),
+                    *source,
                 );
                 Some(Action::None)
             }
@@ -183,14 +193,27 @@ impl App {
     }
 
     fn handle_common_snippet_view_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let Overlay::CommonSnippetView { app_type, view } = &mut self.overlay else {
+        let Overlay::CommonSnippetView {
+            app_type,
+            source,
+            view,
+        } = &mut self.overlay
+        else {
             return None;
         };
 
         Some(match key.code {
-            KeyCode::Char('a') => Action::ConfigCommonSnippetApply {
-                app_type: app_type.clone(),
-            },
+            KeyCode::Char('a') => {
+                if matches!(source, CommonSnippetViewSource::ProviderForm) {
+                    Action::ProviderFormExtractCommonSnippet {
+                        app_type: app_type.clone(),
+                    }
+                } else {
+                    Action::ConfigCommonSnippetApply {
+                        app_type: app_type.clone(),
+                    }
+                }
+            }
             KeyCode::Char('c') => Action::ConfigCommonSnippetClear {
                 app_type: app_type.clone(),
             },

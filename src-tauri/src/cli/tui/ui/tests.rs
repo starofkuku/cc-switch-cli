@@ -1372,6 +1372,7 @@ fn editor_cursor_matches_rendered_target_line() {
         initial,
         EditorSubmit::ConfigCommonSnippet {
             app_type: app.app_type.clone(),
+            source: crate::cli::tui::app::CommonSnippetViewSource::Global,
         },
     );
 
@@ -1429,6 +1430,7 @@ fn editor_key_bar_shows_ctrl_o_external_editor_hint() {
         "{\n  \"demo\": true\n}",
         EditorSubmit::ConfigCommonSnippet {
             app_type: app.app_type.clone(),
+            source: crate::cli::tui::app::CommonSnippetViewSource::Global,
         },
     );
 
@@ -2854,6 +2856,34 @@ fn provider_api_format_proxy_notice_overlay_uses_close_actions() {
 }
 
 #[test]
+fn common_config_notice_overlay_shows_single_close_action() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::Confirm(ConfirmOverlay {
+        title: texts::tui_common_config_notice_title().to_string(),
+        message: texts::tui_common_config_notice_message(AppType::Claude.as_str()),
+        action: ConfirmAction::CommonConfigNotice,
+    });
+
+    let data = minimal_data(&app.app_type);
+    let buf = render(&app, &data);
+    let all = all_text(&buf);
+
+    assert!(
+        all.contains("Enter close"),
+        "expected Enter close hint: {all}"
+    );
+    assert!(
+        !all.contains("Esc close"),
+        "should not show duplicate Esc close hint: {all}"
+    );
+}
+
+#[test]
 fn footer_shows_only_global_actions() {
     let _lock = lock_env();
 
@@ -2869,6 +2899,7 @@ fn footer_shows_only_global_actions() {
     app.focus = Focus::Content;
     app.overlay = Overlay::CommonSnippetView {
         app_type: AppType::Claude,
+        source: crate::cli::tui::app::CommonSnippetViewSource::Global,
         view: crate::cli::tui::app::TextViewState {
             title: "Common Snippet".to_string(),
             lines: vec!["{}".to_string()],
