@@ -137,6 +137,7 @@ async fn handle_claude_request(
     let forwarder = match RequestForwarder::new(context.provider_router.clone()) {
         Ok(forwarder) => forwarder
             .with_optimizer_config(context.optimizer_config.clone())
+            .with_copilot_optimizer_config(context.copilot_optimizer_config.clone())
             .with_session(context.session_id.clone(), context.session_client_provided)
             .with_gemini_shadow(context.state.gemini_shadow.clone()),
         Err(error) => {
@@ -478,6 +479,7 @@ async fn handle_passthrough_request(
     let forwarder = match RequestForwarder::new(context.provider_router.clone()) {
         Ok(forwarder) => forwarder
             .with_optimizer_config(context.optimizer_config.clone())
+            .with_copilot_optimizer_config(context.copilot_optimizer_config.clone())
             .with_session(context.session_id.clone(), context.session_client_provided)
             .with_codex_chat_history(context.state.codex_chat_history.clone()),
         Err(error) => {

@@ -19,8 +19,7 @@ use super::{
     thinking_rectifier::{
         normalize_thinking_type, rectify_anthropic_request, should_rectify_thinking_signature,
     },
-    types::OptimizerConfig,
-    types::RectifierConfig,
+    types::{CopilotOptimizerConfig, OptimizerConfig, RectifierConfig},
 };
 
 mod request_builder;
@@ -28,6 +27,7 @@ mod request_builder;
 pub struct RequestForwarder {
     router: Arc<ProviderRouter>,
     optimizer_config: OptimizerConfig,
+    copilot_optimizer_config: CopilotOptimizerConfig,
     session_id: String,
     session_client_provided: bool,
     codex_chat_history: Option<Arc<CodexChatHistoryStore>>,
@@ -113,6 +113,7 @@ impl RequestForwarder {
         Ok(Self {
             router,
             optimizer_config: OptimizerConfig::default(),
+            copilot_optimizer_config: CopilotOptimizerConfig::default(),
             session_id: String::new(),
             session_client_provided: false,
             codex_chat_history: None,
@@ -122,6 +123,14 @@ impl RequestForwarder {
 
     pub fn with_optimizer_config(mut self, optimizer_config: OptimizerConfig) -> Self {
         self.optimizer_config = optimizer_config;
+        self
+    }
+
+    pub fn with_copilot_optimizer_config(
+        mut self,
+        copilot_optimizer_config: CopilotOptimizerConfig,
+    ) -> Self {
+        self.copilot_optimizer_config = copilot_optimizer_config;
         self
     }
 

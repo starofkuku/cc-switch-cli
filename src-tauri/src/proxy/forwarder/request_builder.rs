@@ -6,16 +6,18 @@ use crate::{app_config::AppType, provider::Provider};
 
 use super::super::{
     body_filter::filter_private_params_with_whitelist,
+    copilot_optimizer,
     error::ProxyError,
     http_client,
     json_canonical::canonicalize_value,
     model_mapper::{apply_model_mapping, strip_one_m_suffix_for_upstream_from_body},
     providers::{
-        apply_codex_chat_upstream_model, claude_api_format_needs_transform, get_adapter,
-        normalize_anthropic_tool_thinking_history_for_provider,
+        apply_codex_chat_upstream_model, claude_api_format_needs_transform, copilot_auth,
+        get_adapter, normalize_anthropic_tool_thinking_history_for_provider,
         resolve_codex_chat_reasoning_config, should_convert_codex_responses_to_chat,
         transform_codex_chat, AuthStrategy, ProviderAdapter,
     },
+    session,
 };
 use super::{ForwardOptions, RequestForwarder};
 
@@ -59,6 +61,28 @@ const HEADER_BLACKLIST: &[&str] = &[
     "traceparent",
     "tracestate",
 ];
+
+const COPILOT_FINGERPRINT_HEADERS: &[&str] = &[
+    "user-agent",
+    "editor-version",
+    "editor-plugin-version",
+    "copilot-integration-id",
+    "x-github-api-version",
+    "openai-intent",
+    "x-initiator",
+    "x-interaction-type",
+    "x-interaction-id",
+    "x-vscode-user-agent-library-version",
+    "x-request-id",
+    "x-agent-task-id",
+];
+
+struct CopilotOptimization {
+    classification: copilot_optimizer::CopilotClassification,
+    deterministic_request_id: Option<String>,
+    interaction_id: Option<String>,
+    request_classification: bool,
+}
 
 impl RequestForwarder {
     pub(super) async fn prepare_request(
@@ -104,22 +128,72 @@ impl RequestForwarder {
                 );
             self.apply_copilot_live_model_resolution(provider, &mut mapped_body)
                 .await;
-
-            if !is_full_url {
-                let dynamic_endpoint = match provider
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.managed_account_id_for("github_copilot"))
-                {
-                    Some(account_id) => CopilotAuthService::get_api_endpoint(&account_id).await,
-                    None => CopilotAuthService::get_default_api_endpoint().await,
-                };
-                if dynamic_endpoint != base_url {
-                    base_url = dynamic_endpoint;
-                }
-            }
         } else {
             mapped_body = strip_one_m_suffix_for_upstream_from_body(mapped_body);
+        }
+
+        let copilot_optimization = if is_copilot && self.copilot_optimizer_config.enabled {
+            let classification = copilot_optimizer::classify_request(
+                &mapped_body,
+                headers.contains_key("anthropic-beta"),
+                self.copilot_optimizer_config.compact_detection,
+                self.copilot_optimizer_config.subagent_detection,
+            );
+            log::debug!(
+                "[Copilot] optimizer classification: initiator={}, is_warmup={}, is_compact={}, is_subagent={}",
+                classification.initiator,
+                classification.is_warmup,
+                classification.is_compact,
+                classification.is_subagent
+            );
+
+            mapped_body = copilot_optimizer::sanitize_orphan_tool_results(mapped_body);
+
+            if self.copilot_optimizer_config.tool_result_merging {
+                mapped_body = copilot_optimizer::merge_tool_results(mapped_body);
+            }
+
+            if self.copilot_optimizer_config.strip_thinking {
+                mapped_body = copilot_optimizer::strip_thinking_blocks(mapped_body);
+            }
+
+            if self.copilot_optimizer_config.warmup_downgrade && classification.is_warmup {
+                mapped_body["model"] =
+                    serde_json::json!(&self.copilot_optimizer_config.warmup_model);
+            }
+
+            let copilot_session_id = copilot_optimizer_session_id(body, headers);
+            let deterministic_request_id = self
+                .copilot_optimizer_config
+                .deterministic_request_id
+                .then(|| {
+                    copilot_optimizer::deterministic_request_id(&mapped_body, &copilot_session_id)
+                });
+            let interaction_id =
+                copilot_optimizer::deterministic_interaction_id(&copilot_session_id);
+
+            Some(CopilotOptimization {
+                classification,
+                deterministic_request_id,
+                interaction_id,
+                request_classification: self.copilot_optimizer_config.request_classification,
+            })
+        } else {
+            None
+        };
+
+        if is_copilot && !is_full_url {
+            let dynamic_endpoint = match provider
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.managed_account_id_for("github_copilot"))
+            {
+                Some(account_id) => CopilotAuthService::get_api_endpoint(&account_id).await,
+                None => CopilotAuthService::get_default_api_endpoint().await,
+            };
+            if dynamic_endpoint != base_url {
+                base_url = dynamic_endpoint;
+            }
         }
 
         let claude_api_format = if is_claude_request {
@@ -196,10 +270,12 @@ impl RequestForwarder {
             headers,
             options,
             is_claude_request,
+            is_copilot,
             self.session_client_provided
                 .then_some(self.session_id.as_str()),
             force_identity_encoding,
             claude_api_format.as_deref(),
+            copilot_optimization.as_ref(),
         )
         .await
     }
@@ -280,6 +356,36 @@ fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
 }
 
+fn copilot_optimizer_session_id(body: &Value, headers: &HeaderMap) -> String {
+    let metadata = body.get("metadata");
+    metadata
+        .and_then(|m| m.get("user_id"))
+        .and_then(|v| v.as_str())
+        .and_then(session::parse_session_from_user_id)
+        .or_else(|| {
+            metadata
+                .and_then(|m| m.get("session_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            metadata
+                .and_then(|m| m.get("user_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            headers
+                .get("x-session-id")
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
 async fn build_request(
     client: &reqwest::Client,
     adapter: &dyn ProviderAdapter,
@@ -290,9 +396,11 @@ async fn build_request(
     headers: &HeaderMap,
     _options: ForwardOptions,
     is_claude_request: bool,
+    is_copilot: bool,
     client_session_id: Option<&str>,
     force_identity_encoding: bool,
     claude_api_format: Option<&str>,
+    copilot_optimization: Option<&CopilotOptimization>,
 ) -> Result<reqwest::RequestBuilder, ProxyError> {
     let (endpoint_path, endpoint_query) = split_endpoint_and_query(endpoint);
     let url = if claude_api_format == Some("gemini_native") {
@@ -332,6 +440,7 @@ async fn build_request(
         if HEADER_BLACKLIST
             .iter()
             .any(|blocked| key.as_str().eq_ignore_ascii_case(blocked))
+            || (is_copilot && is_copilot_fingerprint_header(key.as_str()))
         {
             continue;
         }
@@ -381,7 +490,11 @@ async fn build_request(
             } {
                 Ok(token) => {
                     effective_auth.api_key = token;
-                    request = adapter.add_auth_headers(request, &effective_auth);
+                    request = add_copilot_auth_headers(
+                        request,
+                        &effective_auth.api_key,
+                        copilot_optimization,
+                    );
                 }
                 Err(error) => {
                     return Err(ProxyError::AuthError(format!(
@@ -436,6 +549,57 @@ async fn build_request(
 
     reject_proxy_placeholder_for_managed_account_upstream(&request)?;
     Ok(request.json(request_body))
+}
+
+fn add_copilot_auth_headers(
+    request: reqwest::RequestBuilder,
+    api_key: &str,
+    optimization: Option<&CopilotOptimization>,
+) -> reqwest::RequestBuilder {
+    let request_id = optimization
+        .and_then(|state| state.deterministic_request_id.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let initiator = optimization
+        .filter(|state| state.request_classification)
+        .map(|state| state.classification.initiator)
+        .unwrap_or("user");
+    let interaction_type = optimization
+        .filter(|state| state.classification.is_subagent)
+        .map(|_| "conversation-subagent")
+        .unwrap_or("conversation-agent");
+
+    let mut request = request
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("editor-version", copilot_auth::COPILOT_EDITOR_VERSION)
+        .header(
+            "editor-plugin-version",
+            copilot_auth::COPILOT_PLUGIN_VERSION,
+        )
+        .header(
+            "copilot-integration-id",
+            copilot_auth::COPILOT_INTEGRATION_ID,
+        )
+        .header("user-agent", copilot_auth::COPILOT_USER_AGENT)
+        .header("x-github-api-version", copilot_auth::COPILOT_API_VERSION)
+        .header("openai-intent", "conversation-agent")
+        .header("x-initiator", initiator)
+        .header("x-interaction-type", interaction_type)
+        .header("x-vscode-user-agent-library-version", "electron-fetch")
+        .header("x-request-id", &request_id)
+        .header("x-agent-task-id", request_id);
+
+    if let Some(interaction_id) = optimization.and_then(|state| state.interaction_id.as_deref()) {
+        request = request.header("x-interaction-id", interaction_id);
+    }
+
+    request
+}
+
+fn is_copilot_fingerprint_header(name: &str) -> bool {
+    COPILOT_FINGERPRINT_HEADERS
+        .iter()
+        .any(|header| name.eq_ignore_ascii_case(header))
 }
 
 fn split_endpoint_and_query(endpoint: &str) -> (&str, Option<&str>) {
