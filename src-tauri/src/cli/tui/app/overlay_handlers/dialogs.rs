@@ -354,9 +354,42 @@ impl App {
                     Action::None
                 }
             },
+            TextSubmit::CodexModelCatalogField { row, field } => {
+                self.handle_codex_model_catalog_field_submit(row, field, raw)
+            }
             TextSubmit::WebDavJianguoyunUsername => self.handle_webdav_username_submit(raw),
             TextSubmit::WebDavJianguoyunPassword => self.handle_webdav_password_submit(raw),
         }
+    }
+
+    fn handle_codex_model_catalog_field_submit(
+        &mut self,
+        row: Option<usize>,
+        field: form::CodexModelCatalogField,
+        raw: String,
+    ) -> Action {
+        let trimmed = raw.trim().to_string();
+        if matches!(field, form::CodexModelCatalogField::Model) && trimmed.is_empty() {
+            self.push_toast(
+                texts::tui_toast_provider_add_missing_fields(),
+                ToastKind::Warning,
+            );
+            self.overlay = Overlay::TextInput(TextInputState {
+                title: texts::tui_codex_model_catalog().to_string(),
+                prompt: codex_model_catalog_field_prompt(field).to_string(),
+                input: TextInput::new(trimmed),
+                submit: TextSubmit::CodexModelCatalogField { row, field },
+                secret: false,
+            });
+            return Action::None;
+        }
+
+        let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+            return Action::None;
+        };
+        provider.codex_model_catalog_field = field;
+        provider.set_codex_model_catalog_field(row, field, &trimmed);
+        Action::None
     }
 
     fn handle_openclaw_agents_runtime_submit(
@@ -512,5 +545,17 @@ impl App {
         }
 
         Action::SetProxyListenPort { port }
+    }
+}
+
+fn codex_model_catalog_field_prompt(field: form::CodexModelCatalogField) -> &'static str {
+    match field {
+        form::CodexModelCatalogField::Model => texts::tui_codex_model_catalog_model_prompt(),
+        form::CodexModelCatalogField::DisplayName => {
+            texts::tui_codex_model_catalog_display_prompt()
+        }
+        form::CodexModelCatalogField::ContextWindow => {
+            texts::tui_codex_model_catalog_context_prompt()
+        }
     }
 }

@@ -22,17 +22,6 @@ use super::helpers::{
 };
 use super::RuntimeActionContext;
 
-fn is_codex_official_provider(provider: &Provider) -> bool {
-    provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.codex_official)
-        .unwrap_or(false)
-        || provider.category.as_deref() == Some("official")
-        || provider.website_url.as_deref() == Some("https://chatgpt.com/codex")
-        || provider.name.trim().eq_ignore_ascii_case("OpenAI Official")
-}
-
 fn validate_provider_submit(
     app_type: &AppType,
     provider: &Provider,
@@ -46,7 +35,7 @@ fn validate_provider_submit(
         });
     }
 
-    if matches!(app_type, AppType::Codex) && !is_codex_official_provider(provider) {
+    if matches!(app_type, AppType::Codex) && !provider.is_codex_official() {
         let parsed = crate::cli::tui::form::parse_codex_config_snippet(
             provider
                 .settings_config

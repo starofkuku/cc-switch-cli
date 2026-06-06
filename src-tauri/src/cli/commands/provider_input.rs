@@ -406,7 +406,7 @@ pub fn build_provider_template_seed(
     let id = generate_provider_id(name, existing_ids);
     let website_url = template_default_website_url(template).map(str::to_string);
     let category = template_default_category(template).map(str::to_string);
-    let meta = template_default_meta(template);
+    let meta = template_default_meta(app_type, template);
     let settings_config = build_provider_template_settings_config(app_type, template, &id)?;
 
     Ok(Provider {
@@ -469,7 +469,10 @@ fn template_default_category(template: ProviderAddTemplate) -> Option<&'static s
     }
 }
 
-fn template_default_meta(template: ProviderAddTemplate) -> Option<ProviderMeta> {
+fn template_default_meta(
+    app_type: &AppType,
+    template: ProviderAddTemplate,
+) -> Option<ProviderMeta> {
     match template {
         ProviderAddTemplate::CodexOauth => Some(ProviderMeta {
             provider_type: Some("codex_oauth".to_string()),
@@ -493,10 +496,16 @@ fn template_default_meta(template: ProviderAddTemplate) -> Option<ProviderMeta> 
         ProviderAddTemplate::Packycode
         | ProviderAddTemplate::Aicodemirror
         | ProviderAddTemplate::Cubence
-        | ProviderAddTemplate::Dds => sponsor_preset(template).map(|preset| ProviderMeta {
-            is_partner: Some(true),
-            partner_promotion_key: Some(preset.partner_promotion_key.to_string()),
-            ..Default::default()
+        | ProviderAddTemplate::Dds => sponsor_preset(template).map(|preset| {
+            let mut meta = ProviderMeta {
+                is_partner: Some(true),
+                partner_promotion_key: Some(preset.partner_promotion_key.to_string()),
+                ..Default::default()
+            };
+            if matches!(app_type, AppType::Codex) {
+                meta.api_format = Some("openai_responses".to_string());
+            }
+            meta
         }),
         ProviderAddTemplate::Custom | ProviderAddTemplate::ClaudeOfficial => None,
     }
@@ -1389,6 +1398,13 @@ requires_openai_auth = true
         assert_eq!(
             codex.meta.as_ref().and_then(|meta| meta.is_partner),
             Some(true)
+        );
+        assert_eq!(
+            codex
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.api_format.as_deref()),
+            Some("openai_responses")
         );
 
         let opencode = build_provider_template_seed(
@@ -3814,6 +3830,19 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
             }
         }
         AppType::Codex => {
+            if !provider.is_codex_official() {
+                let api_format =
+                    if crate::proxy::providers::codex_provider_uses_chat_completions(provider) {
+                        "openai_chat"
+                    } else {
+                        "openai_responses"
+                    };
+                println!(
+                    "  {}: {}",
+                    texts::tui_label_claude_api_format(),
+                    texts::tui_codex_api_format_value(api_format)
+                );
+            }
             if let Some(auth) = provider.settings_config.get("auth") {
                 if let Some(api_key) = auth.get("OPENAI_API_KEY").and_then(|v| v.as_str()) {
                     println!(

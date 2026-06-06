@@ -1,10 +1,10 @@
 use crate::app_config::AppType;
-use crate::provider::ClaudeApiKeyField;
+use crate::provider::{ClaudeApiKeyField, CodexChatReasoningConfig};
 use serde_json::json;
 
 use super::{
-    ClaudeApiFormat, CodexWireApi, FormMode, GeminiAuthType, ProviderAddFormState,
-    HERMES_DEFAULT_API_MODE, OPENCLAW_DEFAULT_API_PROTOCOL,
+    ClaudeApiFormat, CodexModelCatalogField, CodexWireApi, FormMode, GeminiAuthType,
+    ProviderAddFormState, HERMES_DEFAULT_API_MODE, OPENCLAW_DEFAULT_API_PROTOCOL,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,6 +289,11 @@ impl ProviderAddFormState {
                     self.codex_requires_openai_auth = defaults.codex_requires_openai_auth;
                     self.codex_env_key = defaults.codex_env_key;
                     self.codex_api_key = defaults.codex_api_key;
+                    self.codex_chat_reasoning = defaults.codex_chat_reasoning;
+                    self.codex_model_catalog = defaults.codex_model_catalog;
+                    self.codex_local_routing_field_idx = defaults.codex_local_routing_field_idx;
+                    self.codex_model_catalog_idx = defaults.codex_model_catalog_idx;
+                    self.codex_model_catalog_field = defaults.codex_model_catalog_field;
                     self.gemini_auth_type = defaults.gemini_auth_type;
                     self.gemini_api_key = defaults.gemini_api_key;
                     self.gemini_base_url = defaults.gemini_base_url;
@@ -381,6 +386,7 @@ impl ProviderAddFormState {
                     self.codex_wire_api = CodexWireApi::Responses;
                     self.codex_requires_openai_auth = true;
                     self.codex_env_key.set("");
+                    self.reset_codex_local_routing_state();
                 }
                 ProviderTemplateId::GoogleOAuth => {
                     self.extra = json!({
@@ -427,6 +433,7 @@ impl ProviderAddFormState {
                 self.codex_model.set("gpt-5.4");
                 self.codex_wire_api = CodexWireApi::Responses;
                 self.codex_requires_openai_auth = true;
+                self.reset_codex_local_routing_state();
             }
             AppType::Gemini => {
                 self.gemini_auth_type = GeminiAuthType::ApiKey;
@@ -518,5 +525,14 @@ impl ProviderAddFormState {
                 }
             }
         }
+    }
+
+    fn reset_codex_local_routing_state(&mut self) {
+        self.claude_api_format = ClaudeApiFormat::OpenAiResponses;
+        self.codex_chat_reasoning = CodexChatReasoningConfig::default();
+        self.codex_model_catalog.clear();
+        self.codex_local_routing_field_idx = 0;
+        self.codex_model_catalog_idx = 0;
+        self.codex_model_catalog_field = CodexModelCatalogField::Model;
     }
 }

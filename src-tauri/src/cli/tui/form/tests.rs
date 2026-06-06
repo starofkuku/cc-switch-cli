@@ -780,6 +780,55 @@ fn provider_add_form_packycode_template_codex_sets_partner_meta_and_base_url() {
 }
 
 #[test]
+fn provider_add_form_codex_template_switch_clears_local_routing_state() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+    form.codex_chat_reasoning.supports_thinking = Some(true);
+    form.codex_chat_reasoning.supports_effort = Some(true);
+    form.codex_local_routing_field_idx = 3;
+    form.apply_codex_model_catalog_value(json!([
+        { "model": "deepseek-chat", "displayName": "DeepSeek Chat" }
+    ]))
+    .expect("catalog should apply");
+
+    form.apply_template(packycode_template_index(AppType::Codex), &[]);
+
+    assert!(!form.codex_local_routing_enabled());
+    assert_eq!(form.codex_local_routing_field_idx, 0);
+    assert_eq!(
+        form.codex_local_routing_fields(),
+        vec![CodexLocalRoutingField::Enabled]
+    );
+    assert_eq!(form.codex_chat_reasoning, Default::default());
+    assert!(form.codex_model_catalog.is_empty());
+
+    let provider = form.to_provider_json_value();
+    assert_eq!(provider["meta"]["apiFormat"], "openai_responses");
+    assert!(provider["meta"].get("codexChatReasoning").is_none());
+    assert!(provider["settingsConfig"].get("modelCatalog").is_none());
+
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+    form.codex_chat_reasoning.supports_thinking = Some(true);
+    form.apply_codex_model_catalog_value(json!([{ "model": "qwen-coder" }]))
+        .expect("catalog should apply");
+
+    form.apply_template(1, &[]);
+
+    assert!(form.is_codex_official_provider());
+    assert!(!form.codex_local_routing_enabled());
+    assert_eq!(form.codex_chat_reasoning, Default::default());
+    assert!(form.codex_model_catalog.is_empty());
+    let official_provider = form.to_provider_json_value();
+    assert!(official_provider["meta"].get("apiFormat").is_none());
+    assert!(official_provider["meta"]
+        .get("codexChatReasoning")
+        .is_none());
+    assert!(official_provider["settingsConfig"]
+        .get("modelCatalog")
+        .is_none());
+}
+
+#[test]
 fn provider_add_form_packycode_template_gemini_sets_partner_meta_and_base_url() {
     let mut form = ProviderAddFormState::new(AppType::Gemini);
     let existing_ids = Vec::<String>::new();
@@ -1214,6 +1263,14 @@ fn provider_add_form_codex_custom_includes_api_key_and_hides_advanced_fields() {
         "custom Codex provider should include API Key field"
     );
     assert!(
+        fields.contains(&ProviderAddField::CodexLocalRouting),
+        "custom Codex provider should expose Local Routing on its secondary page"
+    );
+    assert!(
+        !fields.contains(&ProviderAddField::ClaudeApiFormat),
+        "custom Codex provider should not expose the old API Format selector"
+    );
+    assert!(
         !fields.contains(&ProviderAddField::CodexWireApi),
         "Codex wire_api should not be configurable in the UI"
     );
@@ -1225,6 +1282,209 @@ fn provider_add_form_codex_custom_includes_api_key_and_hides_advanced_fields() {
         !fields.contains(&ProviderAddField::CodexEnvKey),
         "Codex env key should not be configurable in the UI"
     );
+}
+
+#[test]
+fn provider_add_form_codex_local_routing_writes_meta_without_chat_wire_api() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("custom");
+    form.name.set("Custom");
+    form.codex_base_url.set("https://api.example.com/v1");
+    form.codex_model.set("deepseek-chat");
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+
+    let provider = form.to_provider_json_value();
+    let config = provider["settingsConfig"]["config"]
+        .as_str()
+        .expect("Codex config should be serialized");
+
+    assert_eq!(provider["meta"]["apiFormat"], "openai_chat");
+    assert!(
+        config.contains("wire_api = \"responses\""),
+        "Codex wire_api should stay Responses; meta.apiFormat controls local route mapping"
+    );
+    assert!(
+        !config.contains("wire_api = \"chat\""),
+        "TUI should not persist Chat as the Codex wire_api"
+    );
+}
+
+#[test]
+fn provider_add_form_codex_local_routing_is_off_by_default_and_persisted() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("custom");
+    form.name.set("Custom");
+
+    let provider = form.to_provider_json_value();
+
+    assert!(!form.codex_local_routing_enabled());
+    assert_eq!(provider["meta"]["apiFormat"], "openai_responses");
+}
+
+#[test]
+fn provider_add_form_codex_local_routing_restores_meta_chat_format() {
+    let mut provider = Provider::with_id(
+        "custom".to_string(),
+        "Custom".to_string(),
+        json!({
+            "config": r#"
+model_provider = "custom"
+model = "deepseek-chat"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+        }),
+        None,
+    );
+    provider.meta = Some(crate::provider::ProviderMeta {
+        api_format: Some("openai_chat".to_string()),
+        ..Default::default()
+    });
+
+    let form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
+
+    assert!(form.codex_local_routing_enabled());
+}
+
+#[test]
+fn provider_add_form_codex_legacy_chat_wire_api_loads_as_local_route_mapping() {
+    let provider = Provider::with_id(
+        "custom".to_string(),
+        "Custom".to_string(),
+        json!({
+            "config": r#"
+model_provider = "custom"
+model = "deepseek-chat"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example.com/v1"
+wire_api = "chat"
+requires_openai_auth = true
+"#,
+        }),
+        None,
+    );
+
+    let form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
+    let saved = form.to_provider_json_value();
+    let config = saved["settingsConfig"]["config"]
+        .as_str()
+        .expect("Codex config should be serialized");
+
+    assert!(form.codex_local_routing_enabled());
+    assert_eq!(saved["meta"]["apiFormat"], "openai_chat");
+    assert!(config.contains("wire_api = \"responses\""));
+    assert!(!config.contains("wire_api = \"chat\""));
+}
+
+#[test]
+fn provider_add_form_codex_local_routing_saves_normalized_reasoning() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("custom");
+    form.name.set("Custom");
+    form.codex_base_url.set("https://api.example.com/v1");
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+
+    form.toggle_codex_reasoning_effort();
+
+    let provider = form.to_provider_json_value();
+    let reasoning = &provider["meta"]["codexChatReasoning"];
+
+    assert_eq!(reasoning["supportsThinking"], true);
+    assert_eq!(reasoning["supportsEffort"], true);
+    assert_eq!(reasoning["thinkingParam"], "thinking");
+    assert_eq!(reasoning["effortParam"], "reasoning_effort");
+    assert_eq!(reasoning["effortValueMode"], "passthrough");
+    assert_eq!(reasoning["outputFormat"], "auto");
+}
+
+#[test]
+fn provider_add_form_codex_responses_removes_reasoning_and_model_catalog() {
+    let mut provider = Provider::with_id(
+        "custom".to_string(),
+        "Custom".to_string(),
+        json!({
+            "config": r#"
+model_provider = "custom"
+model = "deepseek-chat"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://api.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+            "modelCatalog": {
+                "models": [
+                    { "model": "deepseek-chat", "displayName": "DeepSeek Chat" }
+                ]
+            }
+        }),
+        None,
+    );
+    provider.meta = Some(crate::provider::ProviderMeta {
+        api_format: Some("openai_chat".to_string()),
+        codex_chat_reasoning: Some(crate::provider::CodexChatReasoningConfig {
+            supports_thinking: Some(true),
+            supports_effort: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let mut form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
+    form.toggle_codex_local_routing_enabled();
+
+    let saved = form.to_provider_json_value();
+
+    assert_eq!(saved["meta"]["apiFormat"], "openai_responses");
+    assert!(saved["meta"].get("codexChatReasoning").is_none());
+    assert!(saved["settingsConfig"].get("modelCatalog").is_none());
+}
+
+#[test]
+fn provider_add_form_codex_model_catalog_saves_normalized_models_and_syncs_primary_model() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("custom");
+    form.name.set("Custom");
+    form.codex_base_url.set("https://api.example.com/v1");
+    form.codex_model.set("fallback-model");
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+    form.apply_codex_model_catalog_value(json!([
+        { "model": " deepseek-chat ", "displayName": " DeepSeek Chat ", "contextWindow": "128000 tokens" },
+        { "model": "deepseek-chat", "displayName": "Duplicate" },
+        { "model": "kimi-k2", "contextWindow": "256k" },
+        { "model": "qwen-coder", "contextWindow": "invalid" },
+        { "model": "" }
+    ]))
+    .expect("catalog should apply");
+
+    let saved = form.to_provider_json_value();
+    let config = saved["settingsConfig"]["config"]
+        .as_str()
+        .expect("Codex config should be serialized");
+    let models = saved["settingsConfig"]["modelCatalog"]["models"]
+        .as_array()
+        .expect("modelCatalog.models should be an array");
+
+    assert_eq!(models.len(), 3);
+    assert_eq!(models[0]["model"], "deepseek-chat");
+    assert_eq!(models[0]["displayName"], "DeepSeek Chat");
+    assert_eq!(models[0]["contextWindow"], 128000);
+    assert_eq!(models[1]["model"], "kimi-k2");
+    assert_eq!(models[1]["contextWindow"], 256000);
+    assert_eq!(models[2]["model"], "qwen-coder");
+    assert!(models[2].get("contextWindow").is_none());
+    assert!(
+        config.contains("model = \"deepseek-chat\""),
+        "first normalized catalog model should become the active Codex model"
+    );
+    assert!(config.contains("wire_api = \"responses\""));
 }
 
 #[test]
@@ -3263,6 +3523,71 @@ fn provider_add_form_openclaw_ignores_common_config_snippet() {
     assert!(
         provider["settingsConfig"].get("headers").is_none(),
         "OpenClaw should not inherit Common Config headers"
+    );
+}
+
+#[test]
+fn populate_claude_form_reads_anthropic_api_key_when_auth_token_missing() {
+    let provider = Provider {
+        id: "mimo".to_string(),
+        name: "Xiaomi Mimo".to_string(),
+        settings_config: json!({
+            "env": {
+                "ANTHROPIC_API_KEY": "sk-from-import",
+                "ANTHROPIC_BASE_URL": "https://api.example.com/anthropic"
+            }
+        }),
+        website_url: None,
+        category: None,
+        created_at: None,
+        sort_index: None,
+        notes: None,
+        meta: None,
+        icon: None,
+        icon_color: None,
+        in_failover_queue: false,
+    };
+
+    let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert_eq!(form.claude_api_key.value, "sk-from-import");
+    assert_eq!(
+        form.claude_api_key_field,
+        crate::provider::ClaudeApiKeyField::ApiKey
+    );
+}
+
+#[test]
+fn populate_claude_form_honors_auth_token_field_meta_over_api_key() {
+    use crate::provider::ProviderMeta;
+
+    let provider = Provider {
+        id: "claude".to_string(),
+        name: "Claude".to_string(),
+        settings_config: json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "sk-token",
+                "ANTHROPIC_API_KEY": "sk-key"
+            }
+        }),
+        website_url: None,
+        category: None,
+        created_at: None,
+        sort_index: None,
+        notes: None,
+        meta: Some(ProviderMeta {
+            api_key_field: Some("ANTHROPIC_AUTH_TOKEN".to_string()),
+            ..Default::default()
+        }),
+        icon: None,
+        icon_color: None,
+        in_failover_queue: false,
+    };
+
+    let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert_eq!(form.claude_api_key.value, "sk-token");
+    assert_eq!(
+        form.claude_api_key_field,
+        crate::provider::ClaudeApiKeyField::AuthToken
     );
 }
 

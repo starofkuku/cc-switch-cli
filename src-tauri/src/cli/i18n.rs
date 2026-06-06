@@ -576,18 +576,18 @@ pub mod texts {
 
     pub fn tui_help_text() -> &'static str {
         if is_chinese() {
-            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n文本输入：Ctrl+A/E 行首/行尾，Ctrl+U/K 删除行片段，Ctrl+W 删除前词，Alt+B/F 按词移动\n\n页面快捷键（在页面内容区顶部显示）：\n- 供应商：Enter 详情，Space 切换，a 新增，e 编辑，d 删除，t 测试，r 刷新，o 临时启动，f 管理故障转移，x 设为默认\n- 供应商详情：Space 切换，e 编辑，t 测试，r 刷新，o 临时启动，f 管理故障转移，x 设为默认\n- MCP：x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- 提示词：Space 启用/禁用，a 新增，Enter 查看，e 编辑，d 删除\n- 技能：Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- 配置：Enter 打开/执行，e 编辑片段\n- 设置：Enter 应用"
+            "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓ 或 h/j/k/l  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n文本输入：Ctrl+A/E 行首/行尾，Ctrl+U/K 删除行片段，Ctrl+W 删除前词，Alt+B/F 按词移动\n\n页面快捷键（在页面内容区顶部显示）：\n- 供应商：Enter 详情，Space 切换，a 新增，e 编辑，d 删除，t 测试，r 刷新，o 临时启动，f 管理故障转移，x 设为默认\n- 供应商详情：Space 切换，e 编辑，t 测试，r 刷新，o 临时启动，f 管理故障转移，x 设为默认\n- MCP：x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- 提示词：Space 启用/禁用，a 新增，Enter 查看，e 编辑，d 删除\n- 技能：Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- 配置：Enter 打开/执行，e 编辑片段\n- 设置：Enter 应用"
         } else {
-            "[ ]  switch app\n←→  focus menu/content\n↑↓  move\n/   filter\nEsc  back\n?   toggle help\n\nText input: Ctrl+A/E move line, Ctrl+U/K delete line parts, Ctrl+W delete word, Alt+B/F move word\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, Space switch, a add, e edit, d delete, t test, r refresh, o launch temp, f manage failover, x set default\n- Provider Detail: Space switch, e edit, t test, r refresh, o launch temp, f manage failover, x set default\n- MCP: x toggle current, m select apps, a add, e edit, i import existing, d delete\n- Prompts: Space toggle, a add, Enter view, e edit, d delete\n- Skills: Enter details, x toggle current, m select apps, d uninstall, i import existing\n- Config: Enter open/run, e edit snippet\n- Settings: Enter apply"
+            "[ ]  switch app\n←→  focus menu/content\n↑↓ or h/j/k/l  move\n/   filter\nEsc  back\n?   toggle help\n\nText input: Ctrl+A/E move line, Ctrl+U/K delete line parts, Ctrl+W delete word, Alt+B/F move word\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, Space switch, a add, e edit, d delete, t test, r refresh, o launch temp, f manage failover, x set default\n- Provider Detail: Space switch, e edit, t test, r refresh, o launch temp, f manage failover, x set default\n- MCP: x toggle current, m select apps, a add, e edit, i import existing, d delete\n- Prompts: Space toggle, a add, Enter view, e edit, d delete\n- Skills: Enter details, x toggle current, m select apps, d uninstall, i import existing\n- Config: Enter open/run, e edit snippet\n- Settings: Enter apply"
         }
     }
 
     pub fn tui_help_text_for_app(app_type: &crate::app_config::AppType) -> &'static str {
         if matches!(app_type, crate::app_config::AppType::Hermes) {
             if is_chinese() {
-                "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n文本输入：Ctrl+A/E 行首/行尾，Ctrl+U/K 删除行片段，Ctrl+W 删除前词，Alt+B/F 按词移动\n\n页面快捷键（在页面内容区顶部显示）：\n- 供应商：Enter 详情，Space 添加/移除，a 新增，e 编辑，d 删除，t 测试，r 刷新，f 管理故障转移，x 启用\n- 供应商详情：Space 添加/移除，e 编辑，t 测试，r 刷新，f 管理故障转移，x 启用\n- MCP：x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- 记忆管理：Enter 编辑，Space/x 启用/禁用，o 打开目录\n- 技能：Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- 设置：Enter 应用"
+                "[ ]  切换应用\n←→  切换菜单/内容焦点\n↑↓ 或 h/j/k/l  移动\n/   过滤\nEsc  返回\n?   显示/关闭帮助\n\n文本输入：Ctrl+A/E 行首/行尾，Ctrl+U/K 删除行片段，Ctrl+W 删除前词，Alt+B/F 按词移动\n\n页面快捷键（在页面内容区顶部显示）：\n- 供应商：Enter 详情，Space 添加/移除，a 新增，e 编辑，d 删除，t 测试，r 刷新，f 管理故障转移，x 启用\n- 供应商详情：Space 添加/移除，e 编辑，t 测试，r 刷新，f 管理故障转移，x 启用\n- MCP：x 启用/禁用(当前应用)，m 选择应用，a 添加，e 编辑，i 导入已有，d 删除\n- 记忆管理：Enter 编辑，Space/x 启用/禁用，o 打开目录\n- 技能：Enter 详情，x 启用/禁用(当前应用)，m 选择应用，d 卸载，i 导入已有\n- 设置：Enter 应用"
             } else {
-                "[ ]  switch app\n←→  focus menu/content\n↑↓  move\n/   filter\nEsc  back\n?   toggle help\n\nText input: Ctrl+A/E move line, Ctrl+U/K delete line parts, Ctrl+W delete word, Alt+B/F move word\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, Space add/remove, a add, e edit, d delete, t test, r refresh, f manage failover, x enable\n- Provider Detail: Space add/remove, e edit, t test, r refresh, f manage failover, x enable\n- MCP: x toggle current, m select apps, a add, e edit, i import existing, d delete\n- Memory: Enter edit, Space/x toggle, o open directory\n- Skills: Enter details, x toggle current, m select apps, d uninstall, i import existing\n- Settings: Enter apply"
+                "[ ]  switch app\n←→  focus menu/content\n↑↓ or h/j/k/l  move\n/   filter\nEsc  back\n?   toggle help\n\nText input: Ctrl+A/E move line, Ctrl+U/K delete line parts, Ctrl+W delete word, Alt+B/F move word\n\nPage keys (shown at the top of each page):\n- Providers: Enter details, Space add/remove, a add, e edit, d delete, t test, r refresh, f manage failover, x enable\n- Provider Detail: Space add/remove, e edit, t test, r refresh, f manage failover, x enable\n- MCP: x toggle current, m select apps, a add, e edit, i import existing, d delete\n- Memory: Enter edit, Space/x toggle, o open directory\n- Skills: Enter details, x toggle current, m select apps, d uninstall, i import existing\n- Settings: Enter apply"
             }
         } else {
             tui_help_text()
@@ -1595,6 +1595,25 @@ pub mod texts {
         }
     }
 
+    pub fn tui_codex_api_format_value(api_format: &str) -> &'static str {
+        match api_format {
+            "openai_chat" => {
+                if is_chinese() {
+                    "OpenAI Chat Completions (需本地路由)"
+                } else {
+                    "OpenAI Chat Completions (Local routing)"
+                }
+            }
+            _ => {
+                if is_chinese() {
+                    "OpenAI Responses API (原生)"
+                } else {
+                    "OpenAI Responses API (Native)"
+                }
+            }
+        }
+    }
+
     pub fn tui_claude_api_format_requires_proxy_title() -> &'static str {
         if is_chinese() {
             "需开启代理"
@@ -1609,6 +1628,144 @@ pub mod texts {
             format!("已切换为 {label}。\n该格式需开启本地代理使用。\n请在主页按 P 打开本地代理。")
         } else {
             format!("Switched to {label}.\nThis format requires the local proxy.\nPress P on the home page to open local proxy.")
+        }
+    }
+
+    pub fn tui_codex_api_format_requires_proxy_message(api_format: &str) -> String {
+        let label = tui_codex_api_format_value(api_format);
+        if is_chinese() {
+            format!(
+                "已切换为 {label}。\n该格式需要本地路由映射。\n使用此供应商时请保持本地代理开启。"
+            )
+        } else {
+            format!("Switched to {label}.\nThis format requires local route mapping.\nKeep the local proxy enabled while using this provider.")
+        }
+    }
+
+    pub fn tui_label_codex_local_routing() -> &'static str {
+        if is_chinese() {
+            "本地路由"
+        } else {
+            "Local Routing"
+        }
+    }
+
+    pub fn tui_codex_local_routing_title(provider: &str) -> String {
+        let title = tui_label_codex_local_routing();
+        if provider.trim().is_empty() {
+            title.to_string()
+        } else {
+            format!("{title} - {provider}")
+        }
+    }
+
+    pub fn tui_codex_local_routing_enable() -> &'static str {
+        if is_chinese() {
+            "启用本地路由"
+        } else {
+            "Enable Local Routing"
+        }
+    }
+
+    pub fn tui_codex_reasoning_supports_thinking() -> &'static str {
+        if is_chinese() {
+            "支持思考模式"
+        } else {
+            "Supports Thinking"
+        }
+    }
+
+    pub fn tui_codex_reasoning_supports_effort() -> &'static str {
+        if is_chinese() {
+            "支持思考等级"
+        } else {
+            "Supports Reasoning Effort"
+        }
+    }
+
+    pub fn tui_codex_model_catalog() -> &'static str {
+        if is_chinese() {
+            "模型映射"
+        } else {
+            "Model Mapping"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_title(provider: &str) -> String {
+        if is_chinese() {
+            if provider.trim().is_empty() {
+                "模型映射".to_string()
+            } else {
+                format!("模型映射 - {provider}")
+            }
+        } else if provider.trim().is_empty() {
+            "Model Mapping".to_string()
+        } else {
+            format!("Model Mapping - {provider}")
+        }
+    }
+
+    pub fn tui_codex_model_catalog_model_header() -> &'static str {
+        if is_chinese() {
+            "模型"
+        } else {
+            "Model"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_display_header() -> &'static str {
+        if is_chinese() {
+            "显示名称"
+        } else {
+            "Display"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_context_header() -> &'static str {
+        if is_chinese() {
+            "上下文"
+        } else {
+            "Context"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_empty() -> &'static str {
+        if is_chinese() {
+            "暂无模型映射"
+        } else {
+            "No model mappings"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_model_prompt() -> &'static str {
+        if is_chinese() {
+            "模型 ID"
+        } else {
+            "Model ID"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_display_prompt() -> &'static str {
+        if is_chinese() {
+            "显示名称"
+        } else {
+            "Display Name"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_context_prompt() -> &'static str {
+        if is_chinese() {
+            "上下文窗口"
+        } else {
+            "Context Window"
+        }
+    }
+
+    pub fn tui_codex_model_catalog_preview_title() -> &'static str {
+        if is_chinese() {
+            "模型映射"
+        } else {
+            "Model Mapping"
         }
     }
 

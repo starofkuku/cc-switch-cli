@@ -1067,13 +1067,19 @@ impl App {
                 ),
             ]);
         } else {
-            lines.push(
+            lines.extend([
+                format!(
+                    "{}: {}:{}",
+                    crate::t!("Listen", "监听"),
+                    data.proxy.configured_listen_address,
+                    data.proxy.configured_listen_port
+                ),
                 crate::t!(
-                    "Proxy configuration is unavailable.",
-                    "代理配置暂时不可用。"
+                    "Stop the local proxy before editing listen address or port. Restart routing after those settings change.",
+                    "修改监听地址或端口前需要先停止本地代理；改完后重新启动路由才会生效。"
                 )
                 .to_string(),
-            );
+            ]);
         }
 
         lines.push(String::new());

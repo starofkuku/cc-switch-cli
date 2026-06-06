@@ -12,7 +12,10 @@ mod tests {
 
     use crate::cli::i18n::{texts, use_test_language, Language};
     use crate::cli::tui::data::ProviderRow;
-    use crate::cli::tui::form::{McpEnvVarRow, McpTransport, ProviderAddFormState, TextInput};
+    use crate::cli::tui::form::{
+        CodexLocalRoutingField, CodexModelCatalogField, CodexPreviewSection, McpEnvVarRow,
+        McpTransport, ProviderAddFormState, TextInput, UsageQueryField, UsageQueryTemplate,
+    };
     use crate::cli::tui::runtime_actions::{
         handle_action, run_external_editor_for_prompt_form_content,
     };
@@ -320,6 +323,47 @@ mod tests {
         } else {
             panic!("expected ProviderAdd form");
         }
+    }
+
+    fn select_provider_field(app: &mut App, field: ProviderAddField) {
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Fields;
+            form.editing = false;
+            let fields = form.fields();
+            form.field_idx = fields
+                .iter()
+                .position(|candidate| *candidate == field)
+                .unwrap_or_else(|| panic!("{field:?} field should exist"));
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+    }
+
+    fn select_usage_query_field(app: &mut App, field: UsageQueryField) {
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Fields;
+            form.usage_query_editing = false;
+            let fields = form.usage_query_table_fields();
+            form.usage_query_field_idx = fields
+                .iter()
+                .position(|candidate| *candidate == field)
+                .unwrap_or_else(|| panic!("{field:?} usage query field should exist"));
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+    }
+
+    fn help_text(app: &App) -> String {
+        let Overlay::Help(help) = &app.overlay else {
+            panic!("expected Help overlay, got {:?}", app.overlay);
+        };
+        let content = &help.content;
+        format!(
+            "{}\n{}\n{}",
+            content.title,
+            content.eyebrow,
+            content.lines.join("\n")
+        )
     }
 
     fn claude_provider_row(id: &str) -> ProviderRow {
@@ -6167,7 +6211,7 @@ mod tests {
         let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
 
         assert!(matches!(action, Action::None));
-        assert!(matches!(app.overlay, Overlay::Help));
+        assert!(matches!(app.overlay, Overlay::Help(_)));
         assert!(app.openclaw_tools_form.is_none());
     }
 
@@ -11966,6 +12010,257 @@ mod tests {
     }
 
     #[test]
+    fn provider_codex_local_routing_field_enter_opens_page() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            form.field_idx = form
+                .fields()
+                .iter()
+                .position(|field| *field == ProviderAddField::CodexLocalRouting)
+                .expect("Codex local routing field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+
+        let page = match app.form.as_ref() {
+            Some(super::super::form::FormState::ProviderAdd(form)) => form.page,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(
+            page,
+            super::super::form::ProviderFormPage::CodexLocalRouting
+        );
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_codex_local_routing_toggle_warns_when_proxy_not_enabled() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let data = UiData::default();
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            form.codex_base_url.set("https://api.example.com/v1");
+            form.field_idx = form
+                .fields()
+                .iter()
+                .position(|field| *field == ProviderAddField::CodexLocalRouting)
+                .expect("Codex local routing field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                action: ConfirmAction::ProviderApiFormatProxyNotice,
+                ..
+            })
+        ));
+        let format = match app.form.as_ref() {
+            Some(super::super::form::FormState::ProviderAdd(form)) => form.claude_api_format,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(format, super::super::form::ClaudeApiFormat::OpenAiChat);
+    }
+
+    #[test]
+    fn provider_codex_local_routing_toggle_does_not_warn_when_proxy_routes_current_app() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.proxy.running = true;
+        data.proxy.codex_takeover = true;
+
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            form.codex_base_url.set("https://api.example.com/v1");
+            form.field_idx = form
+                .fields()
+                .iter()
+                .position(|field| *field == ProviderAddField::CodexLocalRouting)
+                .expect("Codex local routing field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        let format = match app.form.as_ref() {
+            Some(super::super::form::FormState::ProviderAdd(form)) => form.claude_api_format,
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(format, super::super::form::ClaudeApiFormat::OpenAiChat);
+    }
+
+    #[test]
+    fn provider_codex_local_routing_model_catalog_opens_list_page_and_adds_models() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.proxy.running = true;
+        data.proxy.codex_takeover = true;
+
+        app.on_key(key(KeyCode::Char('a')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+
+        if let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = super::super::form::FormFocus::Fields;
+            form.editing = false;
+            form.codex_base_url.set("https://api.example.com/v1");
+            form.field_idx = form
+                .fields()
+                .iter()
+                .position(|field| *field == ProviderAddField::CodexLocalRouting)
+                .expect("Codex local routing field should exist");
+        } else {
+            panic!("expected ProviderAdd form");
+        }
+
+        app.on_key(key(KeyCode::Enter), &data); // open local routing page
+        app.on_key(key(KeyCode::Enter), &data); // enable local routing
+        app.on_key(key(KeyCode::Down), &data);
+        app.on_key(key(KeyCode::Down), &data);
+        app.on_key(key(KeyCode::Down), &data);
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(action, Action::None));
+        assert!(app.editor.is_none());
+        assert!(matches!(
+            app.form,
+            Some(super::super::form::FormState::ProviderAdd(ref form))
+                if matches!(form.page, super::super::form::ProviderFormPage::CodexModelCatalog)
+        ));
+
+        app.on_key(key(KeyCode::Char('+')), &data);
+        assert!(matches!(
+            app.overlay,
+            Overlay::TextInput(TextInputState {
+                submit: TextSubmit::CodexModelCatalogField {
+                    row: None,
+                    field: CodexModelCatalogField::Model,
+                },
+                ..
+            })
+        ));
+        for ch in "deepseek-chat".chars() {
+            app.on_key(key(KeyCode::Char(ch)), &data);
+        }
+        app.on_key(key(KeyCode::Enter), &data);
+
+        let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_ref() else {
+            panic!("expected ProviderAdd form");
+        };
+        assert_eq!(form.codex_model_catalog.len(), 1);
+        assert_eq!(form.codex_model_catalog[0].model, "deepseek-chat");
+
+        app.on_key(key(KeyCode::Right), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.overlay,
+            Overlay::TextInput(TextInputState {
+                submit: TextSubmit::CodexModelCatalogField {
+                    row: Some(0),
+                    field: CodexModelCatalogField::DisplayName,
+                },
+                ..
+            })
+        ));
+        for ch in "DeepSeek Chat".chars() {
+            app.on_key(key(KeyCode::Char(ch)), &data);
+        }
+        app.on_key(key(KeyCode::Enter), &data);
+
+        app.on_key(key(KeyCode::Right), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            app.overlay,
+            Overlay::TextInput(TextInputState {
+                submit: TextSubmit::CodexModelCatalogField {
+                    row: Some(0),
+                    field: CodexModelCatalogField::ContextWindow,
+                },
+                ..
+            })
+        ));
+        for ch in "256k".chars() {
+            app.on_key(key(KeyCode::Char(ch)), &data);
+        }
+        app.on_key(key(KeyCode::Enter), &data);
+
+        let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_ref() else {
+            panic!("expected ProviderAdd form");
+        };
+        assert_eq!(form.codex_model_catalog[0].display_name, "DeepSeek Chat");
+        assert_eq!(form.codex_model_catalog[0].context_window, "256k");
+        assert_eq!(
+            form.codex_model_catalog_field,
+            CodexModelCatalogField::ContextWindow
+        );
+
+        let action = app.on_key(key(KeyCode::Char('f')), &data);
+        assert!(matches!(
+            action,
+            Action::ProviderModelFetch {
+                field: ProviderAddField::CodexLocalRouting,
+                ..
+            }
+        ));
+
+        app.overlay = Overlay::ModelFetchPicker {
+            request_id: 1,
+            field: ProviderAddField::CodexLocalRouting,
+            claude_idx: None,
+            input: TextInput::new("kimi-k2"),
+            query: "kimi-k2".to_string(),
+            fetching: false,
+            models: vec!["kimi-k2".to_string()],
+            error: None,
+            selected_idx: 0,
+        };
+        app.on_key(key(KeyCode::Enter), &data);
+
+        let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_ref() else {
+            panic!("expected ProviderAdd form");
+        };
+        assert_eq!(form.codex_model_catalog.len(), 2);
+        assert_eq!(form.codex_model_catalog[1].model, "kimi-k2");
+    }
+
+    #[test]
     fn provider_claude_model_overlay_jk_navigates_when_not_editing() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
@@ -12906,6 +13201,499 @@ mod tests {
         assert_eq!(mcp_json_scroll(&app), 1);
         app.on_key(key(KeyCode::Char('k')), &data());
         assert_eq!(mcp_json_scroll(&app), 0);
+    }
+
+    #[test]
+    fn context_help_global_keeps_shortcuts_and_english_eyebrow() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(text.contains("Help follows the focused item"), "{text}");
+        assert!(text.contains("↑↓ or h/j/k/l  move"), "{text}");
+        assert!(text.contains("?   toggle help"), "{text}");
+        assert!(text.contains("Providers: Enter details"), "{text}");
+        assert!(!text.contains("点在哪"), "{text}");
+        assert!(!text.contains("显示/关闭帮助"), "{text}");
+    }
+
+    #[test]
+    fn context_help_provider_field_tracks_focused_codex_base_url() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Codex));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Codex,
+        )));
+        select_provider_field(&mut app, ProviderAddField::CodexBaseUrl);
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(text.contains("Help follows the focused item"), "{text}");
+        assert!(
+            text.contains("Codex natively supports OpenAI Responses API"),
+            "{text}"
+        );
+        assert!(text.contains("keep local routing enabled"), "{text}");
+        assert!(!text.contains("Codex 原生"), "{text}");
+    }
+
+    #[test]
+    fn context_help_codex_local_routing_fields_follow_focus() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Codex));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Codex,
+        )));
+        select_provider_field(&mut app, ProviderAddField::CodexLocalRouting);
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let main_field = help_text(&app);
+        assert!(main_field.contains("Local Routing"), "{main_field}");
+        assert!(
+            main_field.contains("OpenAI Chat Completions"),
+            "{main_field}"
+        );
+        assert!(!main_field.contains("本地路由"), "{main_field}");
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_codex_local_routing_page();
+            form.toggle_codex_local_routing_enabled();
+            form.codex_local_routing_field_idx = form
+                .codex_local_routing_fields()
+                .iter()
+                .position(|field| *field == CodexLocalRoutingField::SupportsEffort)
+                .expect("SupportsEffort field should be visible when local routing is enabled");
+        }
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let local_routing_field = help_text(&app);
+        assert!(
+            local_routing_field.contains("reasoning effort"),
+            "{local_routing_field}"
+        );
+        assert!(
+            local_routing_field.contains("effort levels"),
+            "{local_routing_field}"
+        );
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_codex_model_catalog_page();
+            form.codex_model_catalog_field = CodexModelCatalogField::ContextWindow;
+        }
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let model_catalog_field = help_text(&app);
+        assert!(
+            model_catalog_field.contains("Context Window"),
+            "{model_catalog_field}"
+        );
+        assert!(
+            model_catalog_field.contains("provider's actual model capability"),
+            "{model_catalog_field}"
+        );
+    }
+
+    #[test]
+    fn context_help_provider_preview_uses_chinese_without_english_leakage() {
+        let _lang = use_test_language(Language::Chinese);
+        let mut app = App::new(Some(AppType::Codex));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Codex,
+        )));
+        focus_provider_json_preview(&mut app);
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.codex_preview_section = CodexPreviewSection::Config;
+        }
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(text.contains("点在哪，帮助就在哪"), "{text}");
+        assert!(
+            text.contains("本地路由、思考能力、模型目录、目标模式、远程压缩"),
+            "{text}"
+        );
+        assert!(!text.contains("Help follows"), "{text}");
+        assert!(!text.contains("Goal mode"), "{text}");
+        assert!(!text.contains("remote compaction"), "{text}");
+    }
+
+    #[test]
+    fn context_help_usage_query_template_explains_exposed_templates() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_usage_query_page();
+            form.toggle_usage_query_enabled();
+        }
+        select_usage_query_field(&mut app, UsageQueryField::Template);
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(
+            text.contains("custom, general, newapi, and balance"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Token Plan is not shown in the TUI"),
+            "{text}"
+        );
+        assert!(!text.contains("TUI 只提供"), "{text}");
+    }
+
+    #[test]
+    fn context_help_usage_query_side_panels_follow_focus() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_usage_query_page();
+            form.toggle_usage_query_enabled();
+            form.set_usage_query_template(UsageQueryTemplate::Custom);
+            form.focus = FormFocus::JsonPreview;
+        }
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let extractor = help_text(&app);
+        assert!(extractor.contains("{{baseUrl}}"), "{extractor}");
+        assert!(extractor.contains("remaining quota fields"), "{extractor}");
+        assert!(extractor.contains("planName"), "{extractor}");
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Content;
+        }
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let instructions = help_text(&app);
+        assert!(
+            instructions.contains("{{baseUrl}}/api/usage"),
+            "{instructions}"
+        );
+        assert!(instructions.contains("remaining"), "{instructions}");
+        assert!(instructions.contains("User-Agent"), "{instructions}");
+    }
+
+    #[test]
+    fn context_help_long_usage_query_instructions_scroll() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_usage_query_page();
+            form.toggle_usage_query_enabled();
+            form.focus = FormFocus::Content;
+        }
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let Overlay::Help(help) = &app.overlay else {
+            panic!("expected Help overlay, got {:?}", app.overlay);
+        };
+        assert!(help.content.lines.len() > 20);
+        assert_eq!(help.scroll, 0);
+
+        app.on_key(key(KeyCode::Down), &UiData::default());
+        app.on_key(key(KeyCode::Down), &UiData::default());
+        let Overlay::Help(help) = &app.overlay else {
+            panic!("expected Help overlay, got {:?}", app.overlay);
+        };
+        assert_eq!(help.scroll, 2);
+
+        app.on_key(key(KeyCode::Up), &UiData::default());
+        let Overlay::Help(help) = &app.overlay else {
+            panic!("expected Help overlay, got {:?}", app.overlay);
+        };
+        assert_eq!(help.scroll, 1);
+    }
+
+    #[test]
+    fn context_help_usage_query_template_picker_restores_after_close() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_usage_query_page();
+            form.toggle_usage_query_enabled();
+        }
+        app.overlay = Overlay::UsageQueryTemplatePicker { selected: 2 };
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let text = help_text(&app);
+        assert!(
+            text.contains("custom, general, newapi, and balance"),
+            "{text}"
+        );
+        assert!(matches!(
+            app.pending_overlay,
+            Some(Overlay::UsageQueryTemplatePicker { selected: 2 })
+        ));
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        assert!(matches!(
+            app.overlay,
+            Overlay::UsageQueryTemplatePicker { selected: 2 }
+        ));
+        assert!(app.pending_overlay.is_none());
+    }
+
+    #[test]
+    fn context_help_does_not_cover_async_running_or_loading_overlays() {
+        let _lang = use_test_language(Language::English);
+
+        let mut speedtest = App::new(Some(AppType::Claude));
+        speedtest.overlay = Overlay::SpeedtestRunning {
+            url: "https://example.com".to_string(),
+        };
+        let action = speedtest.on_key(key(KeyCode::Char('?')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            speedtest.overlay,
+            Overlay::SpeedtestRunning { ref url } if url == "https://example.com"
+        ));
+        assert!(speedtest.pending_overlay.is_none());
+
+        let mut stream_check = App::new(Some(AppType::Claude));
+        stream_check.overlay = Overlay::StreamCheckRunning {
+            provider_id: "p1".to_string(),
+            provider_name: "Provider One".to_string(),
+        };
+        let action = stream_check.on_key(key(KeyCode::Char('?')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            stream_check.overlay,
+            Overlay::StreamCheckRunning { ref provider_id, .. } if provider_id == "p1"
+        ));
+        assert!(stream_check.pending_overlay.is_none());
+
+        let mut proxy_loading = App::new(Some(AppType::Claude));
+        proxy_loading.overlay = Overlay::Loading {
+            kind: LoadingKind::Proxy,
+            title: "Proxy".to_string(),
+            message: "Working...".to_string(),
+        };
+        let action = proxy_loading.on_key(key(KeyCode::Char('?')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            proxy_loading.overlay,
+            Overlay::Loading {
+                kind: LoadingKind::Proxy,
+                ..
+            }
+        ));
+        assert!(proxy_loading.pending_overlay.is_none());
+
+        let mut webdav_loading = App::new(Some(AppType::Claude));
+        webdav_loading.overlay = Overlay::Loading {
+            kind: LoadingKind::WebDav,
+            title: "WebDAV".to_string(),
+            message: "Working...".to_string(),
+        };
+        let action = webdav_loading.on_key(key(KeyCode::Char('?')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            webdav_loading.overlay,
+            Overlay::Loading {
+                kind: LoadingKind::WebDav,
+                ..
+            }
+        ));
+        assert!(webdav_loading.pending_overlay.is_none());
+    }
+
+    #[test]
+    fn context_help_usage_query_newapi_base_url_and_timeout_follow_upstream() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.open_usage_query_page();
+            form.toggle_usage_query_enabled();
+            form.set_usage_query_template(UsageQueryTemplate::NewApi);
+        }
+        select_usage_query_field(&mut app, UsageQueryField::BaseUrl);
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let base_url = help_text(&app);
+        assert!(base_url.contains("NewAPI service URL"), "{base_url}");
+        assert!(base_url.contains("/api/user/self"), "{base_url}");
+        assert!(!base_url.contains("For the general template"), "{base_url}");
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        select_usage_query_field(&mut app, UsageQueryField::Timeout);
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let timeout = help_text(&app);
+        assert!(timeout.contains("2-30 seconds"), "{timeout}");
+    }
+
+    #[test]
+    fn context_help_falls_back_when_focus_has_no_specific_help() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Content;
+        }
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(text.contains("No help here"), "{text}");
+        assert!(!text.contains("toggle help"), "{text}");
+    }
+
+    #[test]
+    fn context_help_question_mark_stays_text_while_provider_field_is_editing() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        select_provider_field(&mut app, ProviderAddField::Name);
+        assert!(matches!(
+            app.on_key(key(KeyCode::Enter), &UiData::default()),
+            Action::None
+        ));
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert_eq!(provider_editing_name(&app), (true, "?".to_string()));
+    }
+
+    #[test]
+    fn context_help_question_mark_stays_text_while_text_input_overlay_is_editing() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.overlay = Overlay::TextInput(TextInputState {
+            title: "Export".to_string(),
+            prompt: "Path".to_string(),
+            input: TextInput::new(""),
+            submit: TextSubmit::ConfigExport,
+            secret: false,
+        });
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::TextInput(TextInputState { input, .. }) if input.value == "?"
+        ));
+        assert!(app.pending_overlay.is_none());
+    }
+
+    #[test]
+    fn context_help_question_mark_stays_text_while_model_fetch_picker_is_editing() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.overlay = Overlay::ModelFetchPicker {
+            request_id: 1,
+            field: ProviderAddField::ClaudeModelConfig,
+            claude_idx: Some(0),
+            input: TextInput::new(""),
+            query: String::new(),
+            fetching: false,
+            models: Vec::new(),
+            error: None,
+            selected_idx: 0,
+        };
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::ModelFetchPicker { input, .. } if input.value == "?"
+        ));
+        assert!(app.pending_overlay.is_none());
+    }
+
+    #[test]
+    fn context_help_common_config_mentions_re_extract_guidance() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Codex));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Codex,
+        )));
+        select_provider_field(&mut app, ProviderAddField::CommonSnippet);
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        let text = help_text(&app);
+        assert!(text.contains("re-extracting"), "{text}");
+        assert!(text.contains("existing config"), "{text}");
+    }
+
+    #[test]
+    fn context_help_settings_proxy_opens_proxy_detail_text_view() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SettingsProxy;
+        app.focus = Focus::Content;
+        let mut data = UiData::default();
+        data.proxy.configured_listen_address = "0.0.0.0".to_string();
+        data.proxy.configured_listen_port = 15721;
+
+        let action = app.on_key(key(KeyCode::Char('?')), &data);
+
+        assert!(matches!(action, Action::None));
+        let Overlay::TextView(view) = &app.overlay else {
+            panic!("expected proxy TextView overlay, got {:?}", app.overlay);
+        };
+        assert_eq!(view.title, texts::tui_config_item_proxy());
+        let text = view.lines.join("\n");
+        assert!(text.contains("0.0.0.0:15721"), "{text}");
+        assert!(text.contains("Restart routing"), "{text}");
+    }
+
+    #[test]
+    fn context_help_chinese_empty_fallback_is_fully_chinese() {
+        let _lang = use_test_language(Language::Chinese);
+        let mut app = App::new(Some(AppType::Claude));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Claude,
+        )));
+        if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+            form.focus = FormFocus::Content;
+        }
+
+        let action = app.on_key(key(KeyCode::Char('?')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        let text = help_text(&app);
+        assert!(text.contains("点在哪，帮助就在哪"), "{text}");
+        assert!(text.contains("此处无提示"), "{text}");
+        assert!(!text.contains("Help follows"), "{text}");
+        assert!(!text.contains("No help here"), "{text}");
     }
 
     #[test]

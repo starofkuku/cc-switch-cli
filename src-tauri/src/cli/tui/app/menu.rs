@@ -384,8 +384,53 @@ impl App {
         }
     }
 
-    pub fn open_help(&mut self) {
-        self.overlay = Overlay::Help;
+    pub fn open_help(&mut self, data: &UiData) {
+        if self.help_should_open_proxy_view() {
+            self.open_proxy_help_view(data, None);
+            return;
+        }
+
+        let help = Overlay::Help(crate::cli::tui::help::HelpState::new(
+            crate::cli::tui::help::context_help_for_app(self),
+        ));
+        if self.overlay.can_be_covered_by_help() {
+            let previous = std::mem::replace(&mut self.overlay, help);
+            self.pending_overlay = Some(previous);
+        } else if !self.overlay.is_active() {
+            self.overlay = help;
+        }
+    }
+
+    fn help_shortcut_is_available(&self) -> bool {
+        if self.editor.is_some() || self.filter.active || self.form_text_input_is_active() {
+            return false;
+        }
+        if matches!(self.overlay, Overlay::Help(_)) || self.overlay_text_input_is_active() {
+            return false;
+        }
+        !self.overlay.is_active()
+            || (self.pending_overlay.is_none() && self.overlay.can_be_covered_by_help())
+    }
+
+    fn help_should_open_proxy_view(&self) -> bool {
+        if self.overlay.is_active() {
+            return false;
+        }
+        if matches!(self.route, Route::SettingsProxy) {
+            return true;
+        }
+        if matches!(self.route, Route::Settings) && matches!(self.focus, Focus::Content) {
+            return matches!(
+                SettingsItem::ALL.get(self.settings_idx),
+                Some(SettingsItem::Proxy)
+            );
+        }
+        if matches!(self.route, Route::Config) && matches!(self.focus, Focus::Content) {
+            return visible_config_items(&self.filter, &self.app_type)
+                .get(self.config_idx)
+                .is_some_and(|item| matches!(item, ConfigItem::Proxy));
+        }
+        false
     }
 
     pub fn close_overlay(&mut self) {
@@ -450,6 +495,11 @@ impl App {
 
         let key = self.normalize_vim_navigation_key(key);
 
+        if matches!(key.code, KeyCode::Char('?')) && self.help_shortcut_is_available() {
+            self.open_help(data);
+            return Action::None;
+        }
+
         if self.overlay.is_active() {
             return self.on_overlay_key(key, data);
         }
@@ -472,10 +522,6 @@ impl App {
 
         // Global actions.
         match key.code {
-            KeyCode::Char('?') => {
-                self.open_help();
-                return Action::None;
-            }
             KeyCode::Char('/') => {
                 self.filter.active = true;
                 self.prepare_filter_focus();
