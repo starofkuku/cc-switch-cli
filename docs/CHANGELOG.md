@@ -7,6 +7,48 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.1] - 2026-06-07
+
+### Added
+
+- **Codex / TUI**: Add a managed Codex OAuth accounts page under Settings, with account listing, details, login actions, and a persistent login toast that requires confirmation before cancellation.
+- **Codex / DeepSeek**: Add an upstream-aligned DeepSeek Codex preset for CLI and TUI provider creation, including model catalog entries for `deepseek-v4-flash` and `deepseek-v4-pro`, reasoning metadata, icon metadata, and the expected Codex TOML shape. Fixes [#250](https://github.com/SaladDay/cc-switch-cli/issues/250).
+- **Providers / TUI**: Add provider badges and detail labels for proxy requirements, localized as `Needs Proxy` / `No Proxy Support` and `需要代理` / `不支持代理`.
+- **Docs / Agents**: Add root `AGENTS.md` instructions for Codex and other coding agents.
+
+### Changed
+
+- **TUI / Hot Refresh**: Route fast refreshes through read-only snapshot state so background app-data, usage/pricing, quota, proxy, skills, and OpenClaw provider reads do not silently write or repair persistent state.
+- **Docs / README**: Refresh README positioning around dual TUI/CLI workflows, managed ChatGPT/Codex OAuth accounts, session history, token/cost usage statistics, and OpenAI-compatible proxy routing.
+- **Docs / Maintenance**: Prune stale design notes, old release-note drafts, and refactor plans from `docs/`, keeping the published changelog mirrored under `docs/CHANGELOG.md`.
+- **README / Release Metadata**: Refresh the README version badges for 5.8.1.
+
+### Fixed
+
+- **Codex / Chat Bridge**: Build Codex Responses-to-Chat bridge URLs from the configured provider base URL instead of forcing `/v1`, fixing DeepSeek proxy requests that should go to `/chat/completions`. Fixes [#242](https://github.com/SaladDay/cc-switch-cli/issues/242).
+- **Codex / Auth Docs**: Clarify that 5.8.0 introduced managed-account plumbing, while the 5.8.1 TUI account page is the first user-facing Codex OAuth account-management screen.
+- **TUI / Snapshot Reads**: Avoid clearing invalid runtime session state, creating default proxy rows, rewriting default cost multipliers, persisting OpenClaw live-only providers, or clearing invalid current-provider settings during snapshot-only refreshes.
+
+### Commits (since v5.8.0)
+
+- 1e835c3d chore: add Codex agent instructions (#249)
+- 51871934 chore(docs): prune stale documentation (#248)
+- 6624869f fix(codex): add DeepSeek preset and chat bridge base handling (#247)
+- 8b0ec1c1 feat(tui): label provider proxy requirements (#246)
+- e0f8748d docs: highlight dual TUI and CLI workflows (#245)
+- 2d2cdd98 fix(tui): use readonly snapshots for hot refresh (#244)
+- 8c208420 feat(tui): add Codex OAuth account manager (#243)
+- 386d9f50 docs(release): clarify Codex auth scope
+
+### Thanks
+
+- Thanks `@Noodle05` for reporting the missing DeepSeek Codex model catalog and model-switching gap.
+- Thanks `@WangHaoZhe` for the DeepSeek proxy base URL report and reproduction details.
+- Thanks `@hui-shao` for the detailed proxy dashboard token-counter investigation; that issue remains open while the daemon status path gets a fuller fix.
+- Thanks `@fcying` for the OpenCode modalities request now tracked for a later release.
+- Thanks `@SaladDay` for the Codex OAuth TUI, DeepSeek preset, proxy requirement labels, read-only refresh path, documentation cleanup, and release integration.
+- Thanks to everyone who opened issues, tested 5.8.0, reviewed PRs, and helped narrow compatibility gaps during this patch cycle.
+
 ## [5.8.0] - 2026-06-06
 
 ### Added
