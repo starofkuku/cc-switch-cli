@@ -842,6 +842,28 @@ fn queue_background_session_usage_sync(
     }
 }
 
+/// Lazily kick off the session-usage sync the first time a Usage route is shown
+/// this run. The sync scans the whole session-log history (expensive on large
+/// histories) and only feeds the Usage view, so it is deferred off startup.
+fn maybe_queue_usage_session_sync(
+    app: &App,
+    sync_req_tx: Option<&mpsc::Sender<SessionUsageSyncReq>>,
+    sync_tracker: &mut RequestTracker,
+    started: &mut bool,
+) {
+    if *started {
+        return;
+    }
+    if !matches!(
+        app.route,
+        route::Route::Usage | route::Route::UsageLogs | route::Route::UsageLogDetail { .. }
+    ) {
+        return;
+    }
+    *started = true;
+    queue_background_session_usage_sync(sync_req_tx, sync_tracker);
+}
+
 fn handle_session_usage_sync_msg(
     app: &mut App,
     data: &mut data::UiData,
@@ -869,18 +891,18 @@ fn handle_session_usage_sync_msg(
     data_cache.clear_usage_pricing_after_external_usage_sync();
 
     let current_app_type = app.app_type.clone();
-    data_cache.queue_usage_pricing_load(
-        app,
-        usage_pricing_req_tx,
-        &current_app_type,
-        data::UsageRangePreset::SevenDays,
-    );
-    if matches!(app.usage.range, data::UsageRangePreset::Custom(_)) {
+    // Always refresh the range the user is actually viewing (Today / 30d / custom),
+    // otherwise the active range would show stale numbers after the sync finishes
+    // while the user is sitting on the Usage view.
+    let active_range = app.usage.range;
+    data_cache.queue_usage_pricing_load(app, usage_pricing_req_tx, &current_app_type, active_range);
+    // Keep the default 7-day window warm too (used as the cached default).
+    if !matches!(active_range, data::UsageRangePreset::SevenDays) {
         data_cache.queue_usage_pricing_load(
             app,
             usage_pricing_req_tx,
             &current_app_type,
-            app.usage.range,
+            data::UsageRangePreset::SevenDays,
         );
     }
     data_cache.remember_current(&app.app_type, data);
@@ -1603,6 +1625,10 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
     let mut webdav_loading = RequestTracker::default();
     let mut update_check = RequestTracker::default();
     let mut session_usage_sync = RequestTracker::default();
+    // Session usage sync scans every session log file, which is expensive with a
+    // large history. It only feeds the Usage view, so defer it until the user
+    // first opens a Usage route instead of paying it on every startup.
+    let mut session_usage_sync_started = false;
 
     let speedtest = match start_speedtest_system() {
         Ok(system) => Some(system),
@@ -1792,10 +1818,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
         );
         queue_local_env_refresh_if_available(&mut app, local_env.as_ref().map(|s| &s.req_tx));
         queue_managed_auth_refresh_if_available(&mut app, managed_auth.as_ref().map(|s| &s.req_tx));
-        queue_background_session_usage_sync(
-            session_usage.as_ref().map(|s| &s.req_tx),
-            &mut session_usage_sync,
-        );
     }
 
     loop {
@@ -1847,10 +1869,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                         queue_managed_auth_refresh_if_available(
                             &mut app,
                             managed_auth.as_ref().map(|s| &s.req_tx),
-                        );
-                        queue_background_session_usage_sync(
-                            session_usage.as_ref().map(|s| &s.req_tx),
-                            &mut session_usage_sync,
                         );
                     }
                     Ok(false) => {}
@@ -1904,10 +1922,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                             queue_managed_auth_refresh_if_available(
                                 &mut app,
                                 managed_auth.as_ref().map(|s| &s.req_tx),
-                            );
-                            queue_background_session_usage_sync(
-                                session_usage.as_ref().map(|s| &s.req_tx),
-                                &mut session_usage_sync,
                             );
                         }
                         Ok(false) => {}
@@ -2191,6 +2205,15 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                 _ => {}
             }
         }
+
+        // Kick off the deferred session-usage sync the first time the user lands
+        // on a Usage route (not at startup).
+        maybe_queue_usage_session_sync(
+            &app,
+            session_usage.as_ref().map(|s| &s.req_tx),
+            &mut session_usage_sync,
+            &mut session_usage_sync_started,
+        );
 
         if last_tick.elapsed() >= tick_rate {
             app.on_tick();
