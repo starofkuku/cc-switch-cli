@@ -232,32 +232,6 @@ fn queue_current_quota_refresh_if_due(
     }
 }
 
-fn queue_managed_auth_refresh(
-    app: &mut App,
-    managed_auth_req_tx: Option<&mpsc::Sender<ManagedAuthReq>>,
-    auth_provider: &str,
-) {
-    let Some(tx) = managed_auth_req_tx else {
-        app.managed_auth_loading = false;
-        app.push_toast(
-            texts::tui_toast_managed_auth_worker_unavailable("auth worker is not running"),
-            ToastKind::Warning,
-        );
-        return;
-    };
-
-    app.managed_auth_loading = true;
-    if let Err(error) = tx.send(ManagedAuthReq::Refresh {
-        auth_provider: auth_provider.to_string(),
-    }) {
-        app.managed_auth_loading = false;
-        app.push_toast(
-            texts::tui_toast_managed_auth_request_failed(&error.to_string()),
-            ToastKind::Warning,
-        );
-    }
-}
-
 fn queue_provider_quota_refresh(
     app: &mut App,
     data: &mut data::UiData,
@@ -1545,15 +1519,6 @@ fn queue_local_env_refresh_if_available(
     }
 }
 
-fn queue_managed_auth_refresh_if_available(
-    app: &mut App,
-    managed_auth_req_tx: Option<&mpsc::Sender<ManagedAuthReq>>,
-) {
-    if let Some(tx) = managed_auth_req_tx {
-        queue_managed_auth_refresh(app, Some(tx), "codex_oauth");
-    }
-}
-
 fn is_initial_loading_quit_key(key: &KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => true,
@@ -1817,7 +1782,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
             quota.as_ref().map(|s| &s.req_tx),
         );
         queue_local_env_refresh_if_available(&mut app, local_env.as_ref().map(|s| &s.req_tx));
-        queue_managed_auth_refresh_if_available(&mut app, managed_auth.as_ref().map(|s| &s.req_tx));
     }
 
     loop {
@@ -1865,10 +1829,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                         queue_local_env_refresh_if_available(
                             &mut app,
                             local_env.as_ref().map(|s| &s.req_tx),
-                        );
-                        queue_managed_auth_refresh_if_available(
-                            &mut app,
-                            managed_auth.as_ref().map(|s| &s.req_tx),
                         );
                     }
                     Ok(false) => {}
@@ -1918,10 +1878,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                             queue_local_env_refresh_if_available(
                                 &mut app,
                                 local_env.as_ref().map(|s| &s.req_tx),
-                            );
-                            queue_managed_auth_refresh_if_available(
-                                &mut app,
-                                managed_auth.as_ref().map(|s| &s.req_tx),
                             );
                         }
                         Ok(false) => {}
