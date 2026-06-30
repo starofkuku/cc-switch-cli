@@ -1143,7 +1143,7 @@ fn provider_form_fields_show_dashed_divider_before_hermes_rate_limit_delay() {
 }
 
 #[test]
-fn provider_form_renders_usage_query_entry_as_open_row() {
+fn provider_form_usage_query_entry_uses_open_hint_not_value() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -1154,12 +1154,33 @@ fn provider_form_renders_usage_query_entry_as_open_row() {
     let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
     form.focus = FormFocus::Fields;
     form.name.set("Demo Provider");
+
+    // The value column no longer prints the bare "open" label; it stays blank.
+    let (_label, value) = super::provider_field_label_and_value(
+        &form,
+        crate::cli::tui::form::ProviderAddField::UsageQuery,
+    );
+    assert!(
+        value.is_empty(),
+        "usage query value column should be blank, got: {value:?}"
+    );
+
+    // The open affordance moves to the help line under the table.
+    let (hint_line, _) = super::provider_field_editor_line(
+        &form,
+        Some(crate::cli::tui::form::ProviderAddField::UsageQuery),
+        80,
+    );
+    let hint: String = hint_line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(hint.contains("open") || hint.contains("打开"), "{hint}");
+
     app.form = Some(FormState::ProviderAdd(form));
-
     let all = all_text(&render(&app, &minimal_data(&app.app_type)));
-
     assert!(all.contains("Usage Query"), "{all}");
-    assert!(all.contains("open") || all.contains("打开"), "{all}");
 }
 
 #[test]

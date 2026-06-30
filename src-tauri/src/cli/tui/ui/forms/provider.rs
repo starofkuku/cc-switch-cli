@@ -1252,7 +1252,7 @@ pub(crate) fn provider_field_label_and_value(
                 "[ ]".to_string()
             }
         }
-        ProviderAddField::CodexLocalRouting => texts::tui_key_open().to_string(),
+        ProviderAddField::CodexLocalRouting => String::new(),
         ProviderAddField::IncludeCommonConfig => {
             if provider.include_common_config {
                 format!("[{}]", texts::tui_marker_active())
@@ -1282,9 +1282,9 @@ pub(crate) fn provider_field_label_and_value(
         ProviderAddField::HermesRateLimitDelay => provider.hermes_rate_limit_delay.value.clone(),
         ProviderAddField::HermesAdvancedDivider => "- - - - - - - - - -".to_string(),
         ProviderAddField::CommonConfigDivider => "- - - - - - - - - -".to_string(),
-        ProviderAddField::CommonSnippet => texts::tui_key_open().to_string(),
+        ProviderAddField::CommonSnippet => String::new(),
         ProviderAddField::UsageQueryDivider => String::new(),
-        ProviderAddField::UsageQuery => texts::tui_key_open().to_string(),
+        ProviderAddField::UsageQuery => String::new(),
         _ => provider
             .input(field)
             .map(|v| {
@@ -1297,9 +1297,18 @@ pub(crate) fn provider_field_label_and_value(
             .unwrap_or_default(),
     };
 
+    // Sub-page rows expose their action through the help line, so their value
+    // column stays blank rather than falling back to the "N/A" placeholder.
+    let opens_subpage = matches!(
+        field,
+        ProviderAddField::CommonSnippet
+            | ProviderAddField::UsageQuery
+            | ProviderAddField::CodexLocalRouting
+    );
+
     (
         label,
-        if value.is_empty() {
+        if value.is_empty() && !opens_subpage {
             texts::tui_na().to_string()
         } else {
             value
@@ -1352,9 +1361,9 @@ pub(crate) fn provider_field_editor_line(
             ProviderAddField::CodexFastMode => {
                 format!("codex_fast_mode = {}", provider.codex_fast_mode)
             }
-            ProviderAddField::CodexLocalRouting => {
-                format!("local_routing = {}", provider.codex_local_routing_enabled())
-            }
+            ProviderAddField::CodexLocalRouting => texts::tui_form_open_page_hint().to_string(),
+            ProviderAddField::CommonSnippet => texts::tui_form_open_editor_hint().to_string(),
+            ProviderAddField::UsageQuery => texts::tui_form_open_page_hint().to_string(),
             ProviderAddField::CommonConfigDivider => String::new(),
             ProviderAddField::IncludeCommonConfig => {
                 format!("apply_common_config = {}", provider.include_common_config)

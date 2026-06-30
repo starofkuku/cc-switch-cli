@@ -658,6 +658,22 @@ pub fn tui_claude_model_config_open_hint() -> &'static str {
     }
 }
 
+pub fn tui_form_open_editor_hint() -> &'static str {
+    if is_chinese() {
+        "按 Enter 打开编辑器"
+    } else {
+        "Press Enter to open editor"
+    }
+}
+
+pub fn tui_form_open_page_hint() -> &'static str {
+    if is_chinese() {
+        "按 Enter 打开"
+    } else {
+        "Press Enter to open"
+    }
+}
+
 pub fn tui_hint_press() -> &'static str {
     if is_chinese() {
         "按 "
