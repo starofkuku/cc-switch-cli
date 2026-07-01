@@ -180,6 +180,14 @@ pub(crate) fn render_provider_add_form(
         return;
     }
 
+    if matches!(
+        provider.page,
+        super::form::ProviderFormPage::ClaudeQuickConfig
+    ) {
+        render_claude_quick_config_form(frame, app, provider, area, theme);
+        return;
+    }
+
     let title = match &provider.mode {
         super::form::FormMode::Add => texts::tui_provider_add_title().to_string(),
         super::form::FormMode::Edit { .. } => {
@@ -455,6 +463,81 @@ pub(crate) fn render_provider_add_form(
             &highlighted_lines,
         );
     }
+}
+
+fn render_claude_quick_config_form(
+    frame: &mut Frame<'_>,
+    app: &App,
+    provider: &super::form::ProviderAddFormState,
+    area: Rect,
+    theme: &super::theme::Theme,
+) {
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(pane_border_style(app, Focus::Content, theme))
+        .title(texts::tui_label_claude_quick_config());
+    frame.render_widget(outer.clone(), area);
+    let inner = outer.inner(area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_key_bar(
+        frame,
+        chunks[0],
+        theme,
+        &claude_quick_config_form_key_items(),
+    );
+
+    let fields_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(focus_block_style(true, theme))
+        .title(texts::tui_form_fields_title());
+    frame.render_widget(fields_block.clone(), chunks[1]);
+    let fields_inner = fields_block.inner(chunks[1]);
+
+    let fields = provider.claude_quick_config_fields();
+    let rows_data = fields
+        .iter()
+        .map(|field| provider_field_label_and_value(provider, *field))
+        .collect::<Vec<_>>();
+
+    let label_col_width = field_label_column_width(
+        rows_data
+            .iter()
+            .map(|(label, _value)| label.as_str())
+            .chain(std::iter::once(texts::tui_header_field())),
+        1,
+    );
+
+    let header = Row::new(vec![
+        Cell::from(cell_pad(texts::tui_header_field())),
+        Cell::from(texts::tui_header_value()),
+    ])
+    .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
+
+    let rows = rows_data.iter().map(|(label, value)| {
+        Row::new(vec![Cell::from(cell_pad(label)), Cell::from(value.clone())])
+    });
+
+    let table = Table::new(
+        rows,
+        [Constraint::Length(label_col_width), Constraint::Min(10)],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::NONE))
+    .row_highlight_style(selection_style(theme))
+    .highlight_symbol(highlight_symbol(theme));
+
+    let mut state = TableState::default();
+    if !fields.is_empty() {
+        state.select(Some(provider.claude_quick_config_idx.min(fields.len() - 1)));
+    }
+    frame.render_stateful_widget(table, fields_inner, &mut state);
 }
 
 fn render_codex_local_routing_form(
@@ -1213,6 +1296,7 @@ pub(crate) fn provider_field_label_and_value(
         ProviderAddField::ClaudeFallbackModel => {
             texts::tui_label_claude_fallback_model().to_string()
         }
+        ProviderAddField::ClaudeQuickConfig => texts::tui_label_claude_quick_config().to_string(),
         ProviderAddField::ClaudeHideAttribution => {
             texts::tui_label_claude_hide_attribution().to_string()
         }
@@ -1287,6 +1371,9 @@ pub(crate) fn provider_field_label_and_value(
         }
         ProviderAddField::ClaudeModelConfig => {
             texts::tui_claude_model_config_summary(provider.claude_model_configured_count())
+        }
+        ProviderAddField::ClaudeQuickConfig => {
+            texts::tui_claude_quick_config_summary(provider.claude_quick_config_enabled_count())
         }
         ProviderAddField::ClaudeHideAttribution => {
             if provider.claude_hide_attribution {
@@ -1419,6 +1506,7 @@ pub(crate) fn provider_field_editor_line(
             ProviderAddField::ClaudeModelConfig => {
                 texts::tui_claude_model_config_open_hint().to_string()
             }
+            ProviderAddField::ClaudeQuickConfig => texts::tui_form_open_page_hint().to_string(),
             ProviderAddField::ClaudeHideAttribution => {
                 format!(
                     "attribution.commit/pr = {}",

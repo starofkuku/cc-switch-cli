@@ -1846,6 +1846,22 @@ pub mod texts {
         }
     }
 
+    pub fn tui_label_claude_quick_config() -> &'static str {
+        if is_chinese() {
+            "快捷配置菜单"
+        } else {
+            "Quick Config Menu"
+        }
+    }
+
+    pub fn tui_claude_quick_config_summary(enabled: usize) -> String {
+        if is_chinese() {
+            format!("已启用 {}/4", enabled)
+        } else {
+            format!("{}/4 enabled", enabled)
+        }
+    }
+
     pub fn tui_label_claude_hide_attribution() -> &'static str {
         if is_chinese() {
             "隐藏 AI 署名"

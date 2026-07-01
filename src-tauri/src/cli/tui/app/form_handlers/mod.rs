@@ -55,6 +55,10 @@ impl App {
                 provider.close_usage_query_page();
                 return Action::None;
             }
+            if matches!(provider.page, form::ProviderFormPage::ClaudeQuickConfig) {
+                provider.close_claude_quick_config_page();
+                return Action::None;
+            }
         }
 
         let has_unsaved_changes = self

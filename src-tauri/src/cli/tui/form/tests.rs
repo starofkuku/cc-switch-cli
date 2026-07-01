@@ -338,7 +338,8 @@ fn provider_add_form_codex_oauth_template_matches_upstream_contract() {
     assert!(fields.contains(&ProviderAddField::CodexOAuthAccount));
     assert!(fields.contains(&ProviderAddField::CodexFastMode));
     assert!(fields.contains(&ProviderAddField::ClaudeModelConfig));
-    assert!(fields.contains(&ProviderAddField::ClaudeHideAttribution));
+    assert!(fields.contains(&ProviderAddField::ClaudeQuickConfig));
+    assert!(!fields.contains(&ProviderAddField::ClaudeHideAttribution));
     assert!(!fields.contains(&ProviderAddField::ClaudeBaseUrl));
     assert!(!fields.contains(&ProviderAddField::ClaudeApiFormat));
     assert!(!fields.contains(&ProviderAddField::ClaudeApiKey));
@@ -889,7 +890,7 @@ fn provider_add_form_claude_fields_include_model_config_entry() {
 }
 
 #[test]
-fn provider_add_form_claude_places_hide_attribution_below_common_config() {
+fn provider_add_form_claude_places_quick_config_menu_below_common_config() {
     let form = ProviderAddFormState::new(AppType::Claude);
     let fields = form.fields();
     let pos = |field: ProviderAddField| {
@@ -901,7 +902,7 @@ fn provider_add_form_claude_places_hide_attribution_below_common_config() {
     let advanced_divider_idx = pos(ProviderAddField::ClaudeAdvancedDivider);
     let model_cfg_idx = pos(ProviderAddField::ClaudeModelConfig);
     let include_common_idx = pos(ProviderAddField::IncludeCommonConfig);
-    let hide_attribution_idx = pos(ProviderAddField::ClaudeHideAttribution);
+    let quick_config_idx = pos(ProviderAddField::ClaudeQuickConfig);
     let usage_divider_idx = pos(ProviderAddField::UsageQueryDivider);
 
     assert!(
@@ -909,13 +910,65 @@ fn provider_add_form_claude_places_hide_attribution_below_common_config() {
         "model mapping should sit in the advanced section after the divider"
     );
     assert!(
-        hide_attribution_idx == include_common_idx + 1,
-        "hide attribution should sit directly below the add-common-config toggle"
+        quick_config_idx == include_common_idx + 1,
+        "the quick-config menu should sit directly below the add-common-config toggle"
     );
     assert!(
-        hide_attribution_idx < usage_divider_idx,
-        "hide attribution stays above the usage-query section"
+        quick_config_idx < usage_divider_idx,
+        "the quick-config menu stays above the usage-query section"
     );
+
+    // The four quick toggles are collapsed off the main field list into the
+    // sub-page, in upstream order.
+    for toggle in [
+        ProviderAddField::ClaudeHideAttribution,
+        ProviderAddField::ClaudeTeammates,
+        ProviderAddField::ClaudeToolSearch,
+        ProviderAddField::ClaudeDisableAutoUpgrade,
+    ] {
+        assert!(
+            !fields.contains(&toggle),
+            "{toggle:?} should not appear on the main field list"
+        );
+    }
+    assert_eq!(
+        form.claude_quick_config_fields(),
+        vec![
+            ProviderAddField::ClaudeHideAttribution,
+            ProviderAddField::ClaudeTeammates,
+            ProviderAddField::ClaudeToolSearch,
+            ProviderAddField::ClaudeDisableAutoUpgrade,
+        ]
+    );
+}
+
+#[test]
+fn provider_add_form_claude_quick_config_menu_opens_and_toggles() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    form.open_claude_quick_config_page();
+    assert!(matches!(
+        form.page,
+        super::ProviderFormPage::ClaudeQuickConfig
+    ));
+    assert_eq!(form.claude_quick_config_enabled_count(), 0);
+
+    // Toggle the first two entries (hide attribution + teammates).
+    form.toggle_claude_hide_attribution();
+    form.toggle_claude_teammates();
+    assert_eq!(form.claude_quick_config_enabled_count(), 2);
+
+    let provider = form.to_provider_json_value();
+    assert_eq!(
+        provider["settingsConfig"]["attribution"],
+        json!({ "commit": "", "pr": "" })
+    );
+    assert_eq!(
+        provider["settingsConfig"]["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"],
+        json!("1")
+    );
+
+    form.close_claude_quick_config_page();
+    assert!(matches!(form.page, super::ProviderFormPage::Main));
 }
 
 #[test]
@@ -937,7 +990,7 @@ fn provider_add_form_claude_advanced_section_groups_model_fields() {
 }
 
 #[test]
-fn provider_add_form_claude_official_keeps_hide_attribution_field_visible() {
+fn provider_add_form_claude_official_keeps_quick_config_menu_visible() {
     let mut provider = Provider::with_id(
         "official".to_string(),
         "Claude Official".to_string(),
@@ -953,7 +1006,12 @@ fn provider_add_form_claude_official_keeps_hide_attribution_field_visible() {
     assert!(!fields.contains(&ProviderAddField::ClaudeApiFormat));
     assert!(!fields.contains(&ProviderAddField::ClaudeApiKey));
     assert!(!fields.contains(&ProviderAddField::ClaudeModelConfig));
-    assert!(fields.contains(&ProviderAddField::ClaudeHideAttribution));
+    // Quick-config menu (holding hide-attribution etc.) stays reachable even
+    // for official providers.
+    assert!(fields.contains(&ProviderAddField::ClaudeQuickConfig));
+    assert!(form
+        .claude_quick_config_fields()
+        .contains(&ProviderAddField::ClaudeHideAttribution));
 }
 
 #[test]

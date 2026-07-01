@@ -160,6 +160,7 @@ impl ProviderAddFormState {
             claude_tool_search_touched: false,
             claude_disable_auto_upgrade: false,
             claude_disable_auto_upgrade_touched: false,
+            claude_quick_config_idx: 0,
             codex_oauth_account_id: None,
             codex_fast_mode: false,
             codex_base_url: TextInput::new(codex_defaults.0),
@@ -430,13 +431,10 @@ impl ProviderAddFormState {
             fields.push(ProviderAddField::CommonSnippet);
             fields.push(ProviderAddField::IncludeCommonConfig);
         }
-        // Claude quick toggles sit directly below the common-config controls,
-        // matching upstream's CommonConfigEditor layout.
+        // The Claude quick toggles are collapsed into a single sub-page entry
+        // ("快捷配置菜单") that sits directly below the common-config controls.
         if matches!(self.app_type, AppType::Claude) {
-            fields.push(ProviderAddField::ClaudeHideAttribution);
-            fields.push(ProviderAddField::ClaudeTeammates);
-            fields.push(ProviderAddField::ClaudeToolSearch);
-            fields.push(ProviderAddField::ClaudeDisableAutoUpgrade);
+            fields.push(ProviderAddField::ClaudeQuickConfig);
         }
         fields.push(ProviderAddField::UsageQueryDivider);
         fields.push(ProviderAddField::UsageQuery);
@@ -543,6 +541,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::ClaudeAdvancedDivider
             | ProviderAddField::CodexAdvancedDivider
+            | ProviderAddField::ClaudeQuickConfig
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::ClaudeTeammates
             | ProviderAddField::ClaudeToolSearch
@@ -601,6 +600,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::ClaudeAdvancedDivider
             | ProviderAddField::CodexAdvancedDivider
+            | ProviderAddField::ClaudeQuickConfig
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::ClaudeTeammates
             | ProviderAddField::ClaudeToolSearch
@@ -644,6 +644,56 @@ impl ProviderAddFormState {
             UsageQueryField::CodingPlanProvider => Some(&mut self.usage_query_coding_plan_provider),
             UsageQueryField::Enabled | UsageQueryField::Template | UsageQueryField::Script => None,
         }
+    }
+
+    /// The four Claude quick toggles, in upstream order. They live on the
+    /// "快捷配置菜单" sub-page rather than the main field list.
+    pub fn claude_quick_config_fields(&self) -> Vec<ProviderAddField> {
+        vec![
+            ProviderAddField::ClaudeHideAttribution,
+            ProviderAddField::ClaudeTeammates,
+            ProviderAddField::ClaudeToolSearch,
+            ProviderAddField::ClaudeDisableAutoUpgrade,
+        ]
+    }
+
+    pub fn claude_quick_config_enabled_count(&self) -> usize {
+        [
+            self.claude_hide_attribution,
+            self.claude_teammates,
+            self.claude_tool_search,
+            self.claude_disable_auto_upgrade,
+        ]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count()
+    }
+
+    pub fn selected_claude_quick_config_field(&self) -> Option<ProviderAddField> {
+        let fields = self.claude_quick_config_fields();
+        fields
+            .get(
+                self.claude_quick_config_idx
+                    .min(fields.len().saturating_sub(1)),
+            )
+            .copied()
+    }
+
+    pub fn open_claude_quick_config_page(&mut self) {
+        if !matches!(self.app_type, AppType::Claude) {
+            return;
+        }
+        self.page = ProviderFormPage::ClaudeQuickConfig;
+        self.focus = FormFocus::Fields;
+        self.editing = false;
+        let len = self.claude_quick_config_fields().len();
+        self.claude_quick_config_idx = self.claude_quick_config_idx.min(len.saturating_sub(1));
+    }
+
+    pub fn close_claude_quick_config_page(&mut self) {
+        self.page = ProviderFormPage::Main;
+        self.focus = FormFocus::Fields;
+        self.editing = false;
     }
 
     pub fn open_usage_query_page(&mut self) {

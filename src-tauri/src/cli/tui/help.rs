@@ -149,6 +149,20 @@ fn current_help_target(app: &App) -> HelpTarget {
         };
     }
 
+    if matches!(provider.page, ProviderFormPage::ClaudeQuickConfig) {
+        return match provider.focus {
+            FormFocus::Fields => {
+                provider
+                    .selected_claude_quick_config_field()
+                    .map_or(HelpTarget::Empty, |field| HelpTarget::ProviderField {
+                        app_type: provider.app_type.clone(),
+                        field,
+                    })
+            }
+            _ => HelpTarget::Empty,
+        };
+    }
+
     match provider.focus {
         FormFocus::Templates if matches!(provider.mode, FormMode::Add) => {
             HelpTarget::ProviderTemplate
@@ -306,6 +320,13 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
             help_lines(
                 "用于未明确落到具体角色模型（Haiku、Sonnet、Opus 等）的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
                 "A fallback for requests that don't clearly map to a specific role model (Haiku, Sonnet, Opus, etc.). Recommended for third-party/relay endpoints—otherwise such requests (including Haiku background subtasks) are forwarded under their original Claude model name and may fail if the upstream doesn't host it. Safe to leave blank for official endpoints.",
+            ),
+        ),
+        ProviderAddField::ClaudeQuickConfig => HelpContent::new(
+            texts::tui_label_claude_quick_config(),
+            help_lines(
+                "打开 Claude 快捷配置菜单，集中管理隐藏 AI 署名、Teammates 模式、启用 Tool Search、禁用自动升级等开关。",
+                "Opens the Claude quick-config menu that groups the hide-AI-attribution, Teammates, Tool Search, and disable-auto-upgrade toggles.",
             ),
         ),
         ProviderAddField::ClaudeHideAttribution => HelpContent::new(

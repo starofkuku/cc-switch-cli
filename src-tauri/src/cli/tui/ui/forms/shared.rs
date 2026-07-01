@@ -40,6 +40,7 @@ pub(crate) fn add_form_key_items(
                     }
                     Some(
                         ProviderAddField::ClaudeModelConfig
+                        | ProviderAddField::ClaudeQuickConfig
                         | ProviderAddField::CodexOAuthAccount
                         | ProviderAddField::CodexLocalRouting
                         | ProviderAddField::CommonSnippet
@@ -77,6 +78,17 @@ pub(crate) fn add_form_key_items(
     }
 
     keys
+}
+
+pub(crate) fn claude_quick_config_form_key_items() -> Vec<(&'static str, &'static str)> {
+    // Ctrl+S only saves from the outermost form page, so it is not advertised
+    // on this sub-page; Esc returns to the main page.
+    vec![
+        ("Esc", texts::tui_key_no()),
+        ("↑↓", texts::tui_key_select()),
+        ("Space", texts::tui_key_toggle()),
+        ("Enter", texts::tui_key_toggle()),
+    ]
 }
 
 pub(crate) fn codex_local_routing_form_key_items(

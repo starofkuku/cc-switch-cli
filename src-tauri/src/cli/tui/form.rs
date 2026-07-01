@@ -191,6 +191,7 @@ pub enum ProviderAddField {
     ClaudeModelConfig,
     ClaudeFallbackModel,
     ClaudeAdvancedDivider,
+    ClaudeQuickConfig,
     ClaudeHideAttribution,
     ClaudeTeammates,
     ClaudeToolSearch,
@@ -242,6 +243,7 @@ pub enum ProviderAddField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderFormPage {
     Main,
+    ClaudeQuickConfig,
     CodexLocalRouting,
     CodexModelCatalog,
     UsageQuery,
@@ -451,6 +453,7 @@ pub struct ProviderAddFormState {
     claude_tool_search_touched: bool,
     pub claude_disable_auto_upgrade: bool,
     claude_disable_auto_upgrade_touched: bool,
+    pub claude_quick_config_idx: usize,
     pub codex_oauth_account_id: Option<String>,
     pub codex_fast_mode: bool,
 

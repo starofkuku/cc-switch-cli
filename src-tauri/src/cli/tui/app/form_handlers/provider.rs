@@ -58,6 +58,9 @@ impl App {
         if matches!(provider.page, form::ProviderFormPage::CodexLocalRouting) {
             return self.handle_codex_local_routing_page_key(key, data);
         }
+        if matches!(provider.page, form::ProviderFormPage::ClaudeQuickConfig) {
+            return self.handle_claude_quick_config_page_key(key, data);
+        }
 
         match provider.focus {
             FormFocus::Fields => self.handle_provider_fields_key(key, data),
@@ -306,6 +309,13 @@ impl App {
                 };
                 Action::None
             }
+            ProviderAddField::ClaudeQuickConfig => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return Action::None;
+                };
+                provider.open_claude_quick_config_page();
+                Action::None
+            }
             ProviderAddField::ClaudeHideAttribution => {
                 let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
                     return Action::None;
@@ -442,6 +452,51 @@ impl App {
                 }
                 Action::None
             }
+        }
+    }
+
+    fn handle_claude_quick_config_page_key(
+        &mut self,
+        key: KeyEvent,
+        data: &UiData,
+    ) -> Option<Action> {
+        let (fields, selected) = {
+            let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() else {
+                return None;
+            };
+            let fields = provider.claude_quick_config_fields();
+            let selected = provider.selected_claude_quick_config_field()?;
+            (fields, selected)
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.close_claude_quick_config_page();
+                Some(Action::None)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.claude_quick_config_idx =
+                    provider.claude_quick_config_idx.saturating_sub(1);
+                Some(Action::None)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.claude_quick_config_idx =
+                    (provider.claude_quick_config_idx + 1).min(fields.len() - 1);
+                Some(Action::None)
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                Some(self.handle_provider_field_activate(selected, key, data))
+            }
+            _ => None,
         }
     }
 
