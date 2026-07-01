@@ -75,6 +75,15 @@ impl App {
     }
 
     pub(super) fn handle_form_save_shortcut(&mut self, data: &UiData) -> Action {
+        // Ctrl+S only saves from the outermost form page. On a provider
+        // sub-page (model catalog / local routing / usage query) it is ignored
+        // so users must return to the main page before saving.
+        if let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() {
+            if !matches!(provider.page, form::ProviderFormPage::Main) {
+                return Action::None;
+            }
+        }
+
         match self.form.as_ref() {
             Some(FormState::ProviderAdd(_)) => self.build_provider_form_save_action(data),
             Some(FormState::McpAdd(_)) => self.build_mcp_form_save_action(),

@@ -14347,6 +14347,20 @@ mod tests {
         let action = app.on_key(key(KeyCode::Enter), &data);
         assert!(matches!(action, Action::None));
 
+        // Ctrl+S no longer saves from the usage-query sub-page; it is ignored there.
+        let ignored = app.on_key(ctrl(KeyCode::Char('s')), &data);
+        assert!(matches!(ignored, Action::None));
+        assert!(
+            matches!(
+                app.form.as_ref(),
+                Some(FormState::ProviderAdd(form))
+                    if matches!(form.page, super::super::form::ProviderFormPage::UsageQuery)
+            ),
+            "Ctrl+S on a sub-page must not close/submit the form"
+        );
+
+        // Return to the main page, then Ctrl+S saves.
+        app.on_key(key(KeyCode::Esc), &data);
         let submit = app.on_key(ctrl(KeyCode::Char('s')), &data);
         assert!(matches!(
             submit,

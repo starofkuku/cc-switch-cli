@@ -79,8 +79,9 @@ pub(crate) fn add_form_key_items(
 pub(crate) fn codex_local_routing_form_key_items(
     selected_field: Option<super::form::CodexLocalRoutingField>,
 ) -> Vec<(&'static str, &'static str)> {
+    // Ctrl+S only saves from the outermost form page, so it is not advertised
+    // on this sub-page; Esc returns to the main page.
     let mut keys = vec![
-        ("Ctrl+S", texts::tui_key_save()),
         ("Esc", texts::tui_key_no()),
         ("↑↓", texts::tui_key_select()),
     ];
@@ -101,8 +102,8 @@ pub(crate) fn codex_local_routing_form_key_items(
 pub(crate) fn codex_model_catalog_form_key_items(
     has_rows: bool,
 ) -> Vec<(&'static str, &'static str)> {
+    // Ctrl+S only saves from the outermost form page (not this sub-page).
     let mut keys = vec![
-        ("Ctrl+S", texts::tui_key_save()),
         ("Esc", texts::tui_key_no()),
         ("f", texts::tui_key_fetch_model()),
         ("+", texts::tui_key_add()),
@@ -124,10 +125,8 @@ pub(crate) fn usage_query_form_key_items(
     selected_field: Option<super::form::UsageQueryField>,
     extractor_available: bool,
 ) -> Vec<(&'static str, &'static str)> {
-    let mut keys = vec![
-        ("Ctrl+S", texts::tui_key_save()),
-        ("Esc", texts::tui_key_no()),
-    ];
+    // Ctrl+S only saves from the outermost form page (not this sub-page).
+    let mut keys = vec![("Esc", texts::tui_key_no())];
     if extractor_available {
         keys.insert(0, ("Tab", texts::tui_key_focus()));
     }
