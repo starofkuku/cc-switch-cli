@@ -253,15 +253,20 @@ pub fn transform_claude_request_for_api_format_with_shadow(
         "openai_chat" => {
             let preserve_reasoning_content =
                 should_preserve_reasoning_content_for_openai_chat(provider, &body);
-            if preserve_reasoning_content {
+            let mut result = if preserve_reasoning_content {
                 super::transform::anthropic_to_openai_with_reasoning_content(
                     body,
                     explicit_cache_key,
                     true,
-                )
+                )?
             } else {
-                super::transform::anthropic_to_openai(body, explicit_cache_key)
-            }
+                super::transform::anthropic_to_openai(body, explicit_cache_key)?
+            };
+            // Streaming requests must opt into upstream usage reporting, otherwise the
+            // OpenAI-compatible upstream omits usage from the SSE stream and the converted
+            // Anthropic message_delta reports all-zero tokens (see #323).
+            super::transform::inject_openai_stream_include_usage(&mut result);
+            Ok(result)
         }
         "gemini_native" => super::transform_gemini::anthropic_to_gemini_with_shadow(
             body,
@@ -1219,5 +1224,58 @@ mod tests {
         .unwrap();
 
         assert!(result.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn openai_chat_stream_injects_include_usage() {
+        // #323: streamed requests must opt into upstream usage reporting, otherwise the
+        // OpenAI-compatible upstream omits usage and the converted message_delta is 0.
+        let provider: Provider = serde_json::from_value(json!({
+            "id": "generic",
+            "name": "Generic",
+            "settingsConfig": {
+                "api_format": "openai_chat",
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "token-1"
+                }
+            }
+        }))
+        .expect("provider should deserialize");
+        let body = json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true
+        });
+
+        let result =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None).unwrap();
+
+        assert_eq!(result["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn openai_chat_non_stream_omits_stream_options() {
+        let provider: Provider = serde_json::from_value(json!({
+            "id": "generic",
+            "name": "Generic",
+            "settingsConfig": {
+                "api_format": "openai_chat",
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "token-1"
+                }
+            }
+        }))
+        .expect("provider should deserialize");
+        let body = json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let result =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None).unwrap();
+
+        assert!(result.get("stream_options").is_none());
     }
 }

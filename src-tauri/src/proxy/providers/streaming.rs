@@ -8,8 +8,14 @@ use crate::proxy::response::StreamCompletion;
 
 #[derive(Debug, Deserialize)]
 struct OpenAIStreamChunk {
+    // `id`/`model`/`choices` default so that minimal usage-only tail chunks such as
+    // `{"choices":[],"usage":{...}}` (which some OpenAI-compatible upstreams emit with
+    // stream_options.include_usage) still deserialize instead of being dropped (#323).
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     model: String,
+    #[serde(default)]
     choices: Vec<StreamChoice>,
     #[serde(default)]
     usage: Option<Usage>,
@@ -92,6 +98,13 @@ pub fn create_anthropic_sse_stream(
         let mut current_model = None;
         let mut next_content_index: u32 = 0;
         let mut has_sent_message_start = false;
+        // Most recent usage seen on any chunk (including the trailing usage-only chunk
+        // that OpenAI-compatible upstreams emit with an empty `choices` array). The
+        // message_delta is deferred until [DONE]/EOF so this can be folded in; emitting
+        // it eagerly on the finish_reason chunk would lock in that chunk's usage, which
+        // is usually absent → all-zero tokens (see #323).
+        let mut latest_usage: Option<serde_json::Value> = None;
+        let mut pending_message_delta: Option<serde_json::Value> = None;
         let mut current_non_tool_block_type: Option<&'static str> = None;
         let mut current_non_tool_block_index: Option<u32> = None;
         let mut tool_blocks_by_index: HashMap<usize, ToolBlockState> = HashMap::new();
@@ -120,6 +133,17 @@ pub fn create_anthropic_sse_stream(
                             };
 
                             if data.trim() == "[DONE]" {
+                                if let Some(stop_reason) = pending_message_delta.take() {
+                                    let event = build_message_delta_event(
+                                        stop_reason,
+                                        latest_usage.clone(),
+                                    );
+                                    let sse_data = format!(
+                                        "event: message_delta\ndata: {}\n\n",
+                                        serde_json::to_string(&event).unwrap_or_default()
+                                    );
+                                    yield Ok(Bytes::from(sse_data));
+                                }
                                 let event = json!({"type": "message_stop"});
                                 let sse_data = format!(
                                     "event: message_stop\ndata: {}\n\n",
@@ -134,11 +158,18 @@ pub fn create_anthropic_sse_stream(
                                 continue;
                             };
 
-                            if message_id.is_none() {
+                            if message_id.is_none() && !chunk.id.is_empty() {
                                 message_id = Some(chunk.id.clone());
                             }
-                            if current_model.is_none() {
+                            if current_model.is_none() && !chunk.model.is_empty() {
                                 current_model = Some(chunk.model.clone());
+                            }
+
+                            // Capture usage before the choices check: OpenAI-compatible
+                            // upstreams send the final usage in a trailing chunk whose
+                            // `choices` is empty, which the skip below would drop (#323).
+                            if let Some(usage) = chunk.usage.as_ref() {
+                                latest_usage = Some(build_stream_usage_json(usage));
                             }
 
                             let Some(choice) = chunk.choices.first() else {
@@ -597,36 +628,19 @@ pub fn create_anthropic_sse_stream(
                                     open_tool_block_indices.clear();
                                 }
 
-                                let usage_json = if let Some(usage) = chunk.usage.as_ref() {
-                                    let mut usage_json = json!({
-                                        "input_tokens": usage.prompt_tokens,
-                                        "output_tokens": usage.completion_tokens
-                                    });
-                                    if let Some(cached) = extract_cache_read_tokens(usage) {
-                                        usage_json["cache_read_input_tokens"] = json!(cached);
-                                    }
-                                    if let Some(created) = usage.cache_creation_input_tokens {
-                                        usage_json["cache_creation_input_tokens"] = json!(created);
-                                    }
-                                    usage_json
-                                } else {
-                                    json!({
-                                        "output_tokens": 0
-                                    })
-                                };
-                                let event = json!({
-                                    "type": "message_delta",
-                                    "delta": {
-                                        "stop_reason": map_stop_reason(Some(finish_reason)),
-                                        "stop_sequence": null
-                                    },
-                                    "usage": usage_json
-                                });
-                                let sse_data = format!(
-                                    "event: message_delta\ndata: {}\n\n",
-                                    serde_json::to_string(&event).unwrap_or_default()
-                                );
-                                yield Ok(Bytes::from(sse_data));
+                                // Defer the message_delta: the final usage frequently
+                                // arrives in a later usage-only chunk. It is flushed with
+                                // the freshest `latest_usage` at [DONE]/EOF (#323).
+                                // Only the FIRST terminal reason is recorded — some
+                                // upstreams (e.g. OpenRouter kimi) send a second
+                                // finish_reason chunk, which must not downgrade an earlier
+                                // `tool_use` to `end_turn` (mirrors upstream's
+                                // has_emitted_message_delta guard). Usage keeps updating
+                                // via `latest_usage` regardless.
+                                if pending_message_delta.is_none() {
+                                    pending_message_delta =
+                                        Some(json!(map_stop_reason(Some(finish_reason))));
+                                }
                             }
                         }
                     }
@@ -650,8 +664,59 @@ pub fn create_anthropic_sse_stream(
             }
         }
 
+        // The upstream ended without a `[DONE]` marker. Flush any deferred message_delta
+        // (with the final usage) followed by message_stop so the client still gets a
+        // spec-complete terminal sequence instead of a truncated stream.
+        if let Some(stop_reason) = pending_message_delta.take() {
+            let event = build_message_delta_event(stop_reason, latest_usage.clone());
+            let sse_data = format!(
+                "event: message_delta\ndata: {}\n\n",
+                serde_json::to_string(&event).unwrap_or_default()
+            );
+            yield Ok(Bytes::from(sse_data));
+
+            let event = json!({"type": "message_stop"});
+            let sse_data = format!(
+                "event: message_stop\ndata: {}\n\n",
+                serde_json::to_string(&event).unwrap_or_default()
+            );
+            yield Ok(Bytes::from(sse_data));
+        }
+
         stream_completion.record_success();
     }
+}
+
+/// Build the Anthropic `usage` object for a streamed OpenAI usage payload.
+fn build_stream_usage_json(usage: &Usage) -> serde_json::Value {
+    let mut usage_json = json!({
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens
+    });
+    if let Some(cached) = extract_cache_read_tokens(usage) {
+        usage_json["cache_read_input_tokens"] = json!(cached);
+    }
+    if let Some(created) = usage.cache_creation_input_tokens {
+        usage_json["cache_creation_input_tokens"] = json!(created);
+    }
+    usage_json
+}
+
+/// Build a `message_delta` event, falling back to a zero-output usage object when the
+/// upstream never reported usage (keeps the field a valid object for the Anthropic SDK).
+fn build_message_delta_event(
+    stop_reason: serde_json::Value,
+    usage_json: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let usage = usage_json.unwrap_or_else(|| json!({ "output_tokens": 0 }));
+    json!({
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": stop_reason,
+            "stop_sequence": null
+        },
+        "usage": usage
+    })
 }
 
 fn map_stop_reason(finish_reason: Option<&str>) -> Option<String> {
@@ -806,6 +871,97 @@ mod tests {
         assert_eq!(message_delta["usage"]["output_tokens"], 7);
         assert_eq!(message_delta["usage"]["cache_read_input_tokens"], 6);
         assert_eq!(message_delta["usage"]["cache_creation_input_tokens"], 3);
+    }
+
+    #[tokio::test]
+    async fn streaming_forwards_usage_from_trailing_usage_only_chunk() {
+        // Regression for #323: OpenAI-compatible upstreams (e.g. SenseTime) report the
+        // final usage in a trailing chunk whose `choices` is empty, arriving after the
+        // finish_reason chunk. That usage must be folded into message_delta rather than
+        // dropped, otherwise the client sees input_tokens/output_tokens == 0.
+        // The trailing usage chunk is intentionally MINIMAL (no id/model) — some
+        // upstreams emit it that way, and it must still deserialize and be captured.
+        let input = concat!(
+            "data: {\"id\":\"msg_1\",\"model\":\"sensenova-6.7-flash-lite\",\"choices\":[{\"delta\":{\"reasoning\":\"thinking...\"}}]}\n\n",
+            "data: {\"id\":\"msg_1\",\"model\":\"sensenova-6.7-flash-lite\",\"choices\":[{\"delta\":{\"content\":\"你好！\"}}]}\n\n",
+            "data: {\"id\":\"msg_1\",\"model\":\"sensenova-6.7-flash-lite\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":57,\"completion_tokens\":151}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let events = collect_events(input).await;
+        let message_delta = events
+            .iter()
+            .find(|event| event["type"] == "message_delta")
+            .expect("message_delta event");
+
+        assert_eq!(message_delta["delta"]["stop_reason"], "end_turn");
+        assert_eq!(message_delta["usage"]["input_tokens"], 57);
+        assert_eq!(message_delta["usage"]["output_tokens"], 151);
+
+        // message_delta must be emitted exactly once and before message_stop.
+        let delta_count = events
+            .iter()
+            .filter(|event| event["type"] == "message_delta")
+            .count();
+        assert_eq!(delta_count, 1);
+        let delta_pos = events
+            .iter()
+            .position(|event| event["type"] == "message_delta")
+            .unwrap();
+        let stop_pos = events
+            .iter()
+            .position(|event| event["type"] == "message_stop")
+            .expect("message_stop event");
+        assert!(delta_pos < stop_pos);
+    }
+
+    #[tokio::test]
+    async fn streaming_second_finish_reason_does_not_downgrade_stop_reason() {
+        // Some upstreams (e.g. OpenRouter kimi) emit a second finish_reason chunk after
+        // tool-use. The first terminal reason must win — a later "stop" must not downgrade
+        // an earlier "tool_calls" (tool_use), and only one message_delta may be emitted.
+        let input = concat!(
+            "data: {\"id\":\"c\",\"model\":\"kimi\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_0\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]}}]}\n\n",
+            "data: {\"id\":\"c\",\"model\":\"kimi\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: {\"id\":\"c\",\"model\":\"kimi\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let events = collect_events(input).await;
+        let message_deltas: Vec<&Value> = events
+            .iter()
+            .filter(|event| event["type"] == "message_delta")
+            .collect();
+
+        assert_eq!(
+            message_deltas.len(),
+            1,
+            "exactly one message_delta expected"
+        );
+        assert_eq!(message_deltas[0]["delta"]["stop_reason"], "tool_use");
+        assert_eq!(message_deltas[0]["usage"]["input_tokens"], 9);
+        assert_eq!(message_deltas[0]["usage"]["output_tokens"], 3);
+    }
+
+    #[tokio::test]
+    async fn streaming_flushes_message_delta_on_eof_without_done() {
+        // If the upstream ends the connection without a [DONE] marker, the deferred
+        // message_delta (with usage) and message_stop must still be flushed (#323).
+        let input = concat!(
+            "data: {\"id\":\"msg_1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"id\":\"msg_1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"id\":\"msg_1\",\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n"
+        );
+
+        let events = collect_events(input).await;
+        let message_delta = events
+            .iter()
+            .find(|event| event["type"] == "message_delta")
+            .expect("message_delta flushed at EOF");
+        assert_eq!(message_delta["usage"]["input_tokens"], 10);
+        assert_eq!(message_delta["usage"]["output_tokens"], 4);
+        assert!(events.iter().any(|event| event["type"] == "message_stop"));
     }
 
     #[tokio::test]

@@ -200,6 +200,32 @@ pub fn anthropic_to_openai_with_reasoning_content(
     Ok(result)
 }
 
+/// Inject `stream_options.include_usage` into an OpenAI Chat Completions request.
+///
+/// OpenAI-compatible upstreams do not emit usage in the SSE stream unless the
+/// request explicitly sets `stream_options.include_usage = true`; without it the
+/// converted Anthropic `message_delta` reports all-zero tokens (input/output/cache),
+/// so streamed requests silently lose their token/cost/cache accounting (see #323).
+/// Existing `stream_options` fields the client passed through are preserved; only
+/// `include_usage` is added, and non-streaming requests are left untouched.
+pub(crate) fn inject_openai_stream_include_usage(result: &mut Value) {
+    let is_stream = result
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !is_stream {
+        return;
+    }
+    match result.get_mut("stream_options") {
+        Some(Value::Object(opts)) => {
+            opts.insert("include_usage".to_string(), json!(true));
+        }
+        _ => {
+            result["stream_options"] = json!({ "include_usage": true });
+        }
+    }
+}
+
 /// Translate Anthropic tool_choice into OpenAI Chat Completions format.
 fn map_tool_choice_to_chat(tool_choice: &Value) -> Value {
     match tool_choice {
@@ -625,6 +651,28 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inject_include_usage_preserves_existing_stream_options() {
+        let mut body = json!({
+            "stream": true,
+            "stream_options": { "continuous_usage_stats": true }
+        });
+        inject_openai_stream_include_usage(&mut body);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["stream_options"]["continuous_usage_stats"], true);
+    }
+
+    #[test]
+    fn inject_include_usage_noop_for_non_stream() {
+        let mut body = json!({ "stream": false });
+        inject_openai_stream_include_usage(&mut body);
+        assert!(body.get("stream_options").is_none());
+
+        let mut body = json!({ "messages": [] });
+        inject_openai_stream_include_usage(&mut body);
+        assert!(body.get("stream_options").is_none());
+    }
 
     #[test]
     fn anthropic_to_openai_removes_billing_header_from_system_string() {
