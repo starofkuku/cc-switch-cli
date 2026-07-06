@@ -570,6 +570,83 @@ pub(crate) mod usage {
     }
 }
 
+pub(crate) mod sessions {
+    use crossterm::event::KeyCode;
+
+    use super::Binding;
+    use crate::cli::i18n::texts;
+    use crate::cli::tui::app::App;
+    use crate::cli::tui::data::UiData;
+
+    /// Action keys only. Pane/list navigation (arrows, h/l, PageUp/Down,
+    /// Home/End) is handled globally and in the handler's explicit arms
+    /// because it is pane-dependent and reused while the filter is active;
+    /// only these actions resolve through the table. The pane checks for
+    /// `View` stay in the handler body (the Providers pattern).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Intent {
+        View,
+        Restore,
+        Delete,
+        Refresh,
+        ShowAll,
+    }
+
+    pub(crate) const BINDINGS: &[Binding<Intent>] = &[
+        Binding {
+            display: "Enter",
+            keys: &[KeyCode::Enter],
+            intent: Intent::View,
+            label: |_, _| texts::tui_key_view(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "R",
+            keys: &[KeyCode::Char('R')],
+            intent: Intent::Restore,
+            label: |_, _| texts::tui_key_restore(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "d",
+            keys: &[KeyCode::Char('d')],
+            intent: Intent::Delete,
+            label: |_, _| texts::tui_key_delete(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "r",
+            keys: &[KeyCode::Char('r')],
+            intent: Intent::Refresh,
+            label: |_, _| texts::tui_key_refresh(),
+            shown: |_, _| true,
+        },
+        Binding {
+            display: "a",
+            keys: &[KeyCode::Char('a')],
+            intent: Intent::ShowAll,
+            label: show_all_label,
+            shown: |_, _| true,
+        },
+    ];
+
+    pub(crate) fn intent_for(key: KeyCode) -> Option<Intent> {
+        super::intent_for(BINDINGS, key)
+    }
+
+    pub(crate) fn key_bar_items(app: &App, data: &UiData) -> Vec<(&'static str, &'static str)> {
+        super::key_bar_items(BINDINGS, app, data)
+    }
+
+    fn show_all_label(app: &App, _: &UiData) -> &'static str {
+        if app.sessions.show_all_providers {
+            texts::tui_key_sessions_all_active()
+        } else {
+            texts::tui_key_sessions_all()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::providers::{self, Intent};

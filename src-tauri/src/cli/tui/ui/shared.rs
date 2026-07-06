@@ -152,7 +152,13 @@ pub(super) fn render_page_frame(
 /// Sub-page titles show their place in the hierarchy (" Usage › Details ")
 /// so nesting depth stays visible and Esc's destination is predictable.
 pub(super) fn breadcrumb_title(segments: &[&str]) -> String {
-    format!(" {} ", segments.join(" › "))
+    format!(" {} ", breadcrumb_path(segments))
+}
+
+/// Breadcrumb path without the surrounding padding that `breadcrumb_title`
+/// adds. Use with `render_page_frame`, which wraps the title itself.
+pub(super) fn breadcrumb_path(segments: &[&str]) -> String {
+    segments.join(" › ")
 }
 
 /// Centered guidance for empty list screens: a bold title, a muted

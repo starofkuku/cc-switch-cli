@@ -56,24 +56,19 @@ pub(super) fn render_config(
         .iter()
         .map(|item| Row::new(vec![Cell::from(config_item_label(item))]));
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::tui_config_title()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
     let mut keys = vec![("Enter", texts::tui_key_select())];
     if matches!(items.get(app.config_idx), Some(ConfigItem::CommonSnippet)) {
         keys.push(("e", texts::tui_key_edit_snippet()));
     }
-    render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
+    let body = render_page_frame(
+        frame,
+        area,
+        theme,
+        app,
+        texts::tui_config_title(),
+        &keys,
+        None,
+    );
 
     let table = Table::new(rows, [Constraint::Min(10)])
         .block(Block::default().borders(Borders::NONE))
@@ -82,7 +77,7 @@ pub(super) fn render_config(
 
     let mut state = TableState::default();
     state.select(Some(app.config_idx));
-    frame.render_stateful_widget(table, inset_left(chunks[1], CONTENT_INSET_LEFT), &mut state);
+    frame.render_stateful_widget(table, inset_left(body, CONTENT_INSET_LEFT), &mut state);
 }
 
 pub(super) fn render_config_webdav(
@@ -97,22 +92,6 @@ pub(super) fn render_config_webdav(
         .iter()
         .map(|item| Row::new(vec![Cell::from(webdav_config_item_label(item))]));
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(breadcrumb_title(&[
-            texts::tui_config_title(),
-            texts::tui_config_webdav_title(),
-        ]));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
     let mut keys = vec![("Enter", texts::tui_key_select())];
     if matches!(
         items.get(app.config_webdav_idx),
@@ -120,7 +99,15 @@ pub(super) fn render_config_webdav(
     ) {
         keys.push(("e", texts::tui_key_edit()));
     }
-    render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
+    let body = render_page_frame(
+        frame,
+        area,
+        theme,
+        app,
+        &breadcrumb_path(&[texts::tui_config_title(), texts::tui_config_webdav_title()]),
+        &keys,
+        None,
+    );
 
     let table = Table::new(rows, [Constraint::Min(10)])
         .block(Block::default().borders(Borders::NONE))
@@ -129,7 +116,7 @@ pub(super) fn render_config_webdav(
 
     let mut state = TableState::default();
     state.select(Some(app.config_webdav_idx));
-    frame.render_stateful_widget(table, inset_left(chunks[1], CONTENT_INSET_LEFT), &mut state);
+    frame.render_stateful_widget(table, inset_left(body, CONTENT_INSET_LEFT), &mut state);
 }
 
 pub(super) fn render_config_openclaw_route(
@@ -2625,25 +2612,14 @@ pub(super) fn render_settings(
         .iter()
         .map(|(label, value)| Row::new(vec![Cell::from(label.clone()), Cell::from(value.clone())]));
 
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::menu_settings()));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    render_page_key_bar(
+    let body = render_page_frame(
         frame,
-        chunks[0],
+        area,
         theme,
+        app,
+        texts::menu_settings(),
         &[("Enter", texts::tui_key_apply())],
-        app.focus == Focus::Content,
+        None,
     );
 
     let table = Table::new(
@@ -2657,7 +2633,7 @@ pub(super) fn render_settings(
 
     let mut state = TableState::default();
     state.select(Some(app.settings_idx));
-    frame.render_stateful_widget(table, inset_left(chunks[1], CONTENT_INSET_LEFT), &mut state);
+    frame.render_stateful_widget(table, inset_left(body, CONTENT_INSET_LEFT), &mut state);
 }
 
 fn managed_accounts_summary(app: &App) -> String {
@@ -2681,35 +2657,24 @@ pub(super) fn render_settings_managed_accounts(
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(breadcrumb_title(&[
+    let keys = managed_account_key_items(app);
+    let body = render_page_frame(
+        frame,
+        area,
+        theme,
+        app,
+        &breadcrumb_path(&[
             texts::menu_settings(),
             texts::tui_settings_managed_accounts_title(),
-        ]));
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-
-    let keys = managed_account_key_items(app);
-    render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
-
-    render_summary_bar(frame, chunks[1], theme, managed_accounts_page_summary(app));
+        ]),
+        &keys,
+        Some(managed_accounts_page_summary(app)),
+    );
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
-        .split(chunks[2]);
+        .split(body);
 
     render_managed_account_list(frame, app, columns[0], theme);
     render_managed_account_details(frame, app, columns[1], theme);
