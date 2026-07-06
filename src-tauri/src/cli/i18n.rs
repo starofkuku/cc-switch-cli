@@ -3832,6 +3832,30 @@ pub mod texts {
         }
     }
 
+    pub fn tui_key_sessions_all() -> &'static str {
+        if is_chinese() {
+            "全部"
+        } else {
+            "show all"
+        }
+    }
+
+    pub fn tui_key_sessions_all_active() -> &'static str {
+        if is_chinese() {
+            "全部 (Esc返回)"
+        } else {
+            "showing all (Esc back)"
+        }
+    }
+
+    pub fn tui_sessions_searching(query: &str) -> String {
+        if is_chinese() {
+            format!("搜索中: \"{query}\"...")
+        } else {
+            format!("Searching: \"{query}\"...")
+        }
+    }
+
     pub fn tui_key_takeover() -> &'static str {
         if is_chinese() {
             "接管"
@@ -10362,10 +10386,11 @@ pub mod texts {
     }
 
     pub fn language_changed() -> &'static str {
+        // Rendered as a success toast, which already prepends a checkmark.
         if is_chinese() {
-            "✓ 语言已更改"
+            "语言已更改"
         } else {
-            "✓ Language changed"
+            "Language changed"
         }
     }
 
@@ -10761,18 +10786,20 @@ pub mod texts {
     }
 
     pub fn common_config_snippet_saved() -> &'static str {
+        // Rendered as a success toast, which already prepends a checkmark.
         if is_chinese() {
-            "✓ 已保存通用配置片段"
+            "已保存通用配置片段"
         } else {
-            "✓ Common config snippet saved"
+            "Common config snippet saved"
         }
     }
 
     pub fn common_config_snippet_cleared() -> &'static str {
+        // Rendered as a success toast, which already prepends a checkmark.
         if is_chinese() {
-            "✓ 已清除通用配置片段"
+            "已清除通用配置片段"
         } else {
-            "✓ Common config snippet cleared"
+            "Common config snippet cleared"
         }
     }
 

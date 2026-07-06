@@ -53,9 +53,9 @@ pub(super) fn render_sessions(
                 (
                     "a",
                     if app.sessions.show_all_providers {
-                        "全部 (Esc返回)"
+                        texts::tui_key_sessions_all_active()
                     } else {
-                        "全部"
+                        texts::tui_key_sessions_all()
                     },
                 ),
             ],
@@ -73,7 +73,7 @@ pub(super) fn render_sessions(
             _ => "⠸",
         };
         let query = app.sessions.deep_search_query.as_deref().unwrap_or("");
-        format!("{spinner} 搜索中: \"{query}\"...")
+        format!("{spinner} {}", texts::tui_sessions_searching(query))
     } else {
         texts::tui_sessions_summary(app.sessions.rows.len(), visible.len())
     };
