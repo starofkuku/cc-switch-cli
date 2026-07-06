@@ -4169,11 +4169,24 @@ fn help_text_mentions_import_existing_for_mcp() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
     // MCP and Skills both generate their import line from the same label
-    // (tui_*_action_import_existing), so the wording is guaranteed shared.
+    // (tui_*_action_import_existing); assert the wording on BOTH lines so a
+    // regression on either page is caught, not just its presence somewhere.
     let help = global_help_text(AppType::Claude);
+    let mcp_line = help
+        .lines()
+        .find(|line| line.starts_with("- MCP:"))
+        .unwrap_or_else(|| panic!("no MCP help line: {help}"));
+    let skills_line = help
+        .lines()
+        .find(|line| line.starts_with("- Skills:"))
+        .unwrap_or_else(|| panic!("no Skills help line: {help}"));
     assert!(
-        help.contains("i Import Existing"),
-        "help should surface the shared import wording for MCP and Skills: {help}"
+        mcp_line.contains("i Import Existing"),
+        "MCP help line missing shared import wording: {mcp_line}"
+    );
+    assert!(
+        skills_line.contains("i Import Existing"),
+        "Skills help line missing shared import wording: {skills_line}"
     );
 }
 
