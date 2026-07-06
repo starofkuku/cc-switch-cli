@@ -95,7 +95,7 @@ pub(super) fn render_header(
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(Color::White)
+                .fg(theme.fg_strong)
                 .add_modifier(Modifier::BOLD)
         },
     )]))
@@ -135,7 +135,7 @@ pub(super) fn render_header(
             } else if theme.no_color {
                 Style::default().add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White).bg(theme.surface)
+                Style::default().fg(theme.fg_strong).bg(theme.surface)
             };
             (format!("  {text}  "), style)
         });
@@ -360,15 +360,15 @@ pub(super) fn render_footer(
         // comment blue, action keys on the same surface used by the page
         // key bars, so the footer reads as part of one system.
         let nav_key_style = Style::default()
-            .fg(Color::White)
+            .fg(theme.fg_strong)
             .bg(theme.comment)
             .add_modifier(Modifier::BOLD);
-        let nav_desc_style = Style::default().fg(Color::White).bg(theme.comment);
+        let nav_desc_style = Style::default().fg(theme.fg_strong).bg(theme.comment);
         let act_key_style = Style::default()
-            .fg(Color::White)
+            .fg(theme.fg_strong)
             .bg(theme.surface)
             .add_modifier(Modifier::BOLD);
-        let act_desc_style = Style::default().fg(Color::White).bg(theme.surface);
+        let act_desc_style = Style::default().fg(theme.fg_strong).bg(theme.surface);
         let nav_sep = Span::styled("  ", nav_desc_style);
         let act_sep = Span::styled("  ", act_desc_style);
 

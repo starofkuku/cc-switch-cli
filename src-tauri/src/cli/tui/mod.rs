@@ -11,7 +11,7 @@ mod terminal;
 #[cfg(test)]
 mod tests;
 mod text_edit;
-mod theme;
+pub(crate) mod theme;
 mod ui;
 
 use std::collections::{HashMap, HashSet};

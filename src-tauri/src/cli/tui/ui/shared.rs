@@ -16,7 +16,7 @@ pub(super) fn selection_style(theme: &super::theme::Theme) -> Style {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
-            .fg(Color::Black)
+            .fg(theme.on_accent)
             .bg(theme.accent)
             .add_modifier(Modifier::BOLD)
     }
@@ -26,7 +26,7 @@ pub(super) fn inactive_chip_style(theme: &super::theme::Theme) -> Style {
     if theme.no_color {
         Style::default()
     } else {
-        Style::default().fg(Color::White).bg(theme.surface)
+        Style::default().fg(theme.fg_strong).bg(theme.surface)
     }
 }
 
@@ -35,7 +35,7 @@ pub(super) fn active_chip_style(theme: &super::theme::Theme) -> Style {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
-            .fg(Color::Black)
+            .fg(theme.on_accent)
             .bg(theme.accent)
             .add_modifier(Modifier::BOLD)
     }
@@ -130,7 +130,7 @@ pub(super) fn render_empty_state(
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(Color::White)
+            .fg(theme.on_accent)
             .bg(theme.accent)
             .add_modifier(Modifier::BOLD)
     };

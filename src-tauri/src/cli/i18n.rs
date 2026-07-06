@@ -4090,6 +4090,39 @@ pub mod texts {
         }
     }
 
+    pub fn tui_settings_theme_label() -> &'static str {
+        if is_chinese() {
+            "主题"
+        } else {
+            "Theme"
+        }
+    }
+
+    pub fn tui_settings_theme_mode_name(mode: crate::cli::tui::theme::ThemeMode) -> &'static str {
+        use crate::cli::tui::theme::ThemeMode;
+        if is_chinese() {
+            match mode {
+                ThemeMode::Auto => "自动",
+                ThemeMode::Dark => "深色",
+                ThemeMode::Light => "浅色",
+            }
+        } else {
+            match mode {
+                ThemeMode::Auto => "Auto",
+                ThemeMode::Dark => "Dark",
+                ThemeMode::Light => "Light",
+            }
+        }
+    }
+
+    pub fn tui_toast_theme_changed(mode_name: &str) -> String {
+        if is_chinese() {
+            format!("主题已切换为{mode_name}")
+        } else {
+            format!("Theme set to {mode_name}")
+        }
+    }
+
     pub fn tui_settings_header_setting() -> &'static str {
         if is_chinese() {
             "设置项"

@@ -177,12 +177,9 @@ pub(super) fn render_text_input_overlay(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(overlay_border_style(theme, false))
-        .title(format!(" {} ", input.title.clone()))
-        .style(if theme.no_color {
-            Style::default()
-        } else {
-            Style::default().bg(Color::Black)
-        });
+        // No forced background: Clear already resets the cells, and a solid
+        // black fill would be unreadable on light terminals.
+        .title(format!(" {} ", input.title.clone()));
 
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
@@ -216,12 +213,7 @@ pub(super) fn render_text_input_overlay(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(theme.accent))
-        .title(format!(" {} ", texts::tui_input_title()))
-        .style(if theme.no_color {
-            Style::default()
-        } else {
-            Style::default().bg(Color::Black)
-        });
+        .title(format!(" {} ", texts::tui_input_title()));
     let input_inner = input_block.inner(chunks[2]);
     frame.render_widget(input_block, chunks[2]);
 

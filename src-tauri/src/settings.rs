@@ -440,6 +440,9 @@ pub struct AppSettings {
     pub visible_apps_settings: VisibleAppsSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// TUI appearance: "auto" | "dark" | "light" (absent = auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// 是否开机自启
     #[serde(default)]
     pub launch_on_startup: bool,
@@ -510,6 +513,7 @@ impl Default for AppSettings {
             visible_apps: default_visible_apps(),
             visible_apps_settings: VisibleAppsSettings::default(),
             language: None,
+            theme: None,
             launch_on_startup: false,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
@@ -582,6 +586,12 @@ impl AppSettings {
             .map(|s| s.trim())
             .filter(|s| matches!(*s, "en" | "zh"))
             .map(|s| s.to_string());
+
+        self.theme = self
+            .theme
+            .as_ref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| matches!(s.as_str(), "auto" | "dark" | "light"));
 
         if let Some(webdav) = self.webdav_sync.as_mut() {
             webdav.normalize();
@@ -941,6 +951,19 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::OpenClaw => settings.current_provider_openclaw = id.map(|value| value.to_string()),
     }
 
+    update_settings(settings)
+}
+
+pub fn get_theme_mode() -> Option<String> {
+    settings_store()
+        .read()
+        .ok()
+        .and_then(|settings| settings.theme.clone())
+}
+
+pub fn set_theme_mode(mode: &str) -> Result<(), AppError> {
+    let mut settings = get_settings();
+    settings.theme = Some(mode.to_string());
     update_settings(settings)
 }
 

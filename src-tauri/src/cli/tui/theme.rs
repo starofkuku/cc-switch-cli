@@ -13,12 +13,64 @@ const DRACULA_RED: (u8, u8, u8) = (255, 85, 85);
 const OPENCLAW_CORAL: (u8, u8, u8) = (255, 79, 64);
 const DRACULA_COMMENT: (u8, u8, u8) = (98, 114, 164);
 const DRACULA_SURFACE: (u8, u8, u8) = (68, 71, 90);
+const DRACULA_FG: (u8, u8, u8) = (248, 248, 242);
+
+// Light-background palette: the same hue family, darkened for contrast
+// against white terminals.
+const LIGHT_GREEN: (u8, u8, u8) = (24, 138, 66);
+const LIGHT_CYAN: (u8, u8, u8) = (7, 122, 150);
+const LIGHT_PINK: (u8, u8, u8) = (186, 36, 120);
+const LIGHT_ORANGE: (u8, u8, u8) = (182, 98, 16);
+const LIGHT_YELLOW: (u8, u8, u8) = (146, 124, 8);
+const LIGHT_RED: (u8, u8, u8) = (190, 36, 36);
+const LIGHT_CORAL: (u8, u8, u8) = (196, 54, 40);
+const LIGHT_COMMENT: (u8, u8, u8) = (92, 102, 140);
+const LIGHT_DIM: (u8, u8, u8) = (164, 170, 190);
+const LIGHT_SURFACE: (u8, u8, u8) = (222, 225, 236);
+const LIGHT_FG: (u8, u8, u8) = (40, 42, 54);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     NoColor,
     TrueColor,
     Ansi256,
+}
+
+/// User-selectable appearance. `Auto` infers the terminal background from
+/// COLORFGBG and falls back to dark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeMode {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
+impl ThemeMode {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ThemeMode::Auto => "auto",
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(ThemeMode::Auto),
+            "dark" => Some(ThemeMode::Dark),
+            "light" => Some(ThemeMode::Light),
+            _ => None,
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            ThemeMode::Auto => ThemeMode::Dark,
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Auto,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +86,10 @@ pub struct Theme {
     pub cyan: Color,
     /// Subtle background / surface (Dracula current-line #44475a)
     pub surface: Color,
+    /// Strong foreground for emphasized text and text on `surface`.
+    pub fg_strong: Color,
+    /// Foreground for text sitting on an accent background.
+    pub on_accent: Color,
     pub no_color: bool,
 }
 
@@ -176,7 +232,18 @@ pub(crate) fn terminal_palette_color(rgb: (u8, u8, u8)) -> Color {
     terminal_color(detected_color_mode(), rgb)
 }
 
-fn accent_rgb(app: &AppType) -> (u8, u8, u8) {
+fn accent_rgb(app: &AppType, light: bool) -> (u8, u8, u8) {
+    if light {
+        return match app {
+            AppType::Codex => LIGHT_GREEN,
+            AppType::Claude => LIGHT_CYAN,
+            AppType::Gemini => LIGHT_PINK,
+            AppType::OpenCode => LIGHT_ORANGE,
+            AppType::Hermes => LIGHT_YELLOW,
+            AppType::OpenClaw => LIGHT_CORAL,
+        };
+    }
+
     match app {
         AppType::Codex => DRACULA_GREEN,
         AppType::Claude => DRACULA_CYAN,
@@ -187,19 +254,84 @@ fn accent_rgb(app: &AppType) -> (u8, u8, u8) {
     }
 }
 
+/// Infer light/dark from COLORFGBG ("fg;bg", bg 7 or 15 = light). Absent
+/// or unparsable values fall back to dark, the historical default.
+fn terminal_background_is_light() -> bool {
+    std::env::var("COLORFGBG")
+        .ok()
+        .and_then(|value| {
+            value
+                .rsplit(';')
+                .next()
+                .and_then(|bg| bg.trim().parse::<u8>().ok())
+        })
+        .is_some_and(|bg| bg == 7 || bg == 15)
+}
+
+pub fn configured_theme_mode() -> ThemeMode {
+    crate::settings::get_theme_mode()
+        .as_deref()
+        .and_then(ThemeMode::parse)
+        .unwrap_or_default()
+}
+
+fn resolved_light(mode: ThemeMode) -> bool {
+    match mode {
+        ThemeMode::Dark => false,
+        ThemeMode::Light => true,
+        ThemeMode::Auto => terminal_background_is_light(),
+    }
+}
+
 pub fn theme_for(app: &AppType) -> Theme {
+    theme_for_mode(app, configured_theme_mode())
+}
+
+pub fn theme_for_mode(app: &AppType, mode: ThemeMode) -> Theme {
     let color_mode = detected_color_mode();
     let no_color = matches!(color_mode, ColorMode::NoColor);
+    let light = resolved_light(mode);
+
+    let (ok, warn, err, dim, comment, cyan, surface, fg_strong) = if light {
+        (
+            LIGHT_GREEN,
+            LIGHT_YELLOW,
+            LIGHT_RED,
+            LIGHT_DIM,
+            LIGHT_COMMENT,
+            LIGHT_CYAN,
+            LIGHT_SURFACE,
+            LIGHT_FG,
+        )
+    } else {
+        (
+            DRACULA_GREEN,
+            DRACULA_YELLOW,
+            DRACULA_RED,
+            DRACULA_COMMENT,
+            DRACULA_COMMENT,
+            DRACULA_CYAN,
+            DRACULA_SURFACE,
+            DRACULA_FG,
+        )
+    };
 
     Theme {
-        accent: terminal_color(color_mode, accent_rgb(app)),
-        ok: terminal_color(color_mode, DRACULA_GREEN),
-        warn: terminal_color(color_mode, DRACULA_YELLOW),
-        err: terminal_color(color_mode, DRACULA_RED),
-        dim: terminal_color(color_mode, DRACULA_COMMENT),
-        comment: terminal_color(color_mode, DRACULA_COMMENT),
-        cyan: terminal_color(color_mode, DRACULA_CYAN),
-        surface: terminal_color(color_mode, DRACULA_SURFACE),
+        accent: terminal_color(color_mode, accent_rgb(app, light)),
+        ok: terminal_color(color_mode, ok),
+        warn: terminal_color(color_mode, warn),
+        err: terminal_color(color_mode, err),
+        dim: terminal_color(color_mode, dim),
+        comment: terminal_color(color_mode, comment),
+        cyan: terminal_color(color_mode, cyan),
+        surface: terminal_color(color_mode, surface),
+        fg_strong: terminal_color(color_mode, fg_strong),
+        // Light-mode accents are dark enough to carry white text; the
+        // bright Dracula accents need dark text.
+        on_accent: terminal_color(
+            color_mode,
+            if light { (255, 255, 255) } else { (10, 10, 10) },
+        ),
         no_color,
     }
 }
@@ -213,6 +345,33 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn theme_mode_codes_round_trip() {
+        for mode in [ThemeMode::Auto, ThemeMode::Dark, ThemeMode::Light] {
+            assert_eq!(ThemeMode::parse(mode.code()), Some(mode));
+        }
+        assert_eq!(ThemeMode::parse(" Dark "), Some(ThemeMode::Dark));
+        assert_eq!(ThemeMode::parse("solarized"), None);
+    }
+
+    #[test]
+    fn theme_mode_cycles_through_all_variants() {
+        let start = ThemeMode::Auto;
+        assert_eq!(start.next(), ThemeMode::Dark);
+        assert_eq!(start.next().next(), ThemeMode::Light);
+        assert_eq!(start.next().next().next(), ThemeMode::Auto);
+    }
+
+    #[test]
+    fn light_and_dark_palettes_differ() {
+        let _guard = env_lock().lock().unwrap();
+        let dark = theme_for_mode(&AppType::Claude, ThemeMode::Dark);
+        let light = theme_for_mode(&AppType::Claude, ThemeMode::Light);
+        assert_ne!(dark.accent, light.accent);
+        assert_ne!(dark.fg_strong, light.fg_strong);
+        assert_ne!(dark.surface, light.surface);
     }
 
     struct EnvGuard {

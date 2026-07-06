@@ -442,6 +442,7 @@ impl ConfigItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsItem {
     Language,
+    Theme,
     VisibleAppsMode,
     VisibleApps,
     OpenClawConfigDir,
@@ -454,9 +455,10 @@ pub enum SettingsItem {
 }
 
 impl SettingsItem {
-    pub const ALL: [SettingsItem; 10] = [
+    pub const ALL: [SettingsItem; 11] = [
         SettingsItem::ManagedAccounts,
         SettingsItem::Language,
+        SettingsItem::Theme,
         SettingsItem::VisibleAppsMode,
         SettingsItem::VisibleApps,
         SettingsItem::OpenClawConfigDir,

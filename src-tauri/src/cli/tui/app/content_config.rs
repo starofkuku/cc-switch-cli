@@ -725,6 +725,23 @@ impl App {
                     };
                     Action::SetLanguage(next)
                 }
+                Some(SettingsItem::Theme) => {
+                    let next = crate::cli::tui::theme::configured_theme_mode().next();
+                    match crate::settings::set_theme_mode(next.code()) {
+                        Ok(()) => {
+                            self.push_toast(
+                                texts::tui_toast_theme_changed(
+                                    texts::tui_settings_theme_mode_name(next),
+                                ),
+                                ToastKind::Success,
+                            );
+                        }
+                        Err(err) => {
+                            self.push_toast(err.to_string(), ToastKind::Error);
+                        }
+                    }
+                    Action::None
+                }
                 Some(SettingsItem::VisibleAppsMode) => {
                     let current = crate::settings::get_visible_apps_settings().mode;
                     let next = match current {

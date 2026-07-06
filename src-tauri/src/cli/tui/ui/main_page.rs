@@ -74,7 +74,7 @@ pub(super) fn render_main(
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(Color::White)
+            .fg(theme.fg_strong)
             .add_modifier(Modifier::BOLD)
     };
 
@@ -668,7 +668,7 @@ fn render_local_env_tool_cell(
         Style::default().add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(Color::White)
+            .fg(theme.fg_strong)
             .add_modifier(Modifier::BOLD)
     };
 

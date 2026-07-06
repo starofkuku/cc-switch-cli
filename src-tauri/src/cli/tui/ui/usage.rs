@@ -773,7 +773,7 @@ fn render_usage_detail_tabs(
         }
         let style = if app.usage.pane == pane {
             Style::default()
-                .fg(Color::Black)
+                .fg(theme.on_accent)
                 .bg(theme.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -1189,7 +1189,7 @@ fn detail_line(
         Span::raw(" "),
         Span::styled(
             value.as_ref().to_string(),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.fg_strong),
         ),
     ])
 }
@@ -1297,7 +1297,7 @@ fn usage_metric_style(metric: UsageMetric, theme: &super::theme::Theme) -> Style
     match metric {
         UsageMetric::Cost => Style::default().fg(theme.accent),
         UsageMetric::Tokens => Style::default().fg(theme.ok),
-        UsageMetric::Requests => Style::default().fg(Color::White),
+        UsageMetric::Requests => Style::default().fg(theme.fg_strong),
         UsageMetric::Errors => Style::default().fg(theme.err),
     }
 }

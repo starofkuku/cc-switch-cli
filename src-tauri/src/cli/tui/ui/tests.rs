@@ -8262,8 +8262,10 @@ fn openclaw_agents_route_render_field_labels_use_white_foreground() {
     let workspace_label_cell =
         content_cell_at(&app, &buf, workspace_label_col, workspace_row_index);
 
-    assert_eq!(primary_label_cell.fg, Color::White);
-    assert_eq!(workspace_label_cell.fg, Color::White);
+    // Field labels use the theme's strong foreground (was hardcoded white).
+    let expected = theme_for(&app.app_type).fg_strong;
+    assert_eq!(primary_label_cell.fg, expected);
+    assert_eq!(workspace_label_cell.fg, expected);
 }
 
 #[test]
