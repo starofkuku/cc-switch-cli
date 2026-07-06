@@ -62,22 +62,6 @@ fn provider_proxy_badge_style(badge: ProviderProxyBadge, theme: &super::theme::T
     }
 }
 
-fn provider_switch_key_label(app_type: &AppType) -> &'static str {
-    if app_type.is_additive_mode() {
-        texts::tui_key_add_remove()
-    } else {
-        texts::tui_key_switch()
-    }
-}
-
-fn provider_default_key_label(app_type: &AppType) -> &'static str {
-    if matches!(app_type, AppType::Hermes) {
-        texts::tui_key_enable()
-    } else {
-        texts::tui_key_set_default()
-    }
-}
-
 fn failover_queue_label(data: &UiData, provider_id: &str) -> String {
     failover_queue_position(data, provider_id)
         .map(|position| format!("#{position}"))
@@ -187,51 +171,8 @@ pub(super) fn render_providers(
         .split(inner);
 
     let visible = provider_rows_filtered(app, data);
-    let selected_supports_quota = visible
-        .get(app.provider_idx)
-        .is_some_and(|row| data::quota_target_for_provider(&app.app_type, row).is_some());
-    {
-        let mut keys = Vec::new();
-        if data.providers.rows.is_empty() {
-            // While the cold-switched app is still loading, don't offer
-            // import/add — the list isn't really empty, just not here yet.
-            if !data.providers.loading {
-                keys.push(("Enter", texts::tui_key_import_current_config()));
-                keys.push(("a", texts::tui_key_add_provider()));
-            }
-        } else if visible.is_empty() {
-            keys.push(("a", texts::tui_key_add()));
-        } else {
-            keys.push(("Space", provider_switch_key_label(&app.app_type)));
-            keys.push(("a", texts::tui_key_add()));
-            // Theoretically we should use "duplicate" here.
-            // However this word is too long to fit in the key hint area,
-            // and key "d" is already used for delete, so we use "copy" here to make it shorter and avoid confusion.
-            keys.push(("c", texts::tui_key_copy()));
-            if let Some(row) = visible.get(app.provider_idx) {
-                if !data::provider_is_read_only(&app.app_type, row) {
-                    keys.push(("e", texts::tui_key_edit()));
-                    keys.push(("d", texts::tui_key_delete()));
-                }
-            }
-            keys.push(("t", texts::tui_key_test()));
-            if selected_supports_quota {
-                keys.push(("r", texts::tui_key_refresh()));
-            }
-            if crate::cli::tui::app::supports_temporary_provider_launch(&app.app_type) {
-                keys.push(("o", texts::tui_key_launch_temp()));
-            }
-            if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
-                keys.push(("f", texts::tui_key_failover()));
-            }
-            if let Some(row) = visible.get(app.provider_idx) {
-                if matches!(app.app_type, AppType::OpenClaw | AppType::Hermes) && row.is_in_config {
-                    keys.push(("x", provider_default_key_label(&app.app_type)));
-                }
-            }
-        }
-        render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
-    }
+    let keys = crate::cli::tui::keymap::providers::key_bar_items(app, data);
+    render_page_key_bar(frame, chunks[0], theme, &keys, app.focus == Focus::Content);
 
     if data.providers.rows.is_empty() {
         if data.providers.loading {

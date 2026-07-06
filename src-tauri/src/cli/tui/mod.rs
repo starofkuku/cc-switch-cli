@@ -2,6 +2,7 @@ mod app;
 mod data;
 mod form;
 pub(crate) mod help;
+mod keymap;
 mod route;
 mod runtime_actions;
 mod runtime_skills;
