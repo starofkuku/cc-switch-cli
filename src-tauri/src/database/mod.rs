@@ -733,21 +733,48 @@ fn warn_insecure_permissions_once() {
 }
 
 /// 批量导入耐久性守卫：持有期间本连接 `synchronous=NORMAL`（WAL 下 COMMIT
-/// 不再逐次 fsync，HDD/macOS 上是首次导入的主要开销），Drop 时恢复 FULL。
+/// 不再逐次 fsync，HDD/macOS 上是首次导入的主要开销），Drop 时恢复**进入守卫
+/// 之前**读到的 synchronous 值（数值 0=OFF/1=NORMAL/2=FULL/3=EXTRA），而非硬
+/// 编码 FULL——即便调用方或未来的连接初始化改用了非 FULL 的默认值，恢复也忠实
+/// 还原原值。进入时读 pragma 失败则退回旧行为（Drop 恢复 FULL）并记 debug 日志。
 ///
-/// 只应包裹**可从源文件重建的数据**的批量写入（会话用量导入）；同一连接上
-/// 并发的其他写入在此窗口内同样被降级，因此窗口应尽量短，且绝不用于
-/// provider/settings 等权威配置的常规写入路径。
+/// # 独占连接契约
+///
+/// 本守卫降级的是**整条连接**的 synchronous，因此调用方必须持有一条仅用于本次
+/// 导入的**独占连接**；绝不能是与 proxy 日志、failover 等权威写入共享的连接
+/// （否则那些权威写入会在窗口内一并被降级到 NORMAL）。现有三个调用方都满足：
+///
+/// - TUI 后台同步 worker：`Database::init()` 新开的专用连接
+///   （`cli/tui/runtime_systems/workers.rs` 的 `session_usage_sync_worker_loop`）。
+/// - CLI `sessions sync` 命令：命令独占的连接
+///   （`cli/commands/sessions.rs` 的 `sync_usage_for_provider`）。
+/// - 周期同步：`reopen_for_import()` 重开的、指向同一文件的独立导入连接
+///   （`services/session_usage.rs` 的阻塞线程路径）。
+///
+/// 只应包裹**可从源文件重建的数据**的批量写入（会话用量导入），窗口应尽量短。
 pub(crate) struct BulkImportDurabilityGuard<'a> {
     db: &'a Database,
+    /// 进入守卫前读到的 `synchronous` 数值（0=OFF/1=NORMAL/2=FULL/3=EXTRA）。
+    /// Drop 用它以数值形式恢复；读取失败为 `None`，Drop 回退恢复 FULL。
+    restore: Option<i64>,
 }
 
 impl Drop for BulkImportDurabilityGuard<'_> {
     fn drop(&mut self) {
         if let Ok(conn) = self.db.conn.lock() {
-            match conn.pragma_update(None, "synchronous", "FULL") {
-                Ok(()) => log::debug!("[BULK-IMPORT] 本连接恢复 synchronous=FULL"),
-                Err(e) => log::warn!("[BULK-IMPORT] 恢复 synchronous=FULL 失败: {e}"),
+            match self.restore {
+                Some(value) => match conn.pragma_update(None, "synchronous", value) {
+                    Ok(()) => log::debug!("[BULK-IMPORT] 本连接恢复 synchronous={value}"),
+                    Err(e) => log::warn!("[BULK-IMPORT] 恢复 synchronous={value} 失败: {e}"),
+                },
+                None => match conn.pragma_update(None, "synchronous", "FULL") {
+                    Ok(()) => {
+                        log::debug!(
+                            "[BULK-IMPORT] 本连接恢复 synchronous=FULL（读取原值失败的回退）"
+                        )
+                    }
+                    Err(e) => log::warn!("[BULK-IMPORT] 恢复 synchronous=FULL 失败: {e}"),
+                },
             }
         }
     }
@@ -756,13 +783,22 @@ impl Drop for BulkImportDurabilityGuard<'_> {
 impl Database {
     /// 见 [`BulkImportDurabilityGuard`]。设置失败只降速不影响正确性。
     pub(crate) fn bulk_import_durability_guard(&self) -> BulkImportDurabilityGuard<'_> {
+        let mut restore = None;
         if let Ok(conn) = self.conn.lock() {
+            // 先记下进入守卫前的实际 synchronous 值，供 Drop 忠实恢复。
+            restore = match conn.query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0)) {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    log::debug!("[BULK-IMPORT] 读取当前 synchronous 失败，Drop 将回退 FULL: {e}");
+                    None
+                }
+            };
             match conn.pragma_update(None, "synchronous", "NORMAL") {
                 Ok(()) => log::debug!("[BULK-IMPORT] 本连接 synchronous=NORMAL（导入期间）"),
                 Err(e) => log::debug!("[BULK-IMPORT] 设置 synchronous=NORMAL 失败: {e}"),
             }
         }
-        BulkImportDurabilityGuard { db: self }
+        BulkImportDurabilityGuard { db: self, restore }
     }
 
     /// 为批量导入重开一个指向同一数据库文件的独立连接。

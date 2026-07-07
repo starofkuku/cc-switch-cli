@@ -2483,3 +2483,34 @@ fn ensure_incremental_auto_vacuum_reclaims_bloated_free_pages() {
          (bloated={bloated} bytes, reclaimed={reclaimed} bytes)"
     );
 }
+
+/// 耐久性守卫 Drop 恢复的是**进入守卫前**的 synchronous 值，而非硬编码 FULL：
+/// 先把连接设为非默认的 OFF(0)，进入守卫期间应变为 NORMAL(1)，Drop 后必须
+/// 精确恢复到 OFF(0)。
+#[test]
+fn bulk_import_guard_restores_prior_synchronous() {
+    let db = Database::memory().expect("memory db");
+
+    let read_sync = |db: &Database| -> i64 {
+        let conn = db.conn.lock().expect("lock conn");
+        conn.query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
+            .expect("read synchronous")
+    };
+
+    // 先把 synchronous 设为非默认值 OFF(0)。
+    {
+        let conn = db.conn.lock().expect("lock conn");
+        conn.pragma_update(None, "synchronous", "OFF")
+            .expect("set synchronous=OFF");
+    }
+    assert_eq!(read_sync(&db), 0, "预置为 OFF(0)");
+
+    {
+        let _guard = db.bulk_import_durability_guard();
+        // 守卫期间降级为 NORMAL(1)。
+        assert_eq!(read_sync(&db), 1, "守卫期间应为 NORMAL(1)");
+    }
+
+    // Drop 后恢复到进入前的原值 OFF(0)，而非硬编码 FULL(2)。
+    assert_eq!(read_sync(&db), 0, "Drop 后应恢复原值 OFF(0)");
+}
