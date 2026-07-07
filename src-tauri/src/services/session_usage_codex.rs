@@ -604,35 +604,37 @@ fn insert_codex_session_entry(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         )
         .map_err(|e| AppError::Database(format!("插入 Codex 会话日志失败: {e}")))?;
-    stmt.execute(rusqlite::params![
-        request_id,
-        "_codex_session", // provider_id
-        "codex",          // app_type
-        model,
-        model, // request_model = model
-        delta.input,
-        delta.output,
-        delta.cached_input,
-        0i64, // cache_creation_tokens: Codex 日志无此数据
-        input_cost,
-        output_cost,
-        cache_read_cost,
-        cache_creation_cost,
-        total_cost,
-        0i64,                   // latency_ms
-        Option::<i64>::None,    // first_token_ms
-        200i64,                 // status_code
-        Option::<String>::None, // error_message
-        session_id.map(|s| s.to_string()),
-        Some("codex_session"), // provider_type
-        1i64,                  // is_streaming
-        "1.0",                 // cost_multiplier
-        created_at,
-        "codex_session", // data_source
-    ])
-    .map_err(|e| AppError::Database(format!("插入 Codex 会话日志失败: {e}")))?;
+    let inserted_rows = stmt
+        .execute(rusqlite::params![
+            request_id,
+            "_codex_session", // provider_id
+            "codex",          // app_type
+            model,
+            model, // request_model = model
+            delta.input,
+            delta.output,
+            delta.cached_input,
+            0i64, // cache_creation_tokens: Codex 日志无此数据
+            input_cost,
+            output_cost,
+            cache_read_cost,
+            cache_creation_cost,
+            total_cost,
+            0i64,                   // latency_ms
+            Option::<i64>::None,    // first_token_ms
+            200i64,                 // status_code
+            Option::<String>::None, // error_message
+            session_id.map(|s| s.to_string()),
+            Some("codex_session"), // provider_type
+            1i64,                  // is_streaming
+            "1.0",                 // cost_multiplier
+            created_at,
+            "codex_session", // data_source
+        ])
+        .map_err(|e| AppError::Database(format!("插入 Codex 会话日志失败: {e}")))?;
 
-    Ok(true)
+    // INSERT OR IGNORE 被并发进程抢先时未写入行，计为 skipped 而非 imported
+    Ok(inserted_rows > 0)
 }
 
 #[cfg(test)]
