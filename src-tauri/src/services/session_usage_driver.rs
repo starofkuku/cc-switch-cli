@@ -197,15 +197,18 @@ mod tests {
         seen: Vec<(String, bool)>,
     }
 
-    fn scan(
+    /// `file_mtime` 显式传入（模拟 walk 阶段取得的值）：测试不依赖真实文件
+    /// 系统时间戳在两次写入之间前进，避免时间粒度导致的偶发跳过。
+    fn scan_at(
         path: &std::path::Path,
+        file_mtime: i64,
         last_modified: i64,
         last_offset: i64,
         resume: Option<&ScanCacheStore>,
     ) -> Option<JsonlScanOutcome<RecordingState>> {
         scan_jsonl_incremental(
             path,
-            0,
+            file_mtime,
             last_modified,
             last_offset,
             resume,
@@ -221,7 +224,7 @@ mod tests {
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, "l1\nl2\n").expect("write");
 
-        let outcome = scan(&path, 0, 0, None).expect("changed");
+        let outcome = scan_at(&path, 0, 0, 0, None).expect("changed");
         assert_eq!(
             outcome.state.seen,
             vec![("l1".to_string(), true), ("l2".to_string(), true)]
@@ -236,9 +239,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("s.jsonl");
         std::fs::write(&path, "l1\n").expect("write");
-        let mtime = metadata_modified_nanos(&std::fs::metadata(&path).unwrap());
-
-        assert!(scan(&path, mtime, 1, None).is_none());
+        // mtime 未超过已记录的 last_modified → 跳过
+        assert!(scan_at(&path, 5, 5, 1, None).is_none());
     }
 
     #[test]
@@ -248,15 +250,21 @@ mod tests {
         std::fs::write(&path, "l1\nl2\n").expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan(&path, 0, 0, Some(&store)).expect("changed");
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
         save_resume_hint(Some(&store), &path.to_string_lossy(), &first);
 
         // 破坏头部但保持总字节数不变：把第一个换行符改成空格，两行并作一行。
         // 行式回退路径会因行号偏移而错跳新行；字节续传路径完全不受影响。
         std::fs::write(&path, "l1 l2\nl3\n").expect("rewrite");
 
-        let second =
-            scan(&path, first.file_modified, first.line_offset, Some(&store)).expect("changed");
+        let second = scan_at(
+            &path,
+            2_000,
+            first.file_modified,
+            first.line_offset,
+            Some(&store),
+        )
+        .expect("changed");
         assert_eq!(second.state.seen, vec![("l3".to_string(), true)]);
         assert_eq!(second.line_offset, first.line_offset + 1);
         assert_eq!(second.byte_pos, 9);
@@ -269,7 +277,7 @@ mod tests {
         std::fs::write(&path, "l1\nl2\n").expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan(&path, 0, 0, Some(&store)).expect("changed");
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
         let path_str = path.to_string_lossy().to_string();
         save_resume_hint(Some(&store), &path_str, &first);
 
@@ -289,8 +297,14 @@ mod tests {
             .unwrap();
 
         // 回退路径：历史行以 is_new=false 进回调，新行 is_new=true
-        let second =
-            scan(&path, first.file_modified, first.line_offset, Some(&store)).expect("changed");
+        let second = scan_at(
+            &path,
+            2_000,
+            first.file_modified,
+            first.line_offset,
+            Some(&store),
+        )
+        .expect("changed");
         assert_eq!(
             second.state.seen,
             vec![
@@ -308,14 +322,20 @@ mod tests {
         std::fs::write(&path, "long-line-1\nlong-line-2\n").expect("write");
         let store = ScanCacheStore::in_memory().expect("store");
 
-        let first = scan(&path, 0, 0, Some(&store)).expect("changed");
+        let first = scan_at(&path, 1_000, 0, 0, Some(&store)).expect("changed");
         let path_str = path.to_string_lossy().to_string();
         save_resume_hint(Some(&store), &path_str, &first);
 
         // 文件被截断重写：长度小于提示的字节位置 → 提示失效，从头回退
         std::fs::write(&path, "x\n").expect("truncate");
-        let second =
-            scan(&path, first.file_modified, first.line_offset, Some(&store)).expect("changed");
+        let second = scan_at(
+            &path,
+            2_000,
+            first.file_modified,
+            first.line_offset,
+            Some(&store),
+        )
+        .expect("changed");
         // 回退路径按行号跳过：仅 1 行且行号 <= last_offset，全部 is_new=false
         assert_eq!(second.state.seen, vec![("x".to_string(), false)]);
     }
