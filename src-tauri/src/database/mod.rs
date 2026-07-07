@@ -522,12 +522,9 @@ impl Database {
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // synchronous=NORMAL：WAL 模式下每次 COMMIT 不再 fsync，仅在 checkpoint 时
-        // fsync。断电最坏情况是丢失最新若干笔事务，而 usage 行始终可从源会话文件
-        // 重新导入，故该耐久性下降对本库安全，却能大幅降低首次导入的 fsync 开销。
-        // 所有写库连接均经由本 init() 路径打开，因此在此设置即可覆盖全部写入者。
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        // synchronous 保持 SQLite 默认（FULL）：本库除可重建的 usage 行外还存
+        // provider/settings 等权威配置，不应全局降低耐久性。批量导入期间由
+        // `bulk_import_durability_guard()` 在本连接上临时降为 NORMAL 并在结束后恢复。
 
         let db = Self {
             conn: Mutex::new(conn),
@@ -733,4 +730,36 @@ fn warn_insecure_permissions_once() {
             );
         }
     });
+}
+
+/// 批量导入耐久性守卫：持有期间本连接 `synchronous=NORMAL`（WAL 下 COMMIT
+/// 不再逐次 fsync，HDD/macOS 上是首次导入的主要开销），Drop 时恢复 FULL。
+///
+/// 只应包裹**可从源文件重建的数据**的批量写入（会话用量导入）；同一连接上
+/// 并发的其他写入在此窗口内同样被降级，因此窗口应尽量短，且绝不用于
+/// provider/settings 等权威配置的常规写入路径。
+pub(crate) struct BulkImportDurabilityGuard<'a> {
+    db: &'a Database,
+}
+
+impl Drop for BulkImportDurabilityGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(conn) = self.db.conn.lock() {
+            if let Err(e) = conn.pragma_update(None, "synchronous", "FULL") {
+                log::warn!("恢复 synchronous=FULL 失败: {e}");
+            }
+        }
+    }
+}
+
+impl Database {
+    /// 见 [`BulkImportDurabilityGuard`]。设置失败只降速不影响正确性。
+    pub(crate) fn bulk_import_durability_guard(&self) -> BulkImportDurabilityGuard<'_> {
+        if let Ok(conn) = self.conn.lock() {
+            if let Err(e) = conn.pragma_update(None, "synchronous", "NORMAL") {
+                log::debug!("设置 synchronous=NORMAL 失败: {e}");
+            }
+        }
+        BulkImportDurabilityGuard { db: self }
+    }
 }

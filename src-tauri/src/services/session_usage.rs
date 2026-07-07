@@ -170,6 +170,10 @@ pub mod sync_progress {
 
 pub fn sync_all_session_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let _progress = sync_progress::begin();
+    // 导入周期内本连接临时 synchronous=NORMAL（守卫恢复 FULL）：批量事务
+    // 不逐次 fsync，HDD/macOS 上是首次导入的主要开销；usage 行可从源文件
+    // 重建，主库其余权威配置的常规写入路径不受影响。
+    let _durability = db.bulk_import_durability_guard();
     let mut result = SessionSyncResult {
         imported: 0,
         skipped: 0,
