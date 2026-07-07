@@ -101,6 +101,16 @@ pub(crate) enum SessionMsg {
         request_id: u64,
         rows: Vec<crate::session_manager::SessionMeta>,
     },
+    /// Progressive fill for the "all providers" scan: one provider's freshly
+    /// revalidated list, sent as soon as that provider finishes so a genuine
+    /// full scan (first-ever run, manual reload) paints provider by provider
+    /// instead of all at once. The refresh indicator stays on until
+    /// `ScanFinished`.
+    ScanPartial {
+        request_id: u64,
+        provider_id: String,
+        rows: Vec<crate::session_manager::SessionMeta>,
+    },
     ScanFinished {
         request_id: u64,
         result: Result<Vec<crate::session_manager::SessionMeta>, String>,

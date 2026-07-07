@@ -325,6 +325,26 @@ impl SessionsState {
         true
     }
 
+    /// Progressive fill during a revalidating "all providers" scan: replace one
+    /// provider's rows with its freshly-scanned list while the other providers
+    /// keep their current rows (cached snapshot or earlier partials). Keeps the
+    /// refresh indicator on until `finish_scan` (same request id) lands.
+    pub(crate) fn apply_partial_scan(
+        &mut self,
+        request_id: u64,
+        provider_id: &str,
+        rows: Vec<crate::session_manager::SessionMeta>,
+    ) -> bool {
+        if self.scan_active != Some(request_id) {
+            return false;
+        }
+        self.loaded_once = true;
+        self.rows.retain(|row| row.provider_id != provider_id);
+        self.rows.extend(rows);
+        crate::session_manager::sort_by_recent(&mut self.rows);
+        true
+    }
+
     /// Restore this provider's list from the in-memory scan cache, skipping the
     /// disk scan entirely. The cache is valid for the whole run; a manual reload
     /// (`r`) bypasses this and re-scans. Returns true on a hit.
@@ -902,5 +922,38 @@ impl Overlay {
             | Overlay::UpdateDownloading { .. }
             | Overlay::UpdateResult { .. } => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod sessions_state_tests {
+    use super::SessionsState;
+    use crate::session_manager::SessionMeta;
+
+    fn meta(provider: &str, session: &str, last_active: i64) -> SessionMeta {
+        SessionMeta {
+            provider_id: provider.to_string(),
+            session_id: session.to_string(),
+            last_active_at: Some(last_active),
+            ..SessionMeta::default()
+        }
+    }
+
+    /// 渐进回传：partial 只替换对应 provider 的行、保留其他 provider 的行，
+    /// 结果按最近活跃排序；stale request id 被忽略。
+    #[test]
+    fn apply_partial_scan_replaces_only_that_provider() {
+        let mut state = SessionsState::default();
+        let request_id = state.start_scan("all".to_string());
+        state.rows = vec![meta("claude", "c-old", 10), meta("codex", "x-1", 30)];
+
+        assert!(state.apply_partial_scan(request_id, "claude", vec![meta("claude", "c-new", 20)],));
+        let ids: Vec<&str> = state.rows.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["x-1", "c-new"]);
+        assert!(state.loading, "refresh indicator must stay on");
+
+        // stale request id：不应用
+        assert!(!state.apply_partial_scan(request_id + 1, "codex", vec![]));
+        assert_eq!(state.rows.len(), 2);
     }
 }

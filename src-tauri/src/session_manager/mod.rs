@@ -127,22 +127,14 @@ pub(crate) fn sort_by_recent(sessions: &mut [SessionMeta]) {
 /// The file-parse-backed providers, in the same order the full scan fans them out.
 /// SQLite-only sources (opencode.db / hermes state.db) are queried inside their
 /// provider module and are intentionally not covered by the file cache.
-const CACHED_PROVIDERS: [&str; 6] = [
+/// pub(crate)：TUI worker 逐 provider 扫描并渐进回传时复用同一顺序。
+pub(crate) const CACHED_PROVIDERS: [&str; 6] = [
     "codex", "claude", "opencode", "openclaw", "gemini", "hermes",
 ];
 
-/// Cache-aware scan of every provider. Reuses each provider's persistent
-/// metadata cache, re-parsing only new or changed files, then merges and sorts.
-pub fn scan_sessions_cached(store: &ScanCacheStore, force: bool) -> Vec<SessionMeta> {
-    let mut sessions = Vec::new();
-    for provider_id in CACHED_PROVIDERS {
-        sessions.extend(provider_scan_cached(store, provider_id, force));
-    }
-    sort_by_recent(&mut sessions);
-    sessions
-}
-
 /// Cache-aware scan of a single provider (sorted like `scan_sessions_for_provider`).
+/// The "all providers" view iterates [`CACHED_PROVIDERS`] with this function in
+/// the TUI session worker, emitting a progressive partial after each provider.
 pub fn scan_sessions_cached_for_provider(
     store: &ScanCacheStore,
     provider_id: &str,

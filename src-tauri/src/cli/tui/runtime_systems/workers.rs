@@ -725,9 +725,24 @@ fn handle_session_req(req: SessionReq, tx: &mpsc::Sender<SessionMsg>) -> Result<
 
             // Phase 2 (revalidate): stat the directories, re-parse only changed
             // files, persist the delta, and send the final authoritative list.
+            // The "all" view scans provider by provider, emitting a partial
+            // after each so a genuine full scan paints progressively.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if provider_id == "all" {
-                    crate::session_manager::scan_sessions_cached(&store, force)
+                    let mut merged = Vec::new();
+                    for pid in crate::session_manager::CACHED_PROVIDERS {
+                        let rows = crate::session_manager::scan_sessions_cached_for_provider(
+                            &store, pid, force,
+                        );
+                        let _ = tx.send(SessionMsg::ScanPartial {
+                            request_id,
+                            provider_id: pid.to_string(),
+                            rows: rows.clone(),
+                        });
+                        merged.extend(rows);
+                    }
+                    crate::session_manager::sort_by_recent(&mut merged);
+                    merged
                 } else {
                     crate::session_manager::scan_sessions_cached_for_provider(
                         &store,
