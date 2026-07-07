@@ -411,6 +411,47 @@ impl ScanCacheStore {
     }
 }
 
+/// 删除会话成功后清理 sidecar 扫描缓存里对应的行。纯缓存操作：打开/删除失败
+/// 只记 debug，绝不影响删除结果本身。
+///
+/// TUI 删除 worker 与 CLI `sessions delete` 成功路径共用此函数，保证两个入口
+/// 一致地清缓存——否则删完再开另一入口时，stale-while-revalidate 的秒开快照会
+/// 让已删会话短暂"复活"（要等后台重扫的 deletes 才自愈）。内部自行 `open()`
+/// sidecar；打不开就降级为无操作（下一轮 revalidate 仍会靠文件缺失自愈）。
+pub fn purge_session(provider_id: &str, session_id: &str, source_path: &str) {
+    match ScanCacheStore::open() {
+        Ok(store) => purge_session_in(&store, provider_id, session_id, source_path),
+        Err(err) => {
+            log::debug!("[SESSION-SCAN] 删除会话后打开扫描缓存失败 ({source_path}): {err}")
+        }
+    }
+}
+
+/// [`purge_session`] 的核心两步删除（在已打开的 store 上执行）。抽出来让测试可
+/// 直接用内存 store 覆盖，不落磁盘。
+///
+/// 1. 按 `source_path` 删（[`ScanCacheStore::delete_paths`]）——覆盖 claude/codex/
+///    gemini/openclaw，其 `source_path` 即缓存主键（会话文件路径）。
+/// 2. 按 `session_id` 删（[`ScanCacheStore::delete_rows_by_session`]）——兜底
+///    opencode 及未来 `source_path` ≠ 缓存键的 provider：opencode 的 `source_path`
+///    是 message 目录（非缓存键，缓存键是 session JSON 路径），仅按路径删是
+///    no-op；改用 meta JSON 里的 `sessionId` 精确删到那一行。
+pub(crate) fn purge_session_in(
+    store: &ScanCacheStore,
+    provider_id: &str,
+    session_id: &str,
+    source_path: &str,
+) {
+    if let Err(err) = store.delete_paths(&[source_path.to_string()]) {
+        log::debug!("[SESSION-SCAN] 删除会话后按路径清理扫描缓存失败 ({source_path}): {err}");
+    }
+    if let Err(err) = store.delete_rows_by_session(provider_id, session_id) {
+        log::debug!(
+            "[SESSION-SCAN] 删除会话后按 sessionId 清理扫描缓存失败 ({provider_id}/{session_id}): {err}"
+        );
+    }
+}
+
 /// 转义 LIKE 模式中的通配符（`\`/`%`/`_`），配合 `ESCAPE '\'` 使用，使字面量
 /// 精确匹配、不被当作通配符。
 fn escape_like(input: &str) -> String {
@@ -524,6 +565,68 @@ mod tests {
         assert!(
             rows.contains_key("sesXa"),
             "`_` 经转义按字面量匹配，sesXa 应保留"
+        );
+    }
+
+    /// 删除会话成功后 `purge_session_in` 按路径清掉 sidecar 缓存行，避免下次
+    /// 秒开快照复活已删会话。缓存里没有的路径为无害 no-op。
+    #[test]
+    fn purge_session_in_removes_deleted_session_by_path() {
+        let store = ScanCacheStore::in_memory().expect("open memory store");
+        store
+            .upsert_batch(&[entry(
+                "/tmp/gone.jsonl",
+                "claude",
+                1,
+                10,
+                SCAN_CACHE_VERSION,
+            )])
+            .expect("upsert");
+        assert_eq!(store.load_for_provider("claude").expect("load").len(), 1);
+
+        purge_session_in(&store, "claude", "gone", "/tmp/gone.jsonl");
+        assert!(
+            store.load_for_provider("claude").expect("load").is_empty(),
+            "已删除会话的缓存行应被按路径清除"
+        );
+
+        // 不存在的路径/会话不 panic、不报错（无害 no-op）。
+        purge_session_in(&store, "claude", "nope", "/tmp/never-existed.jsonl");
+    }
+
+    /// opencode 的 `source_path` 是 message 目录、≠ 缓存主键（session JSON
+    /// 路径），仅按路径删是 no-op；`purge_session_in` 会额外按 `sessionId` 兜底
+    /// 删除该行。
+    #[test]
+    fn purge_session_in_removes_opencode_row_by_session_id() {
+        let store = ScanCacheStore::in_memory().expect("open memory store");
+        // 缓存主键是 session JSON 文件路径；meta 里带 sessionId。
+        store
+            .upsert_batch(&[SessionScanCacheEntry {
+                file_path: "/data/opencode/storage/session/proj/ses_x.json".to_string(),
+                provider: "opencode".to_string(),
+                mtime_ns: 1,
+                size: 10,
+                meta_json: r#"{"providerId":"opencode","sessionId":"ses_x"}"#.to_string(),
+                cache_version: SCAN_CACHE_VERSION,
+            }])
+            .expect("upsert");
+
+        // Delete 请求携带的 source_path 是 message 目录（≠ 缓存键）：仅按路径
+        // 删除会是 no-op，必须靠 sessionId 兜底。
+        purge_session_in(
+            &store,
+            "opencode",
+            "ses_x",
+            "/data/opencode/storage/message/ses_x",
+        );
+
+        assert!(
+            store
+                .load_for_provider("opencode")
+                .expect("load")
+                .is_empty(),
+            "opencode 行应按 sessionId 兜底删除"
         );
     }
 

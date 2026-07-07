@@ -744,19 +744,13 @@ fn handle_session_req(req: SessionReq, tx: &mpsc::Sender<SessionMsg>) -> Result<
                     });
             // 删除成功后同步清掉该会话的 sidecar 扫描缓存行，否则下次启动时
             // stale-while-revalidate 的秒开快照会让已删除会话短暂"复活"（要等
-            // 后台重扫的 deletes 才清）。纯缓存操作，失败只记 debug，不影响删除结果。
+            // 后台重扫的 deletes 才清）。共享 helper 与 CLI `sessions delete` 一致。
             if result.is_ok() {
-                match crate::session_manager::scan_cache_store::ScanCacheStore::open() {
-                    Ok(store) => purge_scan_cache_after_delete(
-                        &store,
-                        &provider_id,
-                        &session_id,
-                        &source_path,
-                    ),
-                    Err(err) => log::debug!(
-                        "[SESSION-SCAN] 删除会话后打开扫描缓存失败 ({source_path}): {err}"
-                    ),
-                }
+                crate::session_manager::scan_cache_store::purge_session(
+                    &provider_id,
+                    &session_id,
+                    &source_path,
+                );
             }
             tx.send(SessionMsg::DeleteFinished {
                 request_id,
@@ -847,41 +841,6 @@ fn run_session_scan(
     }))
     .map_err(|_| "session scan panicked".to_string());
     let _ = tx.send(SessionMsg::ScanFinished { request_id, result });
-}
-
-/// 删除会话成功后清理 sidecar 扫描缓存里对应的行（两条互补路径）。纯缓存操作：
-/// 失败只记 debug，不影响删除结果。
-///
-/// 1. 按 `source_path` 删（[`purge_scan_cache_row`]）——覆盖 claude/codex/gemini/
-///    openclaw，其 `source_path` 即缓存主键（会话文件路径）。
-/// 2. 按 `session_id` 删——兜底 opencode 及未来 `source_path` ≠ 缓存键的
-///    provider：opencode 的 `source_path` 是 message 目录（非缓存键，缓存键是
-///    session JSON 路径），仅按路径删是 no-op；改用 meta JSON 里的 `sessionId`
-///    精确删到那一行。
-fn purge_scan_cache_after_delete(
-    store: &crate::session_manager::scan_cache_store::ScanCacheStore,
-    provider_id: &str,
-    session_id: &str,
-    source_path: &str,
-) {
-    purge_scan_cache_row(store, source_path);
-    if let Err(err) = store.delete_rows_by_session(provider_id, session_id) {
-        log::debug!(
-            "[SESSION-SCAN] 删除会话后按 sessionId 清理扫描缓存失败 ({provider_id}/{session_id}): {err}"
-        );
-    }
-}
-
-/// 从 sidecar 扫描缓存里删除某个会话文件的行（按路径）。纯缓存操作：失败只记
-/// debug，不影响删除结果；路径不在缓存里（如 "sqlite:" 前缀的会话、或 opencode
-/// 的 message 目录）时是无害 no-op。
-fn purge_scan_cache_row(
-    store: &crate::session_manager::scan_cache_store::ScanCacheStore,
-    source_path: &str,
-) {
-    if let Err(err) = store.delete_paths(&[source_path.to_string()]) {
-        log::debug!("[SESSION-SCAN] 删除会话后按路径清理扫描缓存失败 ({source_path}): {err}");
-    }
 }
 
 #[cfg(test)]
@@ -1866,71 +1825,6 @@ mod tests {
             session_id: key.to_string(),
             source_path: format!("/tmp/{key}.jsonl"),
         }
-    }
-
-    /// fix 4：删除会话成功后清掉 sidecar 缓存行，避免下次启动的 stale 快照复活
-    /// 已删除会话。缓存里没有的路径为无害 no-op。
-    #[test]
-    fn purge_scan_cache_row_removes_deleted_session() {
-        use crate::session_manager::cache::{SessionScanCacheEntry, SCAN_CACHE_VERSION};
-        use crate::session_manager::scan_cache_store::ScanCacheStore;
-
-        let store = ScanCacheStore::in_memory().expect("open memory store");
-        store
-            .upsert_batch(&[SessionScanCacheEntry {
-                file_path: "/tmp/gone.jsonl".to_string(),
-                provider: "claude".to_string(),
-                mtime_ns: 1,
-                size: 10,
-                meta_json: "{}".to_string(),
-                cache_version: SCAN_CACHE_VERSION,
-            }])
-            .expect("upsert");
-        assert_eq!(store.load_for_provider("claude").expect("load").len(), 1);
-
-        purge_scan_cache_row(&store, "/tmp/gone.jsonl");
-        assert!(
-            store.load_for_provider("claude").expect("load").is_empty(),
-            "已删除会话的缓存行应被清除"
-        );
-
-        // 不存在的路径不 panic、不报错（无害 no-op）
-        purge_scan_cache_row(&store, "/tmp/never-existed.jsonl");
-    }
-
-    /// fix：opencode 的 source_path 是 message 目录、≠ 缓存主键（session JSON
-    /// 路径），仅按路径删是 no-op；purge_scan_cache_after_delete 会额外按
-    /// sessionId 兜底删除该行。
-    #[test]
-    fn purge_after_delete_removes_opencode_row_by_session_id() {
-        use crate::session_manager::cache::{SessionScanCacheEntry, SCAN_CACHE_VERSION};
-        use crate::session_manager::scan_cache_store::ScanCacheStore;
-
-        let store = ScanCacheStore::in_memory().expect("open memory store");
-        // 缓存主键是 session JSON 文件路径；meta 里带 sessionId。
-        store
-            .upsert_batch(&[SessionScanCacheEntry {
-                file_path: "/data/opencode/storage/session/proj/ses_x.json".to_string(),
-                provider: "opencode".to_string(),
-                mtime_ns: 1,
-                size: 10,
-                meta_json: r#"{"providerId":"opencode","sessionId":"ses_x"}"#.to_string(),
-                cache_version: SCAN_CACHE_VERSION,
-            }])
-            .expect("upsert");
-
-        // Delete 请求携带的 source_path 是 message 目录（≠ 缓存键）：仅按路径
-        // 删除会是 no-op，必须靠 sessionId 兜底。
-        let source_path = "/data/opencode/storage/message/ses_x";
-        purge_scan_cache_after_delete(&store, "opencode", "ses_x", source_path);
-
-        assert!(
-            store
-                .load_for_provider("opencode")
-                .expect("load")
-                .is_empty(),
-            "opencode 行应按 sessionId 兜底删除"
-        );
     }
 
     #[test]

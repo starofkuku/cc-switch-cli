@@ -320,6 +320,15 @@ fn delete_session(
         return Err(AppError::Message("Session was not deleted.".to_string()));
     }
 
+    // 与 TUI 删除路径一致：清掉该会话的 sidecar 扫描缓存行，否则 CLI 删完再开
+    // TUI 时，stale-while-revalidate 的秒开快照会让已删会话短暂"复活"。纯缓存
+    // 操作，失败只记 debug，不影响删除结果。
+    session_manager::scan_cache_store::purge_session(
+        &session.provider_id,
+        &session.session_id,
+        &source_path,
+    );
+
     println!(
         "{}",
         success(&format!(
