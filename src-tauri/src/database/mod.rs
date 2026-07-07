@@ -518,6 +518,13 @@ impl Database {
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // synchronous=NORMAL：WAL 模式下每次 COMMIT 不再 fsync，仅在 checkpoint 时
+        // fsync。断电最坏情况是丢失最新若干笔事务，而 usage 行始终可从源会话文件
+        // 重新导入，故该耐久性下降对本库安全，却能大幅降低首次导入的 fsync 开销。
+        // 所有写库连接均经由本 init() 路径打开，因此在此设置即可覆盖全部写入者。
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
         let db = Self {
             conn: Mutex::new(conn),
             runtime_key: format!("file:{}", db_path.display()),
