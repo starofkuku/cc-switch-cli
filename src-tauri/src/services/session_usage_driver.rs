@@ -11,10 +11,11 @@
 //!
 //! 进度契约：主库 `session_log_sync` 的 `(last_modified, last_line_offset)`
 //! 是权威进度（schema 与上游同步，不可扩展）；sidecar 的
-//! `session_sync_resume` 只是加速提示——`(last_modified, last_line_offset)`
-//! 快照与权威行完全一致且文件未缩短时才生效，任何不一致（整库从别的机器
-//! WebDAV 同步进来、文件轮转/截断、提示状态无法反序列化）都回退到从字节 0
-//! 按行 offset 跳过的旧路径，并在本轮结束后写回新提示。
+//! `session_sync_resume` 只是加速提示，校验分三档（见 [`ResumeDecision`]）：
+//! 快照与权威行一致且尾部指纹吻合 → 续传；截断/指纹失配证明同路径文件被
+//! 重写 → 忽略旧行 offset 全量重扫（去重兜底）；无提示或提示与权威行不符
+//! （首次运行、整库从别的机器 WebDAV 同步进来等）→ 回退到从字节 0 按行
+//! offset 跳过的旧路径。本轮结束后写回新提示。
 //!
 //! 非 JSONL 数据源（Gemini 整文件 JSON、OpenCode 外部 SQLite）天然无法按
 //! 字节续传，仅遵循 mtime 跳过契约，不经过本驱动。
@@ -68,7 +69,6 @@ fn load_matching_resume_hint(
     file_path: &str,
     last_modified: i64,
     last_offset: i64,
-    file_len: u64,
 ) -> Option<SyncResumeHint> {
     let store = resume?;
     // 首次同步（无权威进度）没有可续传的位置
@@ -78,31 +78,72 @@ fn load_matching_resume_hint(
     let hint = store.load_sync_resume(file_path).ok().flatten()?;
     (hint.last_modified == last_modified
         && hint.last_line_offset == last_offset
-        && hint.byte_offset > 0
-        && (hint.byte_offset as u64) <= file_len)
+        && hint.byte_offset > 0)
         .then_some(hint)
 }
 
-/// 内容校验 + 定位：读出 `byte_offset` 前的尾部窗口比对指纹（识别同路径
-/// 整体重写成更大文件的轮转场景），通过后文件游标恰好停在 `byte_offset`。
-/// 任一环节失败返回 None，调用方回退从头扫描。
-fn validate_hint_and_seek<S: DeserializeOwned>(
+/// 续传决策：区分"能续传"、"文件身份失效需全量重扫"、"沿用行 offset 跳过"。
+enum ResumeDecision<S> {
+    /// 提示完整有效：从 `byte_offset` 续读，恢复状态机。
+    Resume { byte_offset: u64, state: S },
+    /// 有确凿证据表明同路径文件已被重写（截断、或续传边界前的内容指纹
+    /// 失配）：权威行 offset 描述的是旧文件，必须忽略它从头全量重扫，
+    /// 各 app 的 request_id 去重保证重扫不会重复入库。
+    RescanFromZero,
+    /// 无提示或提示与权威行不符（首次运行、整库从别的机器同步进来、
+    /// 提示状态无法反序列化等）：没有身份失效的证据，沿用旧的
+    /// 行 offset 跳过路径。
+    LineSkipFallback,
+}
+
+/// 校验续传提示并做出决策；`Resume` 时文件游标恰好停在 `byte_offset`，
+/// 其余情况由调用方负责把游标归零。
+fn decide_resume<S: DeserializeOwned>(
     file: &mut fs::File,
-    hint: &SyncResumeHint,
-) -> Option<(u64, S)> {
-    let expected = hint.tail_hash?;
-    let state: S = serde_json::from_str(hint.state.as_deref()?).ok()?;
+    file_len: u64,
+    hint: Option<SyncResumeHint>,
+) -> ResumeDecision<S> {
+    let Some(hint) = hint else {
+        return ResumeDecision::LineSkipFallback;
+    };
 
     let byte_offset = hint.byte_offset as u64;
-    let window = byte_offset.min(TAIL_HASH_WINDOW);
-    file.seek(SeekFrom::Start(byte_offset - window)).ok()?;
-    let mut tail = vec![0u8; window as usize];
-    std::io::Read::read_exact(file, &mut tail).ok()?;
-    if fnv1a64(&tail) as i64 != expected {
-        return None;
+    // 文件比上次的续传位置还短：同路径被截断/重写过
+    if byte_offset > file_len {
+        return ResumeDecision::RescanFromZero;
     }
-    // read_exact 结束后游标恰好位于 byte_offset，无需再次 seek
-    Some((byte_offset, state))
+    // 旧版提示无指纹：既不能证实也不能证伪身份，保守走行 offset 路径
+    let Some(expected) = hint.tail_hash else {
+        return ResumeDecision::LineSkipFallback;
+    };
+
+    // 尾部指纹：读 byte_offset 前的窗口与保存时比对
+    let window = byte_offset.min(TAIL_HASH_WINDOW);
+    let tail_ok = (|| {
+        file.seek(SeekFrom::Start(byte_offset - window)).ok()?;
+        let mut tail = vec![0u8; window as usize];
+        std::io::Read::read_exact(file, &mut tail).ok()?;
+        Some(fnv1a64(&tail) as i64 == expected)
+    })();
+    match tail_ok {
+        // 指纹失配：边界前内容变了，文件被整体重写
+        Some(false) => return ResumeDecision::RescanFromZero,
+        // 读不出来（IO 抖动）：无证据，保守回退
+        None => return ResumeDecision::LineSkipFallback,
+        Some(true) => {}
+    }
+
+    // 指纹吻合但状态机无法恢复（多为本项目升级改了状态结构）：文件身份
+    // 没问题，按行 offset 跳过即可
+    match hint
+        .state
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<S>(s).ok())
+    {
+        // read_exact 结束后游标恰好位于 byte_offset，无需再次 seek
+        Some(state) => ResumeDecision::Resume { byte_offset, state },
+        None => ResumeDecision::LineSkipFallback,
+    }
 }
 
 /// 读取文件 `byte_pos` 前的尾部窗口指纹（保存提示时使用）。对 append-only
@@ -159,18 +200,26 @@ where
         fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // 字节续传：提示与权威行一致、尾部指纹吻合、状态机可反序列化时 seek 续读；
-    // 否则从头回退（指纹校验可能移动过游标，必须归零）
-    let resumed =
-        load_matching_resume_hint(resume, &file_path_str, last_modified, last_offset, file_len)
-            .and_then(|hint| validate_hint_and_seek::<S>(&mut file, &hint));
+    // 字节续传决策（指纹校验可能移动过游标，非 Resume 路径必须归零）
+    let hint = load_matching_resume_hint(resume, &file_path_str, last_modified, last_offset);
+    let decision = decide_resume::<S>(&mut file, file_len, hint);
 
-    let (mut state, mut line_offset, mut byte_pos) = match resumed {
-        Some((byte_offset, state)) => (state, last_offset, byte_offset),
-        None => {
+    // effective_last_offset：本轮用于 is_new 判断的行 offset。文件身份失效
+    // 时权威行 offset 描述的是旧文件，必须归零全量重扫，否则新文件的前
+    // N 行会被误当作旧行永久漏导入。
+    let (mut state, mut line_offset, mut byte_pos, effective_last_offset) = match decision {
+        ResumeDecision::Resume { byte_offset, state } => {
+            (state, last_offset, byte_offset, last_offset)
+        }
+        ResumeDecision::RescanFromZero => {
             file.seek(SeekFrom::Start(0))
                 .map_err(|e| AppError::Config(format!("无法定位文件偏移: {e}")))?;
-            (init_state(), 0i64, 0u64)
+            (init_state(), 0i64, 0u64, 0i64)
+        }
+        ResumeDecision::LineSkipFallback => {
+            file.seek(SeekFrom::Start(0))
+                .map_err(|e| AppError::Config(format!("无法定位文件偏移: {e}")))?;
+            (init_state(), 0i64, 0u64, last_offset)
         }
     };
 
@@ -184,16 +233,22 @@ where
 
     loop {
         raw.clear();
-        // read_until 精确返回消耗的字节数（含换行符），字节位置始终可信；
-        // IO 错误直接停止，已处理的进度仍然有效（各 app 的去重保证重扫安全）。
+        // read_until 精确返回消耗的字节数（含换行符），字节位置始终可信。
+        // 非 EOF 的 IO 错误必须整体报错：若吞掉错误并返回部分结果，调用方
+        // 会把本轮 mtime 写入权威进度，错误点之后的行将永久不再导入。
+        // 报错让调用方跳过进度更新，下个周期从旧进度完整重试。
         let n = match reader.read_until(b'\n', &mut raw) {
             Ok(0) => break,
             Ok(n) => n,
-            Err(_) => break,
+            Err(e) => {
+                return Err(AppError::Config(format!(
+                    "读取会话日志失败 ({file_path_str}): {e}"
+                )))
+            }
         };
         byte_pos += n as u64;
         line_offset += 1;
-        let is_new = line_offset > last_offset;
+        let is_new = line_offset > effective_last_offset;
 
         if raw.last() == Some(&b'\n') {
             committed_byte_pos = byte_pos;
@@ -416,8 +471,10 @@ mod tests {
             first.out().line_offset,
             Some(&store),
         );
-        // 回退路径：新文件第 1 行行号 <= last_offset，以 is_new=false 重放
-        assert_eq!(second.seen, vec![(rewritten, false)]);
+        // 指纹识破身份失效 → 忽略旧行 offset，全量重扫（is_new=true，
+        // 新文件内容不会被误当旧行漏掉；重复导入由 request_id 去重兜底）
+        assert_eq!(second.seen, vec![(rewritten, true)]);
+        assert_eq!(second.out().line_offset, 1);
     }
 
     #[test]
@@ -475,7 +532,7 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         save_resume_hint(Some(&store), &path_str, first.out());
 
-        // 文件被截断重写：长度小于提示的字节位置 → 提示失效，从头回退
+        // 文件被截断重写：长度小于提示的字节位置 → 身份失效，全量重扫
         std::fs::write(&path, "x\n").expect("truncate");
         let second = scan_at(
             &path,
@@ -484,7 +541,8 @@ mod tests {
             first.out().line_offset,
             Some(&store),
         );
-        // 回退路径按行号跳过：仅 1 行且行号 <= last_offset，全部 is_new=false
-        assert_eq!(second.seen, vec![("x".to_string(), false)]);
+        // 新文件的行以 is_new=true 全量重放，不会被旧行 offset 误跳
+        assert_eq!(second.seen, vec![("x".to_string(), true)]);
+        assert_eq!(second.out().line_offset, 1);
     }
 }
