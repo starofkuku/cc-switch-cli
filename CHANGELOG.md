@@ -7,6 +7,46 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] - 2026-07-08
+
+### Added
+
+- **TUI / Session Search**: Add full-content deep search that matches inside every session (not just titles) and an all-providers session view. [#324](https://github.com/SaladDay/cc-switch-cli/pull/324)
+- **TUI / Light Theme**: Add a light color theme with a Settings toggle and terminal-background auto-detection, including a pinned ansi256 degradation for terminals without truecolor.
+- **TUI / Icons**: Add an icon-mode fallback so emoji never break border alignment on terminals that render them double-width or blank, plus a Settings › Icons row to switch icon mode (emoji / ASCII).
+- **TUI / Navigation**: Add breadcrumb titles on sub-pages, keep page key bars visible while the nav pane has focus, and show guidance on empty MCP / prompt / skill lists.
+- **TUI / Import Progress**: Show live progress while session usage imports and fill the sessions list progressively during a full scan, instead of blocking on the first paint.
+- **Proxy / Logging**: Add trace-level logging for JSONL resume decisions, sidecar-cache revalidation, and fallbacks so silent degradations in the session/usage importer are observable.
+
+### Changed
+
+- **TUI / Internals**: Migrate the Providers, MCP, Prompts, Skills, Usage, and Sessions pages onto a shared keymap registry and shared page/overlay frames, so key bindings, help sheets, breadcrumb titles, and body padding stay consistent across screens. The help sheet is now generated from the keymap, so it can no longer drift from the actual page bindings.
+
+### Fixed
+
+- **Proxy / Streaming (GLM, empty choices)**: Tolerate an explicitly empty `choices` array in both the OpenAI→Anthropic and Codex Chat→Responses transforms instead of failing the whole request with a 502 "Empty choices array" — NVIDIA NIM's `z-ai/glm-5.2` intermittently returns a usage-only body with `choices: []`. A missing `choices` field is still rejected. Fixes [#325](https://github.com/SaladDay/cc-switch-cli/issues/325).
+- **Proxy / Streaming (framing + usage)**: OpenAI-compatible Claude `/v1/messages` streaming now parses CRLF-delimited and split-multibyte SSE frames via the shared SSE helpers, injects `stream_options.include_usage` and folds in the trailing usage-only chunk so token counts are no longer all-zero, and records only the first `finish_reason` so a later chunk cannot downgrade `tool_use` to `end_turn`. This also stops the segmented-output / repeating-request loop seen against reverse-engineered GLM endpoints. Fixes [#323](https://github.com/SaladDay/cc-switch-cli/issues/323) and [#326](https://github.com/SaladDay/cc-switch-cli/issues/326).
+- **Proxy / Billing**: Report fresh (cache-subtracted) `input_tokens` in every Claude-billed transform so cached tokens are no longer billed twice once streaming usage is forwarded correctly. [#323](https://github.com/SaladDay/cc-switch-cli/issues/323)
+- **Proxy / OpenCode Auth**: Derive the Claude auth strategy from the env var name (`ANTHROPIC_AUTH_TOKEN` → `Authorization: Bearer`, `ANTHROPIC_API_KEY` → `x-api-key`) and stop emitting both headers, which broke strict Anthropic-protocol endpoints such as OpenCode Go (`opencode.ai/zen/go`) with a 401. Fixes [#330](https://github.com/SaladDay/cc-switch-cli/issues/330) and [#329](https://github.com/SaladDay/cc-switch-cli/issues/329).
+- **Codex / Auth**: Stop non-official (API-key) Codex providers from inheriting a stray ChatGPT OAuth login from `~/.codex/auth.json`. The pollution left switching to a third-party provider authenticating via OAuth against the wrong endpoint; providers are now reduced to key-only auth at every capture/write path, and already-polluted databases are auto-repaired. Fixes [#328](https://github.com/SaladDay/cc-switch-cli/issues/328).
+- **Codex / Deeplink**: Restore the provider `name` field (and correct the `requires_openai_auth` / reasoning fields) in deeplink-imported Codex config, which Codex otherwise refused to load with "provider name must not be empty". Fixes [#333](https://github.com/SaladDay/cc-switch-cli/issues/333).
+- **Database / Growth**: Enable `auto_vacuum=INCREMENTAL` on the local `cc-switch.db` (new databases, plus a one-time migrating `VACUUM` with a safety backup for existing `NONE` databases) so pruned proxy-log pages are returned to the OS instead of growing the file without bound (~1.1GB reported), and preserve the pragma across SQL import / WebDAV download. This also un-hangs WebDAV downloads that were copying the whole bloated file. Fixes [#327](https://github.com/SaladDay/cc-switch-cli/issues/327).
+- **TUI / Session Deletes**: Purge deleted sessions from the scan cache (by session id, on both TUI and CLI deletes) and tombstone them against in-flight scans, so a deleted session no longer reappears in the list. Related to [#321](https://github.com/SaladDay/cc-switch-cli/issues/321).
+- **Sessions / Usage Correctness**: Harden the incremental importer — verify file identity by inode before a byte-offset resume, re-check files whose incomplete tail may complete in place, resolve `created_at` at parse time rather than at deferred write, count `OR IGNORE` conflicts as skipped rather than imported, and converge on files whose final line never gets a trailing newline.
+
+### Performance
+
+- **Sessions / Usage Scan**: Replace the full re-scan on every launch with a sidecar metadata cache and a byte-offset resume driver, batch session-log imports into per-file transactions on a dedicated import connection, reuse compiled dedup statements, and set `PRAGMA synchronous=NORMAL` for the bulk import cycle. The sessions list is now painted stale-while-revalidate, so large histories (first scans previously ran for over two minutes and blocked startup) load immediately and subsequent syncs stay incremental.
+
+### Thanks
+
+Thanks to everyone who helped land this release:
+
+- Code & PRs: [@fjh1997](https://github.com/fjh1997) (full-content session search), [@SaladDay](https://github.com/SaladDay)
+- Reports & diagnosis: [@moonjoke001](https://github.com/moonjoke001) (GLM empty-choices 502), [@abcabc0330](https://github.com/abcabc0330) (OpenAI→Anthropic streaming usage), [@leetomlee123](https://github.com/leetomlee123) (GLM/codebuddy segmented streaming + retry loop), [@jiangxianfengge](https://github.com/jiangxianfengge) (OpenCode 401 auth), [@nianzhibai](https://github.com/nianzhibai) (Codex third-party OAuth pollution), [@keepanote](https://github.com/keepanote) (DB growth / WebDAV download hang), [@unive3sal](https://github.com/unive3sal) (Codex deeplink provider name), [@Jerry-Hunger](https://github.com/Jerry-Hunger) (deleted agent sessions lingering), [@kiwiflydream](https://github.com/kiwiflydream)
+- Thanks [@farion1231](https://github.com/farion1231) for the upstream cc-switch fixes this release ports — empty-choices tolerance, SSE framing, streaming usage/billing parity, the auth-strategy header fix, the Codex OAuth and deeplink-config fixes, and incremental `auto_vacuum`.
+- Thanks to every contributor who reported issues, tested the TUI/proxy changes, reviewed behavior, or helped diagnose problems.
+
 ## [5.8.7] - 2026-07-02
 
 ### Added
