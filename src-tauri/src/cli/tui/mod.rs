@@ -1933,7 +1933,7 @@ fn handle_tui_action(
     skills_req_tx: Option<&mpsc::Sender<SkillsReq>>,
     proxy_req_tx: Option<&mpsc::Sender<ProxyReq>>,
     proxy_loading: &mut RequestTracker,
-    local_env_req_tx: Option<&mpsc::Sender<LocalEnvReq>>,
+    local_env_req_tx: Option<&tokio::sync::mpsc::UnboundedSender<LocalEnvReq>>,
     session_req_tx: Option<&mpsc::Sender<SessionReq>>,
     webdav_req_tx: Option<&mpsc::Sender<WebDavReq>>,
     webdav_loading: &mut RequestTracker,
@@ -2208,14 +2208,15 @@ fn initialize_loaded_app(
 
 fn queue_local_env_refresh_if_available(
     app: &mut App,
-    local_env_req_tx: Option<&mpsc::Sender<LocalEnvReq>>,
+    local_env_req_tx: Option<&tokio::sync::mpsc::UnboundedSender<LocalEnvReq>>,
 ) {
     let Some(tx) = local_env_req_tx else {
+        app.stop_local_env_refresh();
         return;
     };
-    app.local_env_loading = true;
-    if let Err(err) = tx.send(LocalEnvReq::Refresh) {
-        app.local_env_loading = false;
+    let generation = app.begin_local_env_refresh();
+    if let Err(err) = tx.send(LocalEnvReq::Refresh { generation }) {
+        app.fail_local_env_refresh(generation);
         app.push_toast(
             texts::tui_toast_local_env_check_request_failed(&err.to_string()),
             ToastKind::Warning,
@@ -2348,7 +2349,7 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
     let local_env = match start_local_env_system() {
         Ok(system) => Some(system),
         Err(err) => {
-            app.local_env_loading = false;
+            app.stop_local_env_refresh();
             app.push_toast(
                 texts::tui_toast_local_env_check_unavailable(&err.to_string()),
                 ToastKind::Warning,

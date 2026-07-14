@@ -3337,6 +3337,81 @@ fn home_shows_local_env_check_section() {
 }
 
 #[test]
+fn home_updates_local_tool_versions_independently() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+    use crate::services::local_env_check::{LocalTool, ToolCheckResult, ToolCheckStatus};
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Main;
+    app.focus = Focus::Content;
+    app.tick = 0;
+    app.local_env_pending.remove(&LocalTool::Hermes);
+    app.local_env_results.push(ToolCheckResult {
+        tool: LocalTool::Hermes,
+        display_name: LocalTool::Hermes.display_name(),
+        status: ToolCheckStatus::Ok {
+            version: "1.2.3".to_string(),
+        },
+    });
+    let data = minimal_data(&app.app_type);
+
+    let first = all_text(&render(&app, &data));
+    let claude_line = first
+        .lines()
+        .find(|line| line.contains("Claude"))
+        .expect("Claude row should render");
+    let hermes_line = first
+        .lines()
+        .find(|line| line.contains("Hermes"))
+        .expect("Hermes row should render");
+    assert!(claude_line.contains('⠋'), "{claude_line}");
+    assert!(hermes_line.contains('✓'), "{hermes_line}");
+    assert!(first.contains("checking version…"), "{first}");
+    assert!(first.contains("1.2.3"), "{first}");
+
+    app.tick = 1;
+    let second = all_text(&render(&app, &data));
+    let claude_line = second
+        .lines()
+        .find(|line| line.contains("Claude"))
+        .expect("Claude row should render");
+    assert!(claude_line.contains('⠙'), "{claude_line}");
+}
+
+#[test]
+fn home_treats_version_timeout_as_installed_but_unavailable() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+    use crate::services::local_env_check::{LocalTool, ToolCheckResult, ToolCheckStatus};
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Main;
+    app.focus = Focus::Content;
+    app.stop_local_env_refresh();
+    app.local_env_results.push(ToolCheckResult {
+        tool: LocalTool::Hermes,
+        display_name: LocalTool::Hermes.display_name(),
+        status: ToolCheckStatus::VersionUnavailable {
+            reason: "version check timed out after 10s".to_string(),
+        },
+    });
+    let data = minimal_data(&app.app_type);
+
+    let all = all_text(&render(&app, &data));
+    let hermes_line = all
+        .lines()
+        .find(|line| line.contains("Hermes"))
+        .expect("Hermes row should render");
+    assert!(hermes_line.contains('•'), "{hermes_line}");
+    assert!(!hermes_line.contains('!'), "{hermes_line}");
+    assert!(all.contains("installed · version unavailable"), "{all}");
+    assert!(!all.contains("timed out after 10s"), "{all}");
+}
+
+#[test]
 fn home_shows_webdav_section() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -3720,6 +3795,7 @@ fn transition_effect_changes_dashboard_cells_during_proxy_start() {
     let mut app = App::new(Some(AppType::Claude));
     app.route = Route::Main;
     app.focus = Focus::Content;
+    app.stop_local_env_refresh();
 
     let off = minimal_data(&app.app_type);
     app.observe_proxy_visual_state(&off);

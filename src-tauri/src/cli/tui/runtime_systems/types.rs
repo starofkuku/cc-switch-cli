@@ -54,12 +54,17 @@ pub(crate) enum StreamCheckMsg {
 }
 
 pub(crate) enum LocalEnvReq {
-    Refresh,
+    Refresh { generation: u64 },
+    Shutdown,
 }
 
 pub(crate) enum LocalEnvMsg {
-    Finished {
-        result: Vec<crate::services::local_env_check::ToolCheckResult>,
+    ToolFinished {
+        generation: u64,
+        result: crate::services::local_env_check::ToolCheckResult,
+    },
+    BatchFinished {
+        generation: u64,
     },
 }
 
@@ -503,9 +508,25 @@ pub(crate) struct StreamCheckSystem {
 }
 
 pub(crate) struct LocalEnvSystem {
-    pub(crate) req_tx: mpsc::Sender<LocalEnvReq>,
+    pub(crate) req_tx: tokio::sync::mpsc::UnboundedSender<LocalEnvReq>,
     pub(crate) result_rx: mpsc::Receiver<LocalEnvMsg>,
-    pub(crate) _handle: std::thread::JoinHandle<()>,
+    pub(crate) _handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LocalEnvSystem {
+    fn drop(&mut self) {
+        let _ = self.req_tx.send(LocalEnvReq::Shutdown);
+        let Some(handle) = self._handle.take() else {
+            return;
+        };
+        if handle.thread().id() == std::thread::current().id() {
+            log::warn!("local environment worker attempted to join itself during shutdown");
+            return;
+        }
+        if handle.join().is_err() {
+            log::warn!("local environment worker panicked during shutdown");
+        }
+    }
 }
 
 pub(crate) struct SessionSystem {

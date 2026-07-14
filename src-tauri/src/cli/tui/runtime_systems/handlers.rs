@@ -101,9 +101,19 @@ pub(crate) fn handle_speedtest_msg(app: &mut App, msg: SpeedtestMsg) {
 
 pub(crate) fn handle_local_env_msg(app: &mut App, msg: LocalEnvMsg) {
     match msg {
-        LocalEnvMsg::Finished { result } => {
-            app.local_env_results = result;
-            app.local_env_loading = false;
+        LocalEnvMsg::ToolFinished { generation, result } => {
+            if generation != app.local_env_generation {
+                return;
+            }
+            app.local_env_results
+                .retain(|existing| existing.tool != result.tool);
+            app.local_env_pending.remove(&result.tool);
+            app.local_env_results.push(result);
+        }
+        LocalEnvMsg::BatchFinished { generation } => {
+            if generation == app.local_env_generation {
+                app.local_env_pending.clear();
+            }
         }
     }
 }
@@ -1444,8 +1454,73 @@ mod tests {
     use super::*;
     use crate::app_config::AppType;
     use crate::cli::tui::data::{ProviderUsageQuota, QuotaTarget, QuotaTargetKind};
+    use crate::services::local_env_check::{LocalTool, ToolCheckResult, ToolCheckStatus};
     use crate::services::{CredentialStatus, SubscriptionQuota};
     use crate::session_manager::SessionMeta;
+
+    fn local_env_result(tool: LocalTool, version: &str) -> ToolCheckResult {
+        ToolCheckResult {
+            tool,
+            display_name: tool.display_name(),
+            status: ToolCheckStatus::Ok {
+                version: version.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn local_env_result_settles_only_the_finished_tool() {
+        let mut app = App::new(Some(AppType::Claude));
+        let generation = app.begin_local_env_refresh();
+
+        handle_local_env_msg(
+            &mut app,
+            LocalEnvMsg::ToolFinished {
+                generation,
+                result: local_env_result(LocalTool::Hermes, "1.2.3"),
+            },
+        );
+
+        assert!(!app.is_local_env_pending(LocalTool::Hermes));
+        assert!(app.is_local_env_pending(LocalTool::Claude));
+        assert_eq!(app.local_env_results.len(), 1);
+        assert_eq!(app.local_env_results[0].tool, LocalTool::Hermes);
+    }
+
+    #[test]
+    fn stale_local_env_messages_cannot_change_a_new_refresh() {
+        let mut app = App::new(Some(AppType::Claude));
+        let stale_generation = app.begin_local_env_refresh();
+        let current_generation = app.begin_local_env_refresh();
+
+        handle_local_env_msg(
+            &mut app,
+            LocalEnvMsg::ToolFinished {
+                generation: stale_generation,
+                result: local_env_result(LocalTool::Hermes, "1.2.3"),
+            },
+        );
+        handle_local_env_msg(
+            &mut app,
+            LocalEnvMsg::BatchFinished {
+                generation: stale_generation,
+            },
+        );
+
+        assert_eq!(app.local_env_generation, current_generation);
+        assert!(app.local_env_results.is_empty());
+        assert_eq!(app.local_env_pending.len(), LocalTool::all().len());
+    }
+
+    #[test]
+    fn current_local_env_batch_completion_clears_stranded_spinners() {
+        let mut app = App::new(Some(AppType::Claude));
+        let generation = app.begin_local_env_refresh();
+
+        handle_local_env_msg(&mut app, LocalEnvMsg::BatchFinished { generation });
+
+        assert!(app.local_env_pending.is_empty());
+    }
 
     fn session(provider: &str, id: &str, last_active_at: i64) -> SessionMeta {
         SessionMeta {

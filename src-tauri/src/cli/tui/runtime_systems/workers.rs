@@ -637,11 +637,15 @@ fn managed_auth_worker_loop(rx: mpsc::Receiver<ManagedAuthReq>, tx: mpsc::Sender
 
 pub(crate) fn start_local_env_system() -> Result<LocalEnvSystem, AppError> {
     let (result_tx, result_rx) = mpsc::channel::<LocalEnvMsg>();
-    let (req_tx, req_rx) = mpsc::channel::<LocalEnvReq>();
+    let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel::<LocalEnvReq>();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| AppError::Message(format!("failed to start local env runtime: {e}")))?;
 
     let handle = std::thread::Builder::new()
         .name("cc-switch-local-env".to_string())
-        .spawn(move || local_env_worker_loop(req_rx, result_tx))
+        .spawn(move || runtime.block_on(local_env_worker_loop(req_rx, result_tx)))
         .map_err(|e| AppError::IoContext {
             context: "failed to spawn local env worker thread".to_string(),
             source: e,
@@ -650,7 +654,7 @@ pub(crate) fn start_local_env_system() -> Result<LocalEnvSystem, AppError> {
     Ok(LocalEnvSystem {
         req_tx,
         result_rx,
-        _handle: handle,
+        _handle: Some(handle),
     })
 }
 
@@ -1734,16 +1738,117 @@ pub(crate) fn drain_session_reqs_for_test(
     drained
 }
 
-fn local_env_worker_loop(rx: mpsc::Receiver<LocalEnvReq>, tx: mpsc::Sender<LocalEnvMsg>) {
-    while let Ok(mut req) = rx.recv() {
-        for next in rx.try_iter() {
-            req = next;
+async fn local_env_worker_loop(
+    rx: tokio::sync::mpsc::UnboundedReceiver<LocalEnvReq>,
+    tx: mpsc::Sender<LocalEnvMsg>,
+) {
+    use crate::services::local_env_check::check_local_environment_progressive;
+
+    local_env_worker_loop_with(rx, tx, |cancellation, batch_tx, generation| {
+        let batch_cancellation = cancellation.clone();
+        async move {
+            check_local_environment_progressive(cancellation.clone(), |result| {
+                if batch_tx
+                    .send(LocalEnvMsg::ToolFinished { generation, result })
+                    .is_err()
+                {
+                    cancellation.cancel();
+                }
+            })
+            .await;
+
+            if !batch_cancellation.is_cancelled() {
+                let _ = batch_tx.send(LocalEnvMsg::BatchFinished { generation });
+            }
+        }
+    })
+    .await;
+}
+
+async fn local_env_worker_loop_with<F, Fut>(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<LocalEnvReq>,
+    tx: mpsc::Sender<LocalEnvMsg>,
+    run_batch: F,
+) where
+    F: Fn(
+        crate::services::local_env_check::LocalEnvCancellation,
+        mpsc::Sender<LocalEnvMsg>,
+        u64,
+    ) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    use crate::services::local_env_check::LocalEnvCancellation;
+
+    let mut active = tokio::task::JoinSet::new();
+    let mut active_cancellation = None::<LocalEnvCancellation>;
+    let mut active_generation = None::<u64>;
+    let mut pending_generation = None::<u64>;
+    let mut requests_closed = false;
+
+    loop {
+        if active.is_empty() {
+            active_cancellation = None;
+            active_generation = None;
+            if let Some(generation) = pending_generation.take() {
+                let cancellation = LocalEnvCancellation::default();
+                active_cancellation = Some(cancellation.clone());
+                active_generation = Some(generation);
+                active.spawn(run_batch(cancellation, tx.clone(), generation));
+            } else if requests_closed {
+                break;
+            }
         }
 
-        match req {
-            LocalEnvReq::Refresh => {
-                let result = crate::services::local_env_check::check_local_environment();
-                let _ = tx.send(LocalEnvMsg::Finished { result });
+        tokio::select! {
+            request = rx.recv(), if !requests_closed => {
+                match request {
+                    Some(request) => {
+                        let mut latest_generation = None;
+                        let mut shutdown_requested = false;
+                        let mut next_request = Some(request);
+                        while let Some(request) = next_request {
+                            match request {
+                                LocalEnvReq::Refresh { generation } => {
+                                    if !shutdown_requested {
+                                        latest_generation = Some(generation);
+                                    }
+                                }
+                                LocalEnvReq::Shutdown => shutdown_requested = true,
+                            }
+                            next_request = rx.try_recv().ok();
+                        }
+
+                        if shutdown_requested {
+                            requests_closed = true;
+                            pending_generation = None;
+                            if let Some(cancellation) = &active_cancellation {
+                                cancellation.cancel();
+                            }
+                            active.abort_all();
+                        } else if let Some(generation) = latest_generation {
+                            pending_generation = Some(generation);
+                            if let Some(cancellation) = &active_cancellation {
+                                cancellation.cancel();
+                            }
+                        }
+                    }
+                    None => {
+                        requests_closed = true;
+                        pending_generation = None;
+                        if let Some(cancellation) = &active_cancellation {
+                            cancellation.cancel();
+                        }
+                        active.abort_all();
+                    }
+                }
+            }
+            finished = active.join_next(), if !active.is_empty() => {
+                if let Some(Err(error)) = finished {
+                    log::debug!("local environment check task failed: {error}");
+                    if let Some(generation) = active_generation {
+                        let _ = tx.send(LocalEnvMsg::BatchFinished { generation });
+                    }
+                }
             }
         }
     }
@@ -3249,6 +3354,64 @@ fn skills_worker_loop(rx: mpsc::Receiver<SkillsReq>, tx: mpsc::Sender<SkillsMsg>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct LocalEnvTaskDropSignal(mpsc::Sender<()>);
+
+    impl Drop for LocalEnvTaskDropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    #[test]
+    fn dropping_local_env_system_aborts_active_batch_and_joins_worker() {
+        let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build local environment test runtime");
+            runtime.block_on(local_env_worker_loop_with(
+                req_rx,
+                result_tx,
+                move |_cancellation, _batch_tx, _generation| {
+                    let started_tx = started_tx.clone();
+                    let drop_signal = LocalEnvTaskDropSignal(dropped_tx.clone());
+                    async move {
+                        let _drop_signal = drop_signal;
+                        let _ = started_tx.send(());
+                        std::future::pending::<()>().await;
+                    }
+                },
+            ));
+        });
+        let system = LocalEnvSystem {
+            req_tx,
+            result_rx,
+            _handle: Some(handle),
+        };
+        system
+            .req_tx
+            .send(LocalEnvReq::Refresh { generation: 1 })
+            .expect("start local environment batch");
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("local environment batch should start");
+
+        let started = std::time::Instant::now();
+        drop(system);
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "local environment shutdown should not wait for the probe deadline"
+        );
+        dropped_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("active local environment task should be dropped before shutdown returns");
+    }
 
     #[test]
     fn delete_acknowledgement_is_queued_before_purge_can_run() {

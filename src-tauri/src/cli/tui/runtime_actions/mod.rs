@@ -135,7 +135,7 @@ pub(super) struct RuntimeActionContext<'a> {
     skills_req_tx: Option<&'a mpsc::Sender<SkillsReq>>,
     proxy_req_tx: Option<&'a mpsc::Sender<ProxyReq>>,
     proxy_loading: &'a mut RequestTracker,
-    local_env_req_tx: Option<&'a mpsc::Sender<LocalEnvReq>>,
+    local_env_req_tx: Option<&'a tokio::sync::mpsc::UnboundedSender<LocalEnvReq>>,
     session_req_tx: Option<&'a mpsc::Sender<SessionReq>>,
     webdav_req_tx: Option<&'a mpsc::Sender<WebDavReq>>,
     webdav_loading: &'a mut RequestTracker,
@@ -215,7 +215,7 @@ pub(crate) fn handle_action(
     skills_req_tx: Option<&mpsc::Sender<SkillsReq>>,
     proxy_req_tx: Option<&mpsc::Sender<ProxyReq>>,
     proxy_loading: &mut RequestTracker,
-    local_env_req_tx: Option<&mpsc::Sender<LocalEnvReq>>,
+    local_env_req_tx: Option<&tokio::sync::mpsc::UnboundedSender<LocalEnvReq>>,
     session_req_tx: Option<&mpsc::Sender<SessionReq>>,
     webdav_req_tx: Option<&mpsc::Sender<WebDavReq>>,
     webdav_loading: &mut RequestTracker,
@@ -273,7 +273,7 @@ pub(crate) fn handle_action(
         }
         Action::LocalEnvRefresh => {
             let Some(tx) = ctx.local_env_req_tx else {
-                ctx.app.local_env_loading = false;
+                ctx.app.stop_local_env_refresh();
                 ctx.app.push_toast(
                     texts::tui_toast_local_env_check_disabled(),
                     ToastKind::Warning,
@@ -281,9 +281,9 @@ pub(crate) fn handle_action(
                 return Ok(());
             };
 
-            ctx.app.local_env_loading = true;
-            if let Err(err) = tx.send(LocalEnvReq::Refresh) {
-                ctx.app.local_env_loading = false;
+            let generation = ctx.app.begin_local_env_refresh();
+            if let Err(err) = tx.send(LocalEnvReq::Refresh { generation }) {
+                ctx.app.fail_local_env_refresh(generation);
                 ctx.app.push_toast(
                     texts::tui_toast_local_env_check_request_failed(&err.to_string()),
                     ToastKind::Warning,

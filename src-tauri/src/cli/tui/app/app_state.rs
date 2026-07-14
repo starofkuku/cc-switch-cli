@@ -573,7 +573,8 @@ pub struct App {
     pub usage_query_notice_confirmed: bool,
 
     pub local_env_results: Vec<crate::services::local_env_check::ToolCheckResult>,
-    pub local_env_loading: bool,
+    pub local_env_pending: HashSet<crate::services::local_env_check::LocalTool>,
+    pub local_env_generation: u64,
 
     pub usage: UsageState,
     pub pricing: PricingState,

@@ -904,6 +904,30 @@ pub mod texts {
         }
     }
 
+    pub fn tui_local_env_checking() -> &'static str {
+        if is_chinese() {
+            "正在检查版本…"
+        } else {
+            "checking version…"
+        }
+    }
+
+    pub fn tui_local_env_version_unavailable() -> &'static str {
+        if is_chinese() {
+            "已安装 · 版本暂不可用"
+        } else {
+            "installed · version unavailable"
+        }
+    }
+
+    pub fn tui_local_env_check_unavailable() -> &'static str {
+        if is_chinese() {
+            "检查暂不可用"
+        } else {
+            "check unavailable"
+        }
+    }
+
     pub fn tui_home_status_online() -> &'static str {
         if is_chinese() {
             "在线"

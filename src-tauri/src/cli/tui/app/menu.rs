@@ -74,7 +74,11 @@ impl App {
             common_config_notice_confirmed: true,
             usage_query_notice_confirmed: true,
             local_env_results: Vec::new(),
-            local_env_loading: true,
+            local_env_pending: crate::services::local_env_check::LocalTool::all()
+                .iter()
+                .copied()
+                .collect(),
+            local_env_generation: 0,
             usage: UsageState::default(),
             pricing: PricingState::default(),
             sessions: SessionsState::default(),
@@ -119,6 +123,33 @@ impl App {
             .get(self.nav_idx)
             .copied()
             .unwrap_or(NavItem::Main)
+    }
+
+    pub(crate) fn begin_local_env_refresh(&mut self) -> u64 {
+        self.local_env_generation = self.local_env_generation.wrapping_add(1).max(1);
+        self.local_env_results.clear();
+        self.local_env_pending = crate::services::local_env_check::LocalTool::all()
+            .iter()
+            .copied()
+            .collect();
+        self.local_env_generation
+    }
+
+    pub(crate) fn fail_local_env_refresh(&mut self, generation: u64) {
+        if self.local_env_generation == generation {
+            self.local_env_pending.clear();
+        }
+    }
+
+    pub(crate) fn stop_local_env_refresh(&mut self) {
+        self.local_env_pending.clear();
+    }
+
+    pub(crate) fn is_local_env_pending(
+        &self,
+        tool: crate::services::local_env_check::LocalTool,
+    ) -> bool {
+        self.local_env_pending.contains(&tool)
     }
 
     pub(crate) fn nav_items(&self) -> &'static [NavItem] {
