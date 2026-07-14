@@ -22,6 +22,167 @@ pub(super) fn selection_style(theme: &super::theme::Theme) -> Style {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaginationFooterStatus {
+    Idle,
+    NextBoundary,
+    PreviousBoundary,
+    PreparingNext,
+    NextReady,
+    LoadingPage(usize),
+    LoadError,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PaginationFooter {
+    pub page: usize,
+    pub start: usize,
+    pub end: usize,
+    pub total: usize,
+    pub status: PaginationFooterStatus,
+}
+
+/// Adds pagination state to a list's bottom border without consuming a row.
+/// The action is kept when space is tight; the range label is intentionally
+/// dropped first so narrow terminals still expose the next available input.
+pub(super) fn with_pagination_footer<'a>(
+    mut block: Block<'a>,
+    area_width: u16,
+    footer: PaginationFooter,
+    theme: &super::theme::Theme,
+    tick: u64,
+) -> Block<'a> {
+    let available = area_width.saturating_sub(2) as usize;
+    if available == 0 || footer.total == 0 {
+        return block;
+    }
+
+    let range_full =
+        texts::tui_pagination_range(footer.page.max(1), footer.start, footer.end, footer.total);
+    let range_compact = texts::tui_pagination_range_compact(
+        footer.page.max(1),
+        footer.start,
+        footer.end,
+        footer.total,
+    );
+    let range = fit_owned_label(&[range_full, range_compact], available);
+    let action = pagination_action_label(footer, available, tick, theme);
+
+    match (range, action) {
+        (Some(range), Some((action, action_style)))
+            if padded_width(&range)
+                .saturating_add(padded_width(&action))
+                .saturating_add(1)
+                <= available =>
+        {
+            block = block
+                .title_bottom(
+                    Line::styled(format!(" {range} "), Style::default().fg(theme.dim))
+                        .alignment(Alignment::Left),
+                )
+                .title_bottom(
+                    Line::styled(format!(" {action} "), action_style).alignment(Alignment::Right),
+                );
+        }
+        (_, Some((action, action_style))) => {
+            block = block.title_bottom(
+                Line::styled(format!(" {action} "), action_style).alignment(Alignment::Right),
+            );
+        }
+        (Some(range), None) => {
+            block = block.title_bottom(
+                Line::styled(format!(" {range} "), Style::default().fg(theme.dim))
+                    .alignment(Alignment::Left),
+            );
+        }
+        (None, None) => {}
+    }
+
+    block
+}
+
+fn pagination_action_label(
+    footer: PaginationFooter,
+    available: usize,
+    tick: u64,
+    theme: &super::theme::Theme,
+) -> Option<(String, Style)> {
+    let (labels, style): (Vec<String>, Style) = match footer.status {
+        PaginationFooterStatus::Idle => return None,
+        PaginationFooterStatus::NextBoundary => (
+            vec![
+                texts::tui_pagination_next_trigger().to_string(),
+                texts::tui_pagination_next_trigger_compact().to_string(),
+                texts::tui_pagination_next_trigger_minimal().to_string(),
+            ],
+            selection_style(theme),
+        ),
+        PaginationFooterStatus::PreviousBoundary => (
+            vec![
+                texts::tui_pagination_previous_trigger().to_string(),
+                texts::tui_pagination_previous_trigger_compact().to_string(),
+                texts::tui_pagination_previous_trigger_minimal().to_string(),
+            ],
+            selection_style(theme),
+        ),
+        PaginationFooterStatus::PreparingNext => (
+            vec![format!(
+                "{} {}",
+                pagination_spinner(tick),
+                texts::tui_pagination_preparing_next()
+            )],
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        PaginationFooterStatus::NextReady => (
+            vec![format!("> {}", texts::tui_pagination_next_ready())],
+            Style::default().fg(theme.ok).add_modifier(Modifier::BOLD),
+        ),
+        PaginationFooterStatus::LoadingPage(page) => (
+            vec![format!(
+                "{} {}",
+                pagination_spinner(tick),
+                texts::tui_pagination_loading_page(page)
+            )],
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        PaginationFooterStatus::LoadError => (
+            vec![format!("! {}", texts::tui_pagination_load_failed())],
+            Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+        ),
+        PaginationFooterStatus::End => (
+            vec![format!("[end] {}", texts::tui_pagination_end(footer.total))],
+            Style::default().fg(theme.dim),
+        ),
+    };
+    let label = fit_owned_label(&labels, available)?;
+    Some((label, style))
+}
+
+fn pagination_spinner(tick: u64) -> &'static str {
+    match tick % 4 {
+        0 => "⠋",
+        1 => "⠙",
+        2 => "⠹",
+        _ => "⠸",
+    }
+}
+
+fn fit_owned_label(labels: &[String], available: usize) -> Option<String> {
+    labels
+        .iter()
+        .find(|label| padded_width(label) <= available)
+        .cloned()
+}
+
+fn padded_width(label: &str) -> usize {
+    UnicodeWidthStr::width(label).saturating_add(2)
+}
+
 pub(super) fn inactive_chip_style(theme: &super::theme::Theme) -> Style {
     if theme.no_color {
         Style::default()

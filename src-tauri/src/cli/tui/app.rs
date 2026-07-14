@@ -30,6 +30,7 @@ mod form_handlers;
 mod helpers;
 mod menu;
 mod overlay_handlers;
+pub(crate) mod paged_list;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -42,6 +43,10 @@ pub(crate) use content_config::HERMES_MEMORY_ROW_COUNT;
 pub(crate) use content_usage::usage_active_pane_len;
 pub use editor_state::{EditorKind, EditorMode, EditorState, EditorSubmit};
 pub(crate) use helpers::*;
+pub(crate) use types::{
+    retire_session_messages, retire_session_rows, SessionPageSource, SessionPageToken,
+    SessionRowIdentity,
+};
 pub use types::{
     CommonSnippetViewSource, ConfirmAction, ConfirmOverlay, FilterScope, FilterState, Focus,
     LoadingKind, ManagedAuthLoginState, Overlay, PricingState, SessionsPane, SessionsState,

@@ -6,7 +6,7 @@ use super::*;
     reason = "test module mirrors the file layout"
 )]
 mod tests {
-    use super::types::{McpEnvEditorField, McpEnvEntryEditorState};
+    use super::types::{McpEnvEditorField, McpEnvEntryEditorState, UsageLogPager};
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
     use serde_json::json;
@@ -14302,7 +14302,9 @@ mod tests {
             width: 120,
             height: 40,
         };
-        for i in 0..200 {
+        // Keep this fixture within one logical data page. Cross-page gating is
+        // covered separately below and deliberately requires a second input.
+        for i in 0..80 {
             app.sessions.rows.push(session_meta(
                 "claude",
                 &format!("s{i}"),
@@ -14319,14 +14321,14 @@ mod tests {
         assert_eq!(app.sessions.selected_idx, page);
 
         app.on_sessions_key(key(KeyCode::End), &data());
-        assert_eq!(app.sessions.selected_idx, 199);
+        assert_eq!(app.sessions.selected_idx, 79);
 
         // PageDown at the bottom is clamped to the last row.
         app.on_sessions_key(key(KeyCode::PageDown), &data());
-        assert_eq!(app.sessions.selected_idx, 199);
+        assert_eq!(app.sessions.selected_idx, 79);
 
         app.on_sessions_key(key(KeyCode::PageUp), &data());
-        assert_eq!(app.sessions.selected_idx, 199 - page);
+        assert_eq!(app.sessions.selected_idx, 79 - page);
 
         app.on_sessions_key(key(KeyCode::Home), &data());
         assert_eq!(app.sessions.selected_idx, 0);
@@ -14337,63 +14339,241 @@ mod tests {
     }
 
     #[test]
-    fn session_scan_cache_restores_for_the_whole_run() {
-        let mut sessions = SessionsState::default();
-        let req = sessions.start_scan("claude".to_string());
-        assert!(sessions.finish_scan(req, vec![session_meta_for_app("claude")]));
-        assert!(sessions.scan_cache.contains_key("claude"));
+    fn sessions_page_down_requires_a_second_press_at_the_logical_page_boundary() {
+        use crate::cli::tui::app::paged_list::{PageBoundary, PagedListFocus};
 
-        // Switching to another provider clears the live rows...
-        let _ = sessions.start_scan("codex".to_string());
-        assert!(sessions.rows.is_empty());
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.focus = Focus::Content;
+        app.sessions.pane = SessionsPane::List;
+        app.sessions.loaded_once = true;
+        app.sessions.provider_id = Some("claude".to_string());
+        app.last_size = Size {
+            width: 120,
+            height: 40,
+        };
+        for i in 0..201 {
+            app.sessions.rows.push(session_meta(
+                "claude",
+                &format!("s{i}"),
+                "Title",
+                "/tmp/p",
+                &format!("/tmp/s{i}.jsonl"),
+                "claude --resume",
+            ));
+        }
+        app.sessions.selected_idx = 90;
 
-        // ...switching back hits the cache and restores instantly, no re-scan.
-        assert!(sessions.restore_from_scan_cache("claude"));
-        assert_eq!(sessions.rows.len(), 1);
-        assert!(sessions.loaded_once);
-        assert_eq!(sessions.provider_id.as_deref(), Some("claude"));
+        app.on_sessions_key(key(KeyCode::PageDown), &data());
+        assert_eq!(app.sessions.selected_idx, 99);
+        assert_eq!(
+            app.sessions.pagination.focus(),
+            PagedListFocus::Boundary(PageBoundary::Next)
+        );
 
-        // The cache never expires within a run, so a repeat restore still hits
-        // (only a manual `r` reload re-scans, which goes through start_scan).
-        let _ = sessions.start_scan("codex".to_string());
-        assert!(sessions.restore_from_scan_cache("claude"));
-        assert_eq!(sessions.rows.len(), 1);
-
-        // A provider that was never scanned is a miss.
-        assert!(!sessions.restore_from_scan_cache("gemini"));
+        app.on_sessions_key(key(KeyCode::PageDown), &data());
+        assert_eq!(app.sessions.selected_idx, 100);
+        assert!(app.sessions.pagination.is_row_focused());
     }
 
     #[test]
-    fn deleting_session_updates_scan_cache_to_prevent_resurrection() {
-        let mut sessions = SessionsState::default();
-        let req = sessions.start_scan("claude".to_string());
-        let a = session_meta(
-            "claude",
-            "a",
-            "A",
-            "/tmp",
-            "/tmp/a.jsonl",
-            "claude --resume a",
-        );
-        let b = session_meta(
-            "claude",
-            "b",
-            "B",
-            "/tmp",
-            "/tmp/b.jsonl",
-            "claude --resume b",
-        );
-        let key_b = session_key(&b);
-        assert!(sessions.finish_scan(req, vec![a, b]));
-        assert_eq!(sessions.scan_cache.get("claude").unwrap().rows.len(), 2);
+    fn sessions_wheel_requires_a_new_gesture_to_cross_page_boundary() {
+        use crate::cli::tui::app::paged_list::{PageBoundary, PagedListFocus};
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
 
-        assert!(sessions.remove_session_by_key(&key_b));
-        assert_eq!(sessions.rows.len(), 1);
-        // The cached snapshot drops the deleted session too, so a cache restore
-        // cannot resurrect it.
-        let cached = sessions.scan_cache.get("claude").unwrap();
-        assert_eq!(cached.rows.len(), 1);
-        assert!(cached.rows.iter().all(|s| session_key(s) != key_b));
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.focus = Focus::Content;
+        app.sessions.pane = SessionsPane::List;
+        app.sessions.loaded_once = true;
+        app.sessions.provider_id = Some("claude".to_string());
+        for i in 0..250 {
+            app.sessions.rows.push(session_meta(
+                "claude",
+                &format!("s{i}"),
+                "Title",
+                "/tmp/p",
+                &format!("/tmp/s{i}.jsonl"),
+                "claude --resume",
+            ));
+        }
+
+        let first = WheelGestureId::from_raw(1);
+        app.on_sessions_wheel(ScrollDirection::Down, 10_000, first, &data());
+        assert_eq!(app.sessions.selected_idx, 99);
+        assert_eq!(
+            app.sessions.pagination.focus(),
+            PagedListFocus::Boundary(PageBoundary::Next)
+        );
+
+        app.on_sessions_wheel(ScrollDirection::Down, 10_000, first, &data());
+        assert_eq!(app.sessions.selected_idx, 99);
+
+        let second = WheelGestureId::from_raw(2);
+        app.on_sessions_wheel(ScrollDirection::Down, 10_000, second, &data());
+        assert_eq!(app.sessions.selected_idx, 100);
+        assert!(app.sessions.pagination.is_row_focused());
+
+        // Remaining reports from the crossing gesture cannot move within the
+        // newly entered page, keeping its first row stable.
+        app.on_sessions_wheel(ScrollDirection::Down, 10_000, second, &data());
+        assert_eq!(app.sessions.selected_idx, 100);
+    }
+
+    #[test]
+    fn sessions_wheel_keeps_visible_selection_at_tombstone_page_edge() {
+        use crate::cli::tui::app::paged_list::{PageBoundary, PagedListFocus};
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.focus = Focus::Content;
+        app.sessions.pane = SessionsPane::List;
+        let _request_id = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+        let store = crate::session_manager::paged_manifest::PagedManifestStore::open_at(
+            manifest_dir.path(),
+        )
+        .expect("manifest fixture store");
+        let mut builder = store
+            .begin_build("claude")
+            .expect("manifest fixture builder");
+        for index in 0..101 {
+            builder
+                .push(session_meta(
+                    "claude",
+                    &format!("s{index}"),
+                    "Title",
+                    "/tmp/p",
+                    &format!("/tmp/s{index}.jsonl"),
+                    "claude --resume",
+                ))
+                .expect("manifest fixture row");
+        }
+        let published = builder.publish().expect("publish manifest fixture");
+        assert!(app.sessions.apply_opened_manifest(
+            scope_epoch,
+            "claude",
+            published.generation,
+            published.total_rows,
+            published.first_page.page_index,
+            published.first_page.rows,
+            published.reader,
+        ));
+        for _ in 0..10 {
+            let key = crate::cli::tui::app::session_key(&app.sessions.rows[0]);
+            assert!(app.sessions.remove_session_by_key(&key));
+        }
+        assert_eq!(app.sessions.rows.len(), 90);
+        app.sessions.selected_idx = 88;
+        app.sessions.pagination.select(88);
+        let last_key = crate::cli::tui::app::session_key(
+            app.sessions.rows.last().expect("last visible session"),
+        );
+        app.sessions.open_detail(last_key.clone());
+
+        app.on_sessions_wheel(
+            ScrollDirection::Down,
+            100,
+            WheelGestureId::from_raw(1),
+            &data(),
+        );
+
+        assert_eq!(app.sessions.pagination.selected_index(), Some(99));
+        assert_eq!(app.sessions.selected_idx, 89);
+        assert_eq!(
+            crate::cli::tui::app::session_key(&app.sessions.rows[app.sessions.selected_idx]),
+            last_key
+        );
+        assert_eq!(app.sessions.detail_key.as_deref(), Some(last_key.as_str()));
+        assert_eq!(
+            app.sessions.pagination.focus(),
+            PagedListFocus::Boundary(PageBoundary::Next)
+        );
+    }
+
+    #[test]
+    fn sessions_boundary_enter_crosses_without_opening_detail() {
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.focus = Focus::Content;
+        app.sessions.pane = SessionsPane::List;
+        let _ = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        let mut all_rows: Vec<_> = (0..101)
+            .map(|i| {
+                session_meta(
+                    "claude",
+                    &format!("s{i}"),
+                    "Title",
+                    "/tmp/p",
+                    &format!("/tmp/s{i}.jsonl"),
+                    "claude --resume",
+                )
+            })
+            .collect();
+        let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+        let store = crate::session_manager::paged_manifest::PagedManifestStore::open_at(
+            manifest_dir.path(),
+        )
+        .expect("manifest fixture store");
+        let mut builder = store
+            .begin_build("claude")
+            .expect("manifest fixture builder");
+        for row in all_rows.drain(..) {
+            builder.push(row).expect("manifest fixture row");
+        }
+        let published = builder.publish().expect("publish manifest fixture");
+        let reader = store
+            .open_generation("claude", &published.generation)
+            .expect("manifest fixture reader");
+        assert!(app.sessions.apply_opened_manifest(
+            scope_epoch,
+            "claude",
+            published.generation,
+            published.total_rows,
+            published.first_page.page_index,
+            published.first_page.rows,
+            reader,
+        ));
+
+        app.on_sessions_wheel(
+            ScrollDirection::Down,
+            1_000,
+            WheelGestureId::from_raw(1),
+            &data(),
+        );
+        let action = app.on_sessions_key(key(KeyCode::Enter), &data());
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.sessions.selected_idx, 99);
+        assert_eq!(app.sessions.remote.pending_cross_page(), Some(1));
+        assert!(app.sessions.remote.input_is_blocked());
+        assert_eq!(app.sessions.pane, SessionsPane::List);
+    }
+
+    #[test]
+    fn sessions_scope_toggle_does_not_discard_completed_state_before_stash() {
+        let mut app = app_with_session_page();
+        let data = UiData::default();
+
+        app.on_key(key(KeyCode::Char('a')), &data);
+        assert!(app.sessions.show_all_providers);
+        assert!(
+            app.sessions.loaded_once,
+            "the refresh scheduler must still be able to stash completed provider rows"
+        );
+
+        app.sessions.provider_id = Some("all".to_string());
+        app.on_key(key(KeyCode::Esc), &data);
+        assert!(!app.sessions.show_all_providers);
+        assert!(
+            app.sessions.loaded_once,
+            "leaving all-providers must preserve the completed all scope until it is stashed"
+        );
     }
 
     #[test]
@@ -14793,6 +14973,44 @@ mod tests {
     }
 
     #[test]
+    fn sessions_list_navigation_never_auto_loads_messages() {
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+        let mut app = app_with_session_page();
+        app.sessions.rows.push(session_meta(
+            "claude",
+            "session-2",
+            "Session Two",
+            "/tmp/project",
+            "/tmp/session-2.jsonl",
+            "claude --resume session-2",
+        ));
+        let data = UiData::default();
+
+        let down = app.on_key(key(KeyCode::Down), &data);
+        assert!(matches!(down, Action::None));
+        assert_eq!(app.sessions.selected_idx, 1);
+        assert!(app.sessions.detail_key.is_none());
+        assert!(!app.sessions.messages_loading);
+
+        app.sessions.selected_idx = 0;
+        app.sessions.pagination.select(0);
+        let page_down = app.on_key(key(KeyCode::PageDown), &data);
+        assert!(matches!(page_down, Action::None));
+        assert_eq!(app.sessions.selected_idx, 1);
+        assert!(app.sessions.detail_key.is_none());
+
+        app.sessions.selected_idx = 0;
+        app.sessions.pagination.select(0);
+        let wheel =
+            app.on_sessions_wheel(ScrollDirection::Down, 1, WheelGestureId::from_raw(1), &data);
+        assert!(matches!(wheel, Action::None));
+        assert_eq!(app.sessions.selected_idx, 1);
+        assert!(app.sessions.detail_key.is_none());
+        assert!(!app.sessions.messages_loading);
+    }
+
+    #[test]
     fn sessions_tab_keys_follow_same_focus_chain_as_arrows() {
         let mut app = app_with_session_page();
         let data = UiData::default();
@@ -14991,6 +15209,44 @@ mod tests {
     }
 
     #[test]
+    fn sessions_query_edit_and_clear_request_worker_cancellation() {
+        let mut app = app_with_session_page();
+        let data = UiData::default();
+        app.sessions.deep_search_query = Some("old".to_string());
+        app.sessions.deep_search_active = Some(7);
+
+        app.on_key(key(KeyCode::Char('/')), &data);
+        let edit_action = app.on_key(key(KeyCode::Char('n')), &data);
+        assert!(matches!(edit_action, Action::SessionsDeepSearchCancel));
+        assert_eq!(
+            app.sessions
+                .deep_search_pending
+                .as_ref()
+                .map(|(q, _)| q.as_str()),
+            Some("n")
+        );
+
+        let clear_action = app.on_key(key(KeyCode::Esc), &data);
+        assert!(matches!(clear_action, Action::SessionsDeepSearchCancel));
+        assert!(app.sessions.deep_search_pending.is_none());
+        assert!(app.sessions.deep_search_active.is_none());
+    }
+
+    #[test]
+    fn sessions_provider_scope_change_restarts_nonempty_deep_search() {
+        let mut app = app_with_session_page();
+        app.filter.input.set("needle");
+
+        let action = app.on_key(key(KeyCode::Char('a')), &UiData::default());
+
+        assert!(app.sessions.show_all_providers);
+        assert!(matches!(
+            action,
+            Action::SessionsDeepSearch { query } if query == "needle"
+        ));
+    }
+
+    #[test]
     fn sessions_delete_tracking_allows_out_of_order_completion() {
         let mut app = app_with_session_page();
         let alpha = session_meta(
@@ -15072,6 +15328,36 @@ mod tests {
     }
 
     #[test]
+    fn usage_range_switch_clears_the_previous_log_context() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Usage;
+        app.focus = Focus::Content;
+        let mut data = UiData::default();
+        data.usage.logs_total = 1;
+        data.usage.recent_logs.push(data::UsageLogRow {
+            request_id: "old-detail".to_string(),
+            ..data::UsageLogRow::default()
+        });
+        app.usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &data.usage.recent_logs,
+            data.usage.logs_total,
+        );
+        app.usage.remember_log_detail(
+            AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            data.usage.recent_logs[0].clone(),
+        );
+
+        app.on_key(key(KeyCode::Char('1')), &data);
+
+        assert_eq!(app.usage.range, data::UsageRangePreset::Today);
+        assert!(app.usage.log_detail_snapshot.is_none());
+        assert!(app.usage.log_pager.gate.is_empty());
+    }
+
+    #[test]
     fn usage_custom_range_submit_emits_action() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Usage;
@@ -15131,6 +15417,7 @@ mod tests {
         let mut data = UiData::default();
         data.usage.recent_logs.push(data::UsageLogRow {
             request_id: "req-usage-1".to_string(),
+            cursor_rowid: 101,
             ..data::UsageLogRow::default()
         });
 
@@ -15160,14 +15447,723 @@ mod tests {
         let action = app.on_key(key(KeyCode::Enter), &data);
         assert!(matches!(
             action,
-            Action::SwitchRoute(Route::UsageLogDetail { request_id })
-                if request_id == "req-usage-1"
+            Action::SwitchRoute(Route::UsageLogDetail { rowid }) if rowid == 101
         ));
-        assert!(matches!(
-            app.route,
-            Route::UsageLogDetail { ref request_id } if request_id == "req-usage-1"
-        ));
+        assert!(matches!(app.route, Route::UsageLogDetail { rowid: 101 }));
         assert_eq!(app.route_stack, vec![Route::Usage, Route::UsageLogs]);
+        assert_eq!(
+            app.usage
+                .log_detail_snapshot
+                .as_ref()
+                .and_then(|snapshot| {
+                    snapshot.row_for(&AppType::Claude, data::UsageRangePreset::SevenDays, 101)
+                })
+                .map(|row| row.request_id.as_str()),
+            Some("req-usage-1")
+        );
+        let snapshot = app
+            .usage
+            .log_detail_snapshot
+            .as_ref()
+            .expect("detail snapshot should exist");
+        assert!(snapshot
+            .row_for(&AppType::Codex, data::UsageRangePreset::SevenDays, 101,)
+            .is_none());
+        assert!(snapshot
+            .row_for(&AppType::Claude, data::UsageRangePreset::Today, 101,)
+            .is_none());
+    }
+
+    #[test]
+    fn usage_log_detail_refresh_targets_only_the_open_request() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::UsageLogDetail { rowid: 202 };
+        app.focus = Focus::Content;
+
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('r')), &UiData::default()),
+            Action::UsageLogDetailRefresh { rowid } if rowid == 202
+        ));
+    }
+
+    #[test]
+    fn usage_log_source_reset_keeps_gate_and_visible_selection_in_sync() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::UsageLogs;
+        app.focus = Focus::Content;
+        app.usage.pane = UsagePane::Recent;
+        let mut data = UiData::default();
+        data.usage.logs_total = 100;
+        data.usage.recent_logs = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("row-{index}"),
+                created_at: 1_000 - index,
+                cursor_rowid: index as i64 + 1,
+                ..data::UsageLogRow::default()
+            })
+            .collect();
+
+        app.usage.sync_log_pager(
+            &app.app_type,
+            app.usage.range,
+            &data.usage.recent_logs,
+            data.usage.logs_total,
+        );
+        app.usage.log_pager.gate.select(57);
+        app.usage.logs_idx = 57;
+
+        // A reload may keep the same count and cursor while changing joined
+        // provider metadata. Explicit invalidation must still reset both
+        // selection representations together.
+        app.usage.invalidate_log_pages();
+        app.usage.sync_log_pager(
+            &app.app_type,
+            app.usage.range,
+            &data.usage.recent_logs,
+            data.usage.logs_total,
+        );
+        assert_eq!(app.usage.log_pager.gate.selected_index(), Some(0));
+        assert_eq!(app.usage.logs_idx, 0);
+
+        let action = app.on_usage_logs_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::SwitchRoute(Route::UsageLogDetail { rowid }) if rowid == 1
+        ));
+    }
+
+    #[test]
+    fn usage_log_head_refresh_preserves_the_selected_request_anchor() {
+        let mut usage = UsageState::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("row-{index}"),
+                created_at: 1_000 - index,
+                cursor_rowid: index as i64 + 1,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            150,
+        );
+        usage.log_pager.gate.select(50);
+        usage.logs_idx = 50;
+
+        let mut refreshed = vec![data::UsageLogRow {
+            request_id: "new-head".to_string(),
+            created_at: 2_000,
+            cursor_rowid: 2_000,
+            ..data::UsageLogRow::default()
+        }];
+        refreshed.extend(first_page.into_iter().take(99));
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &refreshed,
+            151,
+        );
+
+        assert_eq!(usage.log_pager.gate.selected_index(), Some(51));
+        assert_eq!(usage.logs_idx, 51);
+        assert_eq!(
+            usage.log_pager.current_rows(&refreshed)[usage.logs_idx].request_id,
+            "row-50"
+        );
+    }
+
+    #[test]
+    fn usage_log_head_refresh_detects_content_changes_with_the_same_cursor_and_count() {
+        let mut usage = UsageState::default();
+        let first_page = vec![data::UsageLogRow {
+            request_id: "same-request".to_string(),
+            created_at: 1_000,
+            provider_name: Some("Old provider".to_string()),
+            total_cost_usd: 0.25,
+            error_message: Some("old error".to_string()),
+            ..data::UsageLogRow::default()
+        }];
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            1,
+        );
+
+        let mut refreshed = first_page.clone();
+        refreshed[0].provider_name = Some("New provider".to_string());
+        refreshed[0].total_cost_usd = 1.75;
+        refreshed[0].error_message = Some("new error".to_string());
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &refreshed,
+            1,
+        );
+
+        let row = &usage.log_pager.current_rows(&refreshed)[0];
+        assert_eq!(row.provider_name.as_deref(), Some("New provider"));
+        assert_eq!(row.total_cost_usd.to_bits(), 1.75_f64.to_bits());
+        assert_eq!(row.error_message.as_deref(), Some("new error"));
+    }
+
+    #[test]
+    fn usage_log_head_fingerprint_ignores_unbounded_string_suffixes() {
+        let mut pager = UsageLogPager::default();
+        let prefix = "x".repeat(128);
+        let first_page = vec![data::UsageLogRow {
+            request_id: "same-request".to_string(),
+            created_at: 1_000,
+            cursor_rowid: 1,
+            error_message: Some(format!("{prefix}{}", "a".repeat(100_000))),
+            error_message_truncated: true,
+            ..data::UsageLogRow::default()
+        }];
+        assert!(pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            1,
+        ));
+
+        let mut suffix_only_change = first_page.clone();
+        suffix_only_change[0].error_message = Some(format!("{prefix}{}", "b".repeat(100_000)));
+        assert!(!pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &suffix_only_change,
+            1,
+        ));
+
+        suffix_only_change[0].error_message = Some(format!("y{}", "b".repeat(100_127)));
+        assert!(pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &suffix_only_change,
+            1,
+        ));
+    }
+
+    #[test]
+    fn usage_log_head_refresh_keeps_a_later_page_snapshot_and_detail() {
+        let mut usage = UsageState::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("head-{index}"),
+                created_at: 1_000 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            200,
+        );
+        let later_row = data::UsageLogRow {
+            request_id: "later-detail".to_string(),
+            created_at: 500,
+            model: "old-model".to_string(),
+            cursor_rowid: 500,
+            ..data::UsageLogRow::default()
+        };
+        assert!(usage
+            .log_pager
+            .start_request(1, 7, data::UsageLogPageDirection::Older,));
+        assert!(usage.log_pager.finish_request(
+            1,
+            7,
+            data::UsageLogPageDirection::Older,
+            data::UsageLogPage {
+                rows: vec![later_row.clone()],
+                has_more: true,
+                next_cursor: Some(data::UsageLogCursor::from_row(&later_row)),
+                ..data::UsageLogPage::default()
+            },
+        ));
+        usage.log_pager.gate.select(100);
+        usage.remember_log_detail(
+            AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            later_row,
+        );
+
+        let mut refreshed_head = first_page.clone();
+        refreshed_head[0].model = "changed-head".to_string();
+        usage.sync_log_pager(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &refreshed_head,
+            200,
+        );
+
+        assert_eq!(usage.log_pager.current_page(), 1);
+        assert_eq!(
+            usage.log_pager.current_rows(&refreshed_head)[0].request_id,
+            "later-detail"
+        );
+        assert_eq!(
+            usage
+                .log_detail_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.row_for(
+                    &AppType::Claude,
+                    data::UsageRangePreset::SevenDays,
+                    500,
+                ))
+                .map(|row| row.model.as_str()),
+            Some("old-model")
+        );
+    }
+
+    #[test]
+    fn usage_logs_wait_for_prefetched_page_and_a_new_wheel_gesture() {
+        use crate::cli::tui::app::paged_list::{PageBoundary, PagedListFocus};
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::UsageLogs;
+        app.focus = Focus::Content;
+        app.usage.pane = UsagePane::Recent;
+        let mut data = UiData::default();
+        data.usage.logs_total = 205;
+        data.usage.recent_logs = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p0-{index}"),
+                created_at: 1_000 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect();
+
+        let first = WheelGestureId::from_raw(1);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, first, &data);
+        assert_eq!(app.usage.logs_idx, 99);
+        assert_eq!(
+            app.usage.log_pager.gate.focus(),
+            PagedListFocus::Boundary(PageBoundary::Next)
+        );
+
+        // A fresh gesture cannot expose a page that has not completed loading.
+        let waiting = WheelGestureId::from_raw(2);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, waiting, &data);
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        let page_rows = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p1-{index}"),
+                created_at: 899 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        let next_cursor = page_rows.last().map(data::UsageLogCursor::from_row);
+        assert!(app
+            .usage
+            .log_pager
+            .start_request(1, 7, data::UsageLogPageDirection::Older,));
+        assert!(app.usage.log_pager.finish_request(
+            1,
+            7,
+            data::UsageLogPageDirection::Older,
+            data::UsageLogPage {
+                rows: page_rows,
+                next_cursor,
+                has_more: true,
+                ..data::UsageLogPage::default()
+            },
+        ));
+
+        // If prefetch completes while the waiting gesture still has queued
+        // reports, those reports cannot consume the newly ready page.
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, waiting, &data);
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        let crossing = WheelGestureId::from_raw(3);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, crossing, &data);
+        assert_eq!(app.usage.log_pager.current_page(), 1);
+        assert_eq!(app.usage.logs_idx, 0);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, crossing, &data);
+        assert_eq!(app.usage.logs_idx, 0);
+
+        let action = app.on_usage_logs_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::SwitchRoute(Route::UsageLogDetail { rowid }) if rowid == 0
+        ));
+        app.usage.invalidate_log_pages();
+        app.usage.sync_log_pager(
+            &app.app_type,
+            app.usage.range,
+            &data.usage.recent_logs,
+            data.usage.logs_total,
+        );
+        assert!(app.usage.log_detail_snapshot.is_none());
+    }
+
+    #[test]
+    fn usage_logs_failed_boundary_needs_one_gesture_to_retry_and_another_to_cross() {
+        use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::UsageLogs;
+        app.focus = Focus::Content;
+        app.usage.pane = UsagePane::Recent;
+        let mut data = UiData::default();
+        data.usage.logs_total = 200;
+        data.usage.recent_logs = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p0-{index}"),
+                created_at: 1_000 - index,
+                cursor_rowid: index as i64 + 1,
+                ..data::UsageLogRow::default()
+            })
+            .collect();
+
+        app.on_usage_logs_wheel(
+            ScrollDirection::Down,
+            5_000,
+            WheelGestureId::from_raw(1),
+            &data,
+        );
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        assert!(app
+            .usage
+            .log_pager
+            .start_request(1, 7, data::UsageLogPageDirection::Older,));
+        let waiting = WheelGestureId::from_raw(2);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, waiting, &data);
+        assert!(app.usage.log_pager.fail_request(
+            1,
+            7,
+            data::UsageLogPageDirection::Older,
+            "offline".to_string(),
+        ));
+
+        // More reports from the gesture that first hit the pending boundary do
+        // not retry it and do not cross it.
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, waiting, &data);
+        assert_eq!(app.usage.log_pager.page_error(1), Some("offline"));
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        // A new gesture clears the error so the event loop can queue one retry,
+        // but that gesture remains blocked at the boundary.
+        let retry = WheelGestureId::from_raw(3);
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, retry, &data);
+        assert!(app.usage.log_pager.page_error(1).is_none());
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        let page_rows = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p1-{index}"),
+                created_at: 899 - index,
+                cursor_rowid: index as i64 + 101,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        assert!(app
+            .usage
+            .log_pager
+            .start_request(1, 8, data::UsageLogPageDirection::Older,));
+        assert!(app.usage.log_pager.finish_request(
+            1,
+            8,
+            data::UsageLogPageDirection::Older,
+            data::UsageLogPage {
+                next_cursor: page_rows.last().map(data::UsageLogCursor::from_row),
+                rows: page_rows,
+                has_more: false,
+                ..data::UsageLogPage::default()
+            },
+        ));
+        app.on_usage_logs_wheel(ScrollDirection::Down, 5_000, retry, &data);
+        assert_eq!(app.usage.log_pager.current_page(), 0);
+
+        app.on_usage_logs_wheel(
+            ScrollDirection::Down,
+            5_000,
+            WheelGestureId::from_raw(4),
+            &data,
+        );
+        assert_eq!(app.usage.log_pager.current_page(), 1);
+    }
+
+    #[test]
+    fn usage_log_pager_extends_an_underestimated_total_and_converges_at_the_end() {
+        let mut pager = UsageLogPager::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p0-{index}"),
+                created_at: 1_000 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            150,
+        );
+
+        let second_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p1-{index}"),
+                created_at: 899 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        let second_cursor = second_page.last().map(data::UsageLogCursor::from_row);
+        assert!(pager.start_request(1, 7, data::UsageLogPageDirection::Older,));
+        assert!(pager.finish_request(
+            1,
+            7,
+            data::UsageLogPageDirection::Older,
+            data::UsageLogPage {
+                rows: second_page,
+                next_cursor: second_cursor,
+                has_more: true,
+                ..data::UsageLogPage::default()
+            },
+        ));
+
+        assert_eq!(pager.gate.len(), 201);
+        assert_eq!(pager.gate.page_count(), 3);
+        // Cursor requests are deliberately adjacent-only: the pager keeps no
+        // O(page-count) cursor index for very large histories. Model the UI
+        // crossing onto the loaded second page before requesting its successor.
+        let _ = pager.gate.select(100);
+        assert!(pager.page_request(2).is_some());
+
+        let final_page = (0..20)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p2-{index}"),
+                created_at: 798 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        assert!(pager.start_request(2, 8, data::UsageLogPageDirection::Older,));
+        assert!(pager.finish_request(
+            2,
+            8,
+            data::UsageLogPageDirection::Older,
+            data::UsageLogPage {
+                rows: final_page,
+                next_cursor: None,
+                has_more: false,
+                ..data::UsageLogPage::default()
+            },
+        ));
+        assert_eq!(pager.gate.len(), 220);
+        assert_eq!(pager.gate.page_count(), 3);
+    }
+
+    #[test]
+    fn usage_log_pager_keeps_page_pending_and_error_state_bounded() {
+        let mut pager = UsageLogPager::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p0-{index}"),
+                created_at: 10_000 - index,
+                cursor_rowid: index as i64 + 1,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            10_000,
+        );
+
+        for page in 1..50 {
+            let request = pager.page_request(page).expect("adjacent page request");
+            assert_eq!(request.direction, data::UsageLogPageDirection::Older);
+            let request_id = page as u64;
+            assert!(pager.start_request(page, request_id, request.direction));
+            let rows = (0..100)
+                .map(|index| {
+                    let ordinal = page.saturating_mul(100).saturating_add(index);
+                    data::UsageLogRow {
+                        request_id: format!("p{page}-{index}"),
+                        created_at: 10_000 - ordinal as i64,
+                        cursor_rowid: ordinal as i64 + 1,
+                        ..data::UsageLogRow::default()
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert!(pager.finish_request(
+                page,
+                request_id,
+                request.direction,
+                data::UsageLogPage {
+                    next_cursor: rows.last().map(data::UsageLogCursor::from_row),
+                    rows,
+                    has_more: true,
+                    ..data::UsageLogPage::default()
+                },
+            ));
+            pager.gate.select(page.saturating_mul(100));
+
+            let (pages, lru, pending, errors) = pager.cache_metrics();
+            assert!(pages <= 2, "cached {pages} pages");
+            assert!(lru <= 2, "tracked {lru} LRU entries");
+            assert!(pending <= 2, "tracked {pending} pending pages");
+            assert!(errors <= 5, "tracked {errors} page errors");
+            assert!(
+                pager.retained_row_count(first_page.len(), true) <= 500,
+                "usage pager retained too many physical row copies"
+            );
+        }
+
+        assert!(pager.start_request(60, 60, data::UsageLogPageDirection::Older));
+        assert!(pager.start_request(61, 61, data::UsageLogPageDirection::Older));
+        assert!(!pager.start_request(62, 62, data::UsageLogPageDirection::Older));
+        assert_eq!(pager.cache_metrics().2, 2);
+        assert!(pager.fail_request(
+            60,
+            60,
+            data::UsageLogPageDirection::Older,
+            "first".to_string(),
+        ));
+        assert!(pager.fail_request(
+            61,
+            61,
+            data::UsageLogPageDirection::Older,
+            "second".to_string(),
+        ));
+        for page in 62..72 {
+            assert!(pager.start_request(page, page as u64, data::UsageLogPageDirection::Older,));
+            assert!(pager.fail_request(
+                page,
+                page as u64,
+                data::UsageLogPageDirection::Older,
+                format!("error-{page}"),
+            ));
+        }
+        assert!(pager.cache_metrics().3 <= 5);
+    }
+
+    #[test]
+    fn usage_log_prefetch_does_not_churn_an_evicted_previous_page() {
+        use crate::cli::tui::app::paged_list::{PageDirection, PagedListOutcome};
+
+        let mut pager = UsageLogPager::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                created_at: 1_000 - index,
+                cursor_rowid: index + 1,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            1_000,
+        );
+
+        for page in 1..=3 {
+            let request = pager.page_request(page).expect("adjacent page request");
+            let rows = (0..100)
+                .map(|index| {
+                    let ordinal = page * 100 + index;
+                    data::UsageLogRow {
+                        created_at: 1_000 - ordinal as i64,
+                        cursor_rowid: ordinal as i64 + 1,
+                        ..data::UsageLogRow::default()
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert!(pager.start_request(page, page as u64, request.direction));
+            assert!(pager.finish_request(
+                page,
+                page as u64,
+                request.direction,
+                data::UsageLogPage {
+                    next_cursor: rows.last().map(data::UsageLogCursor::from_row),
+                    rows,
+                    has_more: true,
+                    ..data::UsageLogPage::default()
+                },
+            ));
+            if page < 3 {
+                pager.gate.select(page * 100);
+            }
+        }
+
+        // Page 1 was evicted while page 2 remains visible and page 3 is ready.
+        // Idle prefetch must not alternate between pages 1 and 3 every tick.
+        assert_eq!(pager.current_page(), 2);
+        assert!(!pager.page_is_available(1));
+        assert!(pager.page_is_available(3));
+        assert_eq!(pager.preferred_prefetch_page(), None);
+
+        assert!(matches!(
+            pager.gate.line(PageDirection::Previous),
+            PagedListOutcome::BoundaryFocused { .. }
+        ));
+        assert_eq!(pager.preferred_prefetch_page(), Some(1));
+    }
+
+    #[test]
+    fn newer_usage_log_page_never_shrinks_the_known_total() {
+        let mut pager = UsageLogPager::default();
+        let first_page = vec![data::UsageLogRow {
+            request_id: "head".to_string(),
+            created_at: 1_000,
+            cursor_rowid: 1,
+            ..data::UsageLogRow::default()
+        }];
+        pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            500,
+        );
+        assert!(pager.start_request(1, 9, data::UsageLogPageDirection::Newer));
+        assert!(pager.finish_request(
+            1,
+            9,
+            data::UsageLogPageDirection::Newer,
+            data::UsageLogPage {
+                rows: vec![data::UsageLogRow {
+                    request_id: "newer".to_string(),
+                    created_at: 1_001,
+                    cursor_rowid: 2,
+                    ..data::UsageLogRow::default()
+                }],
+                next_cursor: None,
+                has_more: false,
+                ..data::UsageLogPage::default()
+            },
+        ));
+        assert_eq!(pager.gate.len(), 500);
+    }
+
+    #[test]
+    fn obsolete_usage_log_page_request_can_be_requeued_without_an_error() {
+        let mut pager = UsageLogPager::default();
+        let first_page = (0..100)
+            .map(|index| data::UsageLogRow {
+                request_id: format!("p0-{index}"),
+                created_at: 1_000 - index,
+                ..data::UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+        pager.sync_source(
+            &AppType::Claude,
+            data::UsageRangePreset::SevenDays,
+            &first_page,
+            205,
+        );
+        assert!(pager.start_request(1, 7, data::UsageLogPageDirection::Older,));
+
+        assert!(pager.cancel_request(1, 7, data::UsageLogPageDirection::Older,));
+        assert!(!pager.page_is_pending(1));
+        assert!(pager.page_error(1).is_none());
+        assert!(pager.page_request(1).is_some());
+        assert!(!pager.cancel_request(1, 7, data::UsageLogPageDirection::Older,));
     }
 
     #[test]

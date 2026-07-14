@@ -14,6 +14,7 @@ pub enum Action {
     SessionsDeepSearch {
         query: String,
     },
+    SessionsDeepSearchCancel,
     SessionMessagesLoad {
         key: String,
         provider_id: String,
@@ -119,6 +120,9 @@ pub enum Action {
     },
     UsageCustomRange {
         range: data::UsageCustomRange,
+    },
+    UsageLogDetailRefresh {
+        rowid: i64,
     },
     PricingDelete {
         model_id: String,

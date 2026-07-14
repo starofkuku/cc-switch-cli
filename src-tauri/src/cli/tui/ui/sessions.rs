@@ -13,12 +13,19 @@ pub(super) fn render_sessions(
         &app.filter,
         &app.app_type,
         app.sessions.show_all_providers,
+        app.sessions.provider_id.as_deref(),
         &app.sessions.rows,
         app.sessions.detail_key.as_deref(),
         app.sessions.messages_loaded,
         &app.sessions.messages,
         app.sessions.deep_search_query.as_deref(),
         &app.sessions.deep_search_results,
+        app.sessions
+            .materialized_query_is_current(app.filter.query_lower().as_deref()),
+        app.sessions.rows_revision,
+        app.sessions.messages_revision,
+        app.sessions.deep_search_seq,
+        &app.sessions.visibility_cache,
     );
 
     // Pane/list navigation is handled globally (arrows, h/l, Tab), so it is
@@ -53,10 +60,10 @@ pub(super) fn render_sessions(
         };
         format!(
             "{spinner} {}",
-            texts::tui_sessions_summary(app.sessions.rows.len(), visible.len())
+            texts::tui_sessions_summary(app.sessions.logical_total_rows(), visible.len())
         )
     } else {
-        texts::tui_sessions_summary(app.sessions.rows.len(), visible.len())
+        texts::tui_sessions_summary(app.sessions.logical_total_rows(), visible.len())
     };
     let frame_body = render_page_frame(
         frame,
@@ -80,11 +87,11 @@ pub(super) fn render_sessions(
 fn render_session_list(
     frame: &mut Frame<'_>,
     app: &App,
-    visible: &[&crate::session_manager::SessionMeta],
+    visible: &app::SessionRowsView<'_>,
     area: Rect,
     theme: &super::theme::Theme,
 ) {
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(session_pane_border_style(app, SessionsPane::List, theme))
@@ -92,6 +99,56 @@ fn render_session_list(
             " {} ",
             icons::strip_icon(texts::menu_manage_sessions())
         ));
+    let total_rows = app.sessions.logical_total_rows();
+    if !visible.is_empty() && total_rows > 0 {
+        let selected = app.sessions.selected_idx.min(visible.len() - 1);
+        let page = app.sessions.remote.current_page();
+        let page_start = page.saturating_mul(crate::session_manager::paged_manifest::PAGE_SIZE);
+        let page_end = page_start.saturating_add(visible.len()).saturating_sub(1);
+        let pending_page = app.sessions.remote.pending_cross_page();
+        let status = if let Some(target) = pending_page {
+            if app.sessions.remote.is_page_pending(target) {
+                PaginationFooterStatus::LoadingPage(target + 1)
+            } else {
+                PaginationFooterStatus::PreparingNext
+            }
+        } else if app.sessions.remote.failed_page().is_some() {
+            PaginationFooterStatus::LoadError
+        } else {
+            match app.sessions.pagination.focus() {
+                app::paged_list::PagedListFocus::Boundary(app::paged_list::PageBoundary::Next) => {
+                    PaginationFooterStatus::NextBoundary
+                }
+                app::paged_list::PagedListFocus::Boundary(
+                    app::paged_list::PageBoundary::Previous,
+                ) => PaginationFooterStatus::PreviousBoundary,
+                app::paged_list::PagedListFocus::Empty | app::paged_list::PagedListFocus::Row
+                    if page + 1
+                        == total_rows
+                            .div_ceil(crate::session_manager::paged_manifest::PAGE_SIZE)
+                        && selected == visible.len() - 1 =>
+                {
+                    PaginationFooterStatus::End
+                }
+                app::paged_list::PagedListFocus::Empty | app::paged_list::PagedListFocus::Row => {
+                    PaginationFooterStatus::Idle
+                }
+            }
+        };
+        block = with_pagination_footer(
+            block,
+            area.width,
+            PaginationFooter {
+                page: page + 1,
+                start: page_start + 1,
+                end: page_end + 1,
+                total: total_rows,
+                status,
+            },
+            theme,
+            app.tick,
+        );
+    }
     frame.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
@@ -107,20 +164,22 @@ fn render_session_list(
         return;
     }
 
-    if let Some(error) = app.sessions.last_error.as_deref() {
-        render_centered_lines(
-            frame,
-            inner,
-            vec![
-                Line::styled(
-                    texts::tui_sessions_error_title(),
-                    Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-                Line::styled(error.to_string(), Style::default().fg(theme.comment)),
-            ],
-        );
-        return;
+    if visible.is_empty() {
+        if let Some(error) = app.sessions.last_error.as_deref() {
+            render_centered_lines(
+                frame,
+                inner,
+                vec![
+                    Line::styled(
+                        texts::tui_sessions_error_title(),
+                        Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+                    ),
+                    Line::raw(""),
+                    Line::styled(error.to_string(), Style::default().fg(theme.comment)),
+                ],
+            );
+            return;
+        }
     }
 
     if visible.is_empty() {
@@ -163,39 +222,45 @@ fn render_session_list(
     // frame (O(n)); windowing keeps it O(viewport) even with thousands of rows.
     let total = visible.len();
     let selected = app.sessions.selected_idx.min(total.saturating_sub(1));
-    let start = message_window_start(total, selected, inner.height);
+    let page_start = 0;
+    let page_end = total;
+    let page_len = page_end.saturating_sub(page_start);
+    let start = page_start
+        + message_window_start(page_len, selected.saturating_sub(page_start), inner.height);
     let visible_rows = inner.height.saturating_sub(1).max(1) as usize;
-    let end = (start + visible_rows).min(total);
+    let end = (start + visible_rows).min(page_end);
 
-    let rows = visible[start..end].iter().map(|session| {
-        let title = session_title(session);
-        let time = session
-            .last_active_at
-            .or(session.created_at)
-            .map(|timestamp| format_relative_time(timestamp, app.sessions.time_anchor_ms))
-            .unwrap_or_else(|| texts::tui_na().to_string());
-        let project = session
-            .project_dir
-            .as_deref()
-            .map(path_basename)
-            .filter(|value| !value.is_empty());
-        let title_line = match project {
-            Some(project) => Line::from(vec![
-                Span::raw(title),
-                Span::styled(format!("  {project}"), Style::default().fg(theme.comment)),
-            ]),
-            None => Line::raw(title),
-        };
-        if show_all {
-            Row::new(vec![
-                Cell::from(session.provider_id.clone()),
-                Cell::from(title_line),
-                Cell::from(time),
-            ])
-        } else {
-            Row::new(vec![Cell::from(title_line), Cell::from(time)])
-        }
-    });
+    let rows = (start..end)
+        .filter_map(|index| visible.get(index))
+        .map(|session| {
+            let title = session_title(session);
+            let time = session
+                .last_active_at
+                .or(session.created_at)
+                .map(|timestamp| format_relative_time(timestamp, app.sessions.time_anchor_ms))
+                .unwrap_or_else(|| texts::tui_na().to_string());
+            let project = session
+                .project_dir
+                .as_deref()
+                .map(path_basename)
+                .filter(|value| !value.is_empty());
+            let title_line = match project {
+                Some(project) => Line::from(vec![
+                    Span::raw(title),
+                    Span::styled(format!("  {project}"), Style::default().fg(theme.comment)),
+                ]),
+                None => Line::raw(title),
+            };
+            if show_all {
+                Row::new(vec![
+                    Cell::from(session.provider_id.clone()),
+                    Cell::from(title_line),
+                    Cell::from(time),
+                ])
+            } else {
+                Row::new(vec![Cell::from(title_line), Cell::from(time)])
+            }
+        });
 
     let table = if show_all {
         Table::new(
@@ -217,14 +282,16 @@ fn render_session_list(
     // The rows are pre-sliced to the window, so the highlight index is relative
     // to `start`.
     let mut state = TableState::default();
-    state.select(Some(selected - start));
+    if app.sessions.pagination.is_row_focused() {
+        state.select(Some(selected - start));
+    }
     frame.render_stateful_widget(table, inset_left(inner, CONTENT_INSET_LEFT), &mut state);
 }
 
 fn render_session_detail(
     frame: &mut Frame<'_>,
     app: &App,
-    visible: &[&crate::session_manager::SessionMeta],
+    visible: &app::SessionRowsView<'_>,
     area: Rect,
     theme: &super::theme::Theme,
 ) {
@@ -329,7 +396,10 @@ fn render_session_messages(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(session_pane_border_style(app, SessionsPane::Detail, theme))
-        .title(format!(" {} ", texts::tui_sessions_messages_title()));
+        .title(format!(
+            " {} ",
+            texts::tui_sessions_messages_preview_title(app.sessions.messages_truncated)
+        ));
     frame.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
@@ -441,18 +511,19 @@ fn session_pane_border_style(app: &App, pane: SessionsPane, theme: &super::theme
 
 fn selected_session<'a>(
     app: &App,
-    visible: &'a [&'a crate::session_manager::SessionMeta],
+    visible: &app::SessionRowsView<'a>,
 ) -> Option<&'a crate::session_manager::SessionMeta> {
-    app.sessions
-        .detail_key
-        .as_deref()
-        .and_then(|key| {
-            visible
-                .iter()
-                .copied()
-                .find(|session| app::session_key(session) == key)
-        })
-        .or_else(|| visible.get(app.sessions.selected_idx).copied())
+    let selected = visible.get(app.sessions.selected_idx);
+    let Some(key) = app.sessions.detail_key.as_deref() else {
+        return selected;
+    };
+    if selected.is_some_and(|session| app::session_key_matches(session, key)) {
+        return selected;
+    }
+    visible
+        .iter()
+        .find(|session| app::session_key_matches(session, key))
+        .or(selected)
 }
 
 fn render_centered_lines(frame: &mut Frame<'_>, area: Rect, content_lines: Vec<Line<'static>>) {
@@ -534,13 +605,49 @@ fn format_relative_time(timestamp_ms: i64, now_ms: i64) -> String {
 }
 
 fn collapse_message_preview(content: &str) -> String {
-    let single_line = content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    truncate_to_display_width(&single_line, 120)
+    const DISPLAY_LIMIT: usize = 120;
+
+    let mut preview = String::with_capacity(128);
+    let mut display_width = 0usize;
+    let mut pending_space = false;
+    let mut truncated = false;
+
+    for ch in content.chars() {
+        if ch.is_whitespace() {
+            pending_space |= !preview.is_empty();
+            continue;
+        }
+
+        let separator_width = usize::from(pending_space && !preview.is_empty());
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if display_width
+            .saturating_add(separator_width)
+            .saturating_add(char_width)
+            > DISPLAY_LIMIT
+        {
+            truncated = true;
+            break;
+        }
+        if separator_width != 0 {
+            preview.push(' ');
+            display_width += 1;
+        }
+        preview.push(ch);
+        display_width = display_width.saturating_add(char_width);
+        pending_space = false;
+    }
+
+    if truncated {
+        while display_width.saturating_add(1) > DISPLAY_LIMIT {
+            let Some(last) = preview.pop() else {
+                break;
+            };
+            display_width =
+                display_width.saturating_sub(UnicodeWidthChar::width(last).unwrap_or(0));
+        }
+        preview.push('…');
+    }
+    preview
 }
 
 fn message_window_start(total: usize, selected: usize, height: u16) -> usize {
@@ -554,23 +661,21 @@ fn message_window_start(total: usize, selected: usize, height: u16) -> usize {
 }
 
 fn selected_message_visible_index(
-    messages: &[(usize, &crate::session_manager::SessionMessage)],
+    messages: &app::SessionMessagesView<'_>,
     selected: usize,
 ) -> Option<usize> {
-    messages
-        .iter()
-        .position(|(message_idx, _)| *message_idx == selected)
+    messages.visible_index_of(selected)
 }
 
 fn visible_message_window<'a>(
-    messages: &'a [(usize, &'a crate::session_manager::SessionMessage)],
+    messages: &'a app::SessionMessagesView<'a>,
     selected: usize,
     height: u16,
 ) -> impl Iterator<Item = (usize, &'a crate::session_manager::SessionMessage)> + 'a {
     let visible_rows = height.saturating_sub(1).max(1) as usize;
     let start = message_window_start(messages.len(), selected, height);
     let end = (start + visible_rows).min(messages.len());
-    messages[start..end].iter().copied()
+    (start..end).filter_map(|index| messages.get(index))
 }
 
 #[cfg(test)]

@@ -160,8 +160,8 @@ fn render_content(
         Route::Providers => render_providers(frame, app, data, content_area, theme),
         Route::Usage => render_usage(frame, app, data, content_area, theme),
         Route::UsageLogs => render_usage_logs(frame, app, data, content_area, theme),
-        Route::UsageLogDetail { request_id } => {
-            render_usage_log_detail(frame, app, data, content_area, theme, request_id)
+        Route::UsageLogDetail { rowid } => {
+            render_usage_log_detail(frame, app, data, content_area, theme, *rowid)
         }
         Route::Pricing => render_pricing(frame, app, data, content_area, theme),
         Route::Sessions => render_sessions(frame, app, data, content_area, theme),

@@ -8339,6 +8339,22 @@ pub mod texts {
         title
     }
 
+    pub fn tui_sessions_messages_preview_title(truncated: bool) -> String {
+        let mut title = if is_chinese() {
+            "消息 · 有界预览".to_string()
+        } else {
+            "Messages · Bounded preview".to_string()
+        };
+        if truncated {
+            title.push_str(if is_chinese() {
+                " · 已截断"
+            } else {
+                " · Truncated"
+            });
+        }
+        title
+    }
+
     pub fn tui_sessions_empty_title() -> &'static str {
         if is_chinese() {
             "未找到本地会话"
@@ -8382,6 +8398,115 @@ pub mod texts {
             "正在扫描本地会话…"
         } else {
             "Scanning local sessions…"
+        }
+    }
+
+    pub fn tui_pagination_range(page: usize, start: usize, end: usize, total: usize) -> String {
+        if is_chinese() {
+            format!("第 {page} 页 · {start}–{end} / {total}")
+        } else {
+            format!("Page {page} · {start}–{end} of {total}")
+        }
+    }
+
+    pub fn tui_pagination_range_compact(
+        page: usize,
+        start: usize,
+        end: usize,
+        total: usize,
+    ) -> String {
+        if is_chinese() {
+            format!("{page} 页 · {start}–{end}/{total}")
+        } else {
+            format!("P{page} · {start}–{end}/{total}")
+        }
+    }
+
+    pub fn tui_pagination_next_trigger() -> &'static str {
+        if is_chinese() {
+            "↓ 再次下滚 / PgDn / Enter：下一页"
+        } else {
+            "↓ Scroll again / PgDn / Enter: next page"
+        }
+    }
+
+    pub fn tui_pagination_next_trigger_compact() -> &'static str {
+        if is_chinese() {
+            "↓ 下一页 · Enter"
+        } else {
+            "↓ Next page · Enter"
+        }
+    }
+
+    pub fn tui_pagination_next_trigger_minimal() -> &'static str {
+        if is_chinese() {
+            "↓ 下一页"
+        } else {
+            "↓ Next"
+        }
+    }
+
+    pub fn tui_pagination_previous_trigger() -> &'static str {
+        if is_chinese() {
+            "↑ 再次上滚 / PgUp / Enter：上一页"
+        } else {
+            "↑ Scroll again / PgUp / Enter: previous page"
+        }
+    }
+
+    pub fn tui_pagination_previous_trigger_compact() -> &'static str {
+        if is_chinese() {
+            "↑ 上一页 · Enter"
+        } else {
+            "↑ Previous · Enter"
+        }
+    }
+
+    pub fn tui_pagination_previous_trigger_minimal() -> &'static str {
+        if is_chinese() {
+            "↑ 上一页"
+        } else {
+            "↑ Previous"
+        }
+    }
+
+    pub fn tui_pagination_preparing_next() -> &'static str {
+        if is_chinese() {
+            "正在准备下一页…"
+        } else {
+            "Preparing next page…"
+        }
+    }
+
+    pub fn tui_pagination_next_ready() -> &'static str {
+        if is_chinese() {
+            "下一页已就绪"
+        } else {
+            "Next page ready"
+        }
+    }
+
+    pub fn tui_pagination_loading_page(page: usize) -> String {
+        if is_chinese() {
+            format!("正在加载第 {page} 页…")
+        } else {
+            format!("Loading page {page}…")
+        }
+    }
+
+    pub fn tui_pagination_load_failed() -> &'static str {
+        if is_chinese() {
+            "加载失败 · Enter 重试"
+        } else {
+            "Load failed · Enter to retry"
+        }
+    }
+
+    pub fn tui_pagination_end(total: usize) -> String {
+        if is_chinese() {
+            format!("已到末尾 · 共 {total} 条")
+        } else {
+            format!("End of list · {total} total")
         }
     }
 

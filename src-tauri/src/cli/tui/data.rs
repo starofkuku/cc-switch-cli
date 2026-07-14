@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{Days, Local, NaiveDate, TimeZone};
 use indexmap::IndexMap;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde_json::Value;
 
@@ -558,7 +558,73 @@ pub struct UsageLogRow {
     pub provider_type: Option<String>,
     pub is_streaming: bool,
     pub error_message: Option<String>,
+    /// True when the database value exceeded the bounded TUI projection.
+    /// The complete value remains in SQLite; list/detail reads never materialize
+    /// it in the interactive process.
+    pub error_message_truncated: bool,
     pub data_source: Option<String>,
+    /// Bitset identifying bounded text projections whose database value was
+    /// longer than the value retained by the TUI.
+    pub(crate) text_truncation: u16,
+    /// Stable SQLite row identity used only by the schema-free keyset pager.
+    /// `proxy_request_logs` is a normal rowid table, and the existing
+    /// `(app_type, created_at DESC)` index carries rowid as its final key.
+    pub(crate) cursor_rowid: i64,
+}
+
+pub(crate) const USAGE_LOG_PAGE_SIZE: usize = 100;
+pub(crate) const USAGE_LOG_ERROR_MESSAGE_MAX_CHARS: usize = 4_096;
+pub(crate) const USAGE_TEXT_MAX_CHARS: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub(crate) enum UsageLogTextField {
+    RequestId,
+    AppType,
+    ProviderId,
+    ProviderName,
+    Model,
+    RequestModel,
+    SessionId,
+    ProviderType,
+    DataSource,
+}
+
+impl UsageLogTextField {
+    const fn mask(self) -> u16 {
+        1 << self as u16
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum UsageLogPageDirection {
+    /// Rows older than the current page, in the normal newest-to-oldest order.
+    Older,
+    /// Rows newer than the current page. The SQL query runs in reverse index
+    /// order and the worker reverses the bounded result before publishing it.
+    Newer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UsageLogCursor {
+    pub created_at: i64,
+    pub rowid: i64,
+}
+
+impl UsageLogCursor {
+    pub(crate) fn from_row(row: &UsageLogRow) -> Self {
+        Self {
+            created_at: row.created_at,
+            rowid: row.cursor_rowid,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UsageLogPage {
+    pub rows: Vec<UsageLogRow>,
+    pub next_cursor: Option<UsageLogCursor>,
+    pub has_more: bool,
 }
 
 impl UsageLogRow {
@@ -575,6 +641,14 @@ impl UsageLogRow {
 
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status_code)
+    }
+
+    pub(crate) fn text_was_truncated(&self, field: UsageLogTextField) -> bool {
+        self.text_truncation & field.mask() != 0
+    }
+
+    pub(crate) fn text_truncation_mask(&self) -> u16 {
+        self.text_truncation
     }
 }
 
@@ -703,7 +777,9 @@ impl UsageSnapshot {
         self.logs_total_custom = 0;
     }
 
-    pub(crate) fn merge_range(&mut self, range: UsageRangePreset, loaded: UsageSnapshot) {
+    pub(crate) fn merge_range(&mut self, range: UsageRangePreset, mut loaded: UsageSnapshot) {
+        loaded.recent_logs.truncate(USAGE_LOG_PAGE_SIZE);
+        loaded.recent_logs_custom.truncate(USAGE_LOG_PAGE_SIZE);
         match range {
             UsageRangePreset::Custom(custom_range) => {
                 self.custom_range = loaded.custom_range.or(Some(custom_range));
@@ -733,6 +809,63 @@ impl UsageSnapshot {
                 self.top_models_custom = top_models_custom;
                 self.recent_logs_custom = recent_logs_custom;
                 self.logs_total_custom = logs_total_custom;
+            }
+        }
+    }
+
+    /// Publish the first log page without waiting for the more expensive
+    /// aggregate queries. Until the exact count arrives, `has_more` contributes
+    /// one virtual row so the pager can expose a next-page boundary.
+    pub(crate) fn merge_log_head(&mut self, range: UsageRangePreset, page: UsageLogPage) {
+        self.merge_log_head_with_total_policy(range, page, false);
+    }
+
+    /// Merge a fast log head that completed after its matching aggregate.
+    ///
+    /// The aggregate owns the exact total. A late head still owns fresher row
+    /// content, but its `rows + has_more` count is only a lower bound and must
+    /// not downgrade that exact value.
+    pub(crate) fn merge_log_head_preserving_exact_total(
+        &mut self,
+        range: UsageRangePreset,
+        page: UsageLogPage,
+    ) {
+        self.merge_log_head_with_total_policy(range, page, true);
+    }
+
+    fn merge_log_head_with_total_policy(
+        &mut self,
+        range: UsageRangePreset,
+        mut page: UsageLogPage,
+        preserve_exact_total: bool,
+    ) {
+        if page.rows.len() > USAGE_LOG_PAGE_SIZE {
+            page.rows.truncate(USAGE_LOG_PAGE_SIZE);
+            page.has_more = true;
+        }
+        let lower_bound = u64::try_from(page.rows.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::from(page.has_more));
+
+        match range {
+            UsageRangePreset::Custom(custom_range) => {
+                self.custom_range = Some(custom_range);
+                self.recent_logs_custom = page.rows;
+                self.logs_total_custom = if preserve_exact_total {
+                    self.logs_total_custom.max(lower_bound)
+                } else {
+                    lower_bound
+                };
+            }
+            UsageRangePreset::Today
+            | UsageRangePreset::SevenDays
+            | UsageRangePreset::ThirtyDays => {
+                self.recent_logs = page.rows;
+                self.logs_total = if preserve_exact_total {
+                    self.logs_total.max(lower_bound)
+                } else {
+                    lower_bound
+                };
             }
         }
     }
@@ -1013,6 +1146,67 @@ pub(crate) fn load_usage_pricing_data_from_state_for_range(
         usage: load_usage_snapshot_for_range(state, app_type, range)?,
         pricing,
     })
+}
+
+pub(crate) fn load_usage_log_page_from_state(
+    state: &AppState,
+    app_type: &AppType,
+    range: UsageRangePreset,
+    cursor: Option<&UsageLogCursor>,
+    direction: UsageLogPageDirection,
+    limit: usize,
+) -> Result<UsageLogPage, AppError> {
+    load_usage_log_page_from_database(&state.db, app_type, range, cursor, direction, limit)
+}
+
+pub(crate) fn load_usage_log_page_from_database(
+    db: &crate::Database,
+    app_type: &AppType,
+    range: UsageRangePreset,
+    cursor: Option<&UsageLogCursor>,
+    direction: UsageLogPageDirection,
+    limit: usize,
+) -> Result<UsageLogPage, AppError> {
+    let log_range = match range {
+        UsageRangePreset::Custom(custom) => Some((custom.start, custom.end)),
+        UsageRangePreset::Today | UsageRangePreset::SevenDays | UsageRangePreset::ThirtyDays => {
+            None
+        }
+    };
+    let conn = lock_conn!(db.conn);
+    load_usage_log_page(
+        &conn,
+        app_type.as_str(),
+        log_range,
+        cursor,
+        direction,
+        limit,
+    )
+}
+
+pub(crate) fn load_usage_log_detail_from_state(
+    state: &AppState,
+    app_type: &AppType,
+    range: UsageRangePreset,
+    rowid: i64,
+) -> Result<Option<UsageLogRow>, AppError> {
+    load_usage_log_detail_from_database(&state.db, app_type, range, rowid)
+}
+
+pub(crate) fn load_usage_log_detail_from_database(
+    db: &crate::Database,
+    app_type: &AppType,
+    range: UsageRangePreset,
+    rowid: i64,
+) -> Result<Option<UsageLogRow>, AppError> {
+    let log_range = match range {
+        UsageRangePreset::Custom(custom) => Some((custom.start, custom.end)),
+        UsageRangePreset::Today | UsageRangePreset::SevenDays | UsageRangePreset::ThirtyDays => {
+            None
+        }
+    };
+    let conn = lock_conn!(db.conn);
+    load_usage_log_detail(&conn, app_type.as_str(), log_range, rowid)
 }
 
 pub(crate) fn provider_display_name(app_type: &AppType, row: &ProviderRow) -> String {
@@ -1767,17 +1961,18 @@ fn load_model_pricing_snapshot_from_conn(
     thirty_start: i64,
     now: i64,
 ) -> Result<ModelPricingSnapshot, AppError> {
-    let mut pricing_stmt = conn.prepare(
+    let mut pricing_stmt = conn.prepare(&format!(
         "SELECT
-            model_id,
-            display_name,
-            input_cost_per_million,
-            output_cost_per_million,
-            cache_read_cost_per_million,
-            cache_creation_cost_per_million
+            substr(CAST(model_id AS TEXT), 1, {text_limit}),
+            substr(CAST(display_name AS TEXT), 1, {text_limit}),
+            substr(CAST(input_cost_per_million AS TEXT), 1, {text_limit}),
+            substr(CAST(output_cost_per_million AS TEXT), 1, {text_limit}),
+            substr(CAST(cache_read_cost_per_million AS TEXT), 1, {text_limit}),
+            substr(CAST(cache_creation_cost_per_million AS TEXT), 1, {text_limit})
          FROM model_pricing
          ORDER BY LOWER(model_id)",
-    )?;
+        text_limit = USAGE_TEXT_MAX_CHARS,
+    ))?;
 
     let rows = pricing_stmt.query_map([], |row| {
         Ok(ModelPricingRow {
@@ -1804,9 +1999,9 @@ fn load_model_pricing_snapshot_from_conn(
     let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
     let mut recent_stmt = conn.prepare(&format!(
         "SELECT
-            COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS response_model,
-            NULLIF(TRIM(l.request_model), '') AS request_model,
-            COALESCE(NULLIF(TRIM(l.cost_multiplier), ''), '1') AS cost_multiplier,
+            substr(CAST(COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS TEXT), 1, {text_limit}) AS response_model,
+            substr(CAST(NULLIF(TRIM(l.request_model), '') AS TEXT), 1, {text_limit}) AS request_model,
+            substr(CAST(COALESCE(NULLIF(TRIM(l.cost_multiplier), ''), '1') AS TEXT), 1, {text_limit}) AS cost_multiplier,
             COUNT(*) AS request_count,
             COALESCE(SUM({total_tokens_expr}), 0) AS total_tokens,
             COALESCE(SUM(l.input_tokens), 0) AS input_tokens,
@@ -1818,7 +2013,11 @@ fn load_model_pricing_snapshot_from_conn(
             FROM proxy_request_logs l
             WHERE l.app_type = ?1 AND l.created_at >= ?2 AND l.created_at <= ?3
               AND {effective_filter}
-            GROUP BY response_model, request_model, cost_multiplier",
+            GROUP BY
+                COALESCE(NULLIF(TRIM(l.model), ''), 'unknown'),
+                NULLIF(TRIM(l.request_model), ''),
+                COALESCE(NULLIF(TRIM(l.cost_multiplier), ''), '1')",
+        text_limit = USAGE_TEXT_MAX_CHARS,
     ))?;
     let recent_rows = recent_stmt.query_map(params![app_key, thirty_start, now], |row| {
         Ok(RecentPricingUsageRow {
@@ -2217,8 +2416,12 @@ fn load_usage_top_providers(
     let provider_name_expr = usage_provider_name_sql("l", "p");
     let mut stmt = conn.prepare(&format!(
         "SELECT
-            l.provider_id,
-            {provider_name_expr},
+            CASE WHEN substr(CAST(l.provider_id AS TEXT), {text_probe}, 1) <> ''
+                THEN substr(CAST(l.provider_id AS TEXT), 1, {marked_limit}) || '…'
+                ELSE substr(CAST(l.provider_id AS TEXT), 1, {text_limit}) END,
+            CASE WHEN substr(CAST({provider_name_expr} AS TEXT), {text_probe}, 1) <> ''
+                THEN substr(CAST({provider_name_expr} AS TEXT), 1, {marked_limit}) || '…'
+                ELSE substr(CAST({provider_name_expr} AS TEXT), 1, {text_limit}) END,
             COUNT(*),
             COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM({total_tokens_expr}), 0),
@@ -2230,7 +2433,10 @@ fn load_usage_top_providers(
            AND {effective_filter}
          GROUP BY l.provider_id, p.name
          ORDER BY COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0.0) DESC, COUNT(*) DESC
-         LIMIT 8",
+        LIMIT 8",
+        text_limit = USAGE_TEXT_MAX_CHARS,
+        text_probe = USAGE_TEXT_MAX_CHARS.saturating_add(1),
+        marked_limit = USAGE_TEXT_MAX_CHARS.saturating_sub(1),
     ))?;
 
     let rows = stmt.query_map(params![app_key, start, end], |row| {
@@ -2258,7 +2464,11 @@ fn load_usage_top_models(
     let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
     let mut stmt = conn.prepare(&format!(
         "SELECT
-            COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS model_name,
+            CASE
+                WHEN substr(CAST(COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS TEXT), {text_probe}, 1) <> ''
+                THEN substr(CAST(COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS TEXT), 1, {marked_limit}) || '…'
+                ELSE substr(CAST(COALESCE(NULLIF(TRIM(l.model), ''), 'unknown') AS TEXT), 1, {text_limit})
+            END AS model_name,
             COUNT(*),
             COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM({total_tokens_expr}), 0),
@@ -2267,9 +2477,12 @@ fn load_usage_top_models(
          FROM proxy_request_logs l
          WHERE l.app_type = ?1 AND l.created_at >= ?2 AND l.created_at <= ?3
            AND {effective_filter}
-         GROUP BY model_name
+         GROUP BY COALESCE(NULLIF(TRIM(l.model), ''), 'unknown')
          ORDER BY COALESCE(SUM(CAST(l.total_cost_usd AS REAL)), 0.0) DESC, COUNT(*) DESC
-         LIMIT 8",
+        LIMIT 8",
+        text_limit = USAGE_TEXT_MAX_CHARS,
+        text_probe = USAGE_TEXT_MAX_CHARS.saturating_add(1),
+        marked_limit = USAGE_TEXT_MAX_CHARS.saturating_sub(1),
     ))?;
 
     let rows = stmt.query_map(params![app_key, start, end], |row| {
@@ -2292,17 +2505,169 @@ fn load_usage_recent_logs(
     range: Option<(i64, i64)>,
     limit: u16,
 ) -> Result<Vec<UsageLogRow>, AppError> {
+    Ok(load_usage_log_page(
+        conn,
+        app_key,
+        range,
+        None,
+        UsageLogPageDirection::Older,
+        usize::from(limit),
+    )?
+    .rows)
+}
+
+fn load_usage_log_page(
+    conn: &rusqlite::Connection,
+    app_key: &str,
+    range: Option<(i64, i64)>,
+    cursor: Option<&UsageLogCursor>,
+    direction: UsageLogPageDirection,
+    limit: usize,
+) -> Result<UsageLogPage, AppError> {
+    let limit = limit.min(USAGE_LOG_PAGE_SIZE);
+    let query_limit = limit.saturating_add(1);
+    let mut rows = Vec::with_capacity(query_limit);
+    match cursor {
+        Some(cursor) => {
+            let same_timestamp = build_usage_log_page_query(
+                app_key,
+                range,
+                Some(cursor),
+                direction,
+                UsageLogSeekPart::SameTimestamp,
+                query_limit,
+            );
+            append_usage_log_query_rows(conn, same_timestamp, &mut rows)?;
+
+            let remaining = query_limit.saturating_sub(rows.len());
+            if remaining > 0 {
+                let cross_timestamp = build_usage_log_page_query(
+                    app_key,
+                    range,
+                    Some(cursor),
+                    direction,
+                    UsageLogSeekPart::CrossTimestamp,
+                    remaining,
+                );
+                append_usage_log_query_rows(conn, cross_timestamp, &mut rows)?;
+            }
+        }
+        None => {
+            let head = build_usage_log_page_query(
+                app_key,
+                range,
+                None,
+                direction,
+                UsageLogSeekPart::Head,
+                query_limit,
+            );
+            append_usage_log_query_rows(conn, head, &mut rows)?;
+        }
+    }
+    let has_more = rows.len() > limit;
+    if has_more {
+        rows.truncate(limit);
+    }
+    if matches!(direction, UsageLogPageDirection::Newer) {
+        rows.reverse();
+    }
+    let next_cursor = match direction {
+        UsageLogPageDirection::Older => rows.last(),
+        UsageLogPageDirection::Newer => rows.first(),
+    }
+    .map(UsageLogCursor::from_row);
+    Ok(UsageLogPage {
+        rows,
+        next_cursor,
+        has_more,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsageLogSeekPart {
+    Head,
+    SameTimestamp,
+    CrossTimestamp,
+}
+
+type UsageLogSqlQuery = (String, Vec<rusqlite::types::Value>);
+
+fn append_usage_log_query_rows(
+    conn: &rusqlite::Connection,
+    (sql, values): UsageLogSqlQuery,
+    rows: &mut Vec<UsageLogRow>,
+) -> Result<(), AppError> {
+    let mut stmt = conn.prepare(&sql)?;
+    let mapped = stmt.query_map(rusqlite::params_from_iter(values), usage_log_row_from_sql)?;
+    for row in mapped {
+        rows.push(row?);
+    }
+    Ok(())
+}
+
+fn build_usage_log_page_query(
+    app_key: &str,
+    range: Option<(i64, i64)>,
+    cursor: Option<&UsageLogCursor>,
+    direction: UsageLogPageDirection,
+    part: UsageLogSeekPart,
+    limit: usize,
+) -> UsageLogSqlQuery {
     let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
     let provider_name_expr = usage_provider_name_sql("l", "p");
+    let mut filters = vec!["l.app_type = ?".to_string()];
+    let mut values = vec![rusqlite::types::Value::Text(app_key.to_string())];
+
+    if let Some((start, end)) = range {
+        filters.push("l.created_at >= ? AND l.created_at <= ?".to_string());
+        values.push(rusqlite::types::Value::Integer(start));
+        values.push(rusqlite::types::Value::Integer(end));
+    }
+    match (part, cursor) {
+        (UsageLogSeekPart::Head, None) => {}
+        (UsageLogSeekPart::SameTimestamp, Some(cursor)) => {
+            let comparator = match direction {
+                UsageLogPageDirection::Older => ">",
+                UsageLogPageDirection::Newer => "<",
+            };
+            filters.push(format!("l.created_at = ? AND l.rowid {comparator} ?"));
+            values.push(rusqlite::types::Value::Integer(cursor.created_at));
+            values.push(rusqlite::types::Value::Integer(cursor.rowid));
+        }
+        (UsageLogSeekPart::CrossTimestamp, Some(cursor)) => {
+            let comparator = match direction {
+                UsageLogPageDirection::Older => "<",
+                UsageLogPageDirection::Newer => ">",
+            };
+            filters.push(format!("l.created_at {comparator} ?"));
+            values.push(rusqlite::types::Value::Integer(cursor.created_at));
+        }
+        _ => unreachable!("usage log seek part must match cursor presence"),
+    }
+    filters.push(effective_filter);
+    let query_limit = limit.min(USAGE_LOG_PAGE_SIZE.saturating_add(1)) as i64;
+    values.push(rusqlite::types::Value::Integer(query_limit));
+
+    // SQLite stores rowid as the implicit final field of every ordinary index.
+    // These two orders are exact forward/reverse scans of the existing
+    // `(app_type, created_at DESC)` index, including arbitrarily large timestamp
+    // ties, so paging never needs a temporary sort or a schema change.
+    let order = match (part, direction) {
+        (UsageLogSeekPart::SameTimestamp, UsageLogPageDirection::Older) => "l.rowid ASC",
+        (UsageLogSeekPart::SameTimestamp, UsageLogPageDirection::Newer) => "l.rowid DESC",
+        (_, UsageLogPageDirection::Older) => "l.created_at DESC, l.rowid ASC",
+        (_, UsageLogPageDirection::Newer) => "l.created_at ASC, l.rowid DESC",
+    };
+
     let sql = format!(
         "SELECT
-            l.request_id,
+            substr(CAST(l.request_id AS TEXT), 1, {text_limit}),
             l.created_at,
-            l.app_type,
-            l.provider_id,
-            {provider_name_expr},
-            l.model,
-            l.request_model,
+            substr(CAST(l.app_type AS TEXT), 1, {text_limit}),
+            substr(CAST(l.provider_id AS TEXT), 1, {text_limit}),
+            substr(CAST({provider_name_expr} AS TEXT), 1, {text_limit}),
+            substr(CAST(l.model AS TEXT), 1, {text_limit}),
+            substr(CAST(l.request_model AS TEXT), 1, {text_limit}),
             l.status_code,
             l.input_tokens,
             l.output_tokens,
@@ -2312,34 +2677,99 @@ fn load_usage_recent_logs(
             l.latency_ms,
             l.first_token_ms,
             l.duration_ms,
-            l.session_id,
-            l.provider_type,
+            substr(CAST(l.session_id AS TEXT), 1, {text_limit}),
+            substr(CAST(l.provider_type AS TEXT), 1, {text_limit}),
             l.is_streaming,
-            l.error_message,
-            l.data_source
+            substr(CAST(l.error_message AS TEXT), 1, {error_limit}),
+            substr(CAST(l.data_source AS TEXT), 1, {text_limit}),
+            CASE
+                WHEN l.error_message IS NOT NULL
+                 AND substr(CAST(l.error_message AS TEXT), {error_probe}, 1) <> ''
+                THEN 1 ELSE 0
+            END,
+            l.rowid,
+            {text_truncation_mask}
          FROM proxy_request_logs l
          LEFT JOIN providers p ON p.id = l.provider_id AND p.app_type = l.app_type
-         WHERE l.app_type = ?1 {range_filter}
-           AND {effective_filter}
-         ORDER BY l.created_at DESC, l.request_id DESC
-         LIMIT {limit_param}",
-        range_filter = if range.is_some() {
-            "AND l.created_at >= ?2 AND l.created_at <= ?3"
-        } else {
-            ""
-        },
-        limit_param = if range.is_some() { "?4" } else { "?2" },
+         WHERE {filters}
+         ORDER BY {order}
+         LIMIT ?",
+        filters = filters.join(" AND "),
+        error_limit = USAGE_LOG_ERROR_MESSAGE_MAX_CHARS,
+        error_probe = USAGE_LOG_ERROR_MESSAGE_MAX_CHARS.saturating_add(1),
+        text_limit = USAGE_TEXT_MAX_CHARS,
+        text_truncation_mask = usage_log_text_truncation_mask_sql(&provider_name_expr),
     );
+    (sql, values)
+}
 
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = match range {
-        Some((start, end)) => {
-            stmt.query_map(params![app_key, start, end, limit], usage_log_row_from_sql)?
-        }
-        None => stmt.query_map(params![app_key, limit], usage_log_row_from_sql)?,
-    };
+fn load_usage_log_detail(
+    conn: &rusqlite::Connection,
+    app_key: &str,
+    range: Option<(i64, i64)>,
+    rowid: i64,
+) -> Result<Option<UsageLogRow>, AppError> {
+    let effective_filter = crate::services::usage_stats::effective_usage_log_filter("l");
+    let provider_name_expr = usage_provider_name_sql("l", "p");
+    let mut filters = vec!["l.rowid = ?".to_string(), "l.app_type = ?".to_string()];
+    let mut values = vec![
+        rusqlite::types::Value::Integer(rowid),
+        rusqlite::types::Value::Text(app_key.to_string()),
+    ];
+    if let Some((start, end)) = range {
+        filters.push("l.created_at >= ? AND l.created_at <= ?".to_string());
+        values.push(rusqlite::types::Value::Integer(start));
+        values.push(rusqlite::types::Value::Integer(end));
+    }
+    filters.push(effective_filter);
 
-    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+    let sql = format!(
+        "SELECT
+            substr(CAST(l.request_id AS TEXT), 1, {text_limit}),
+            l.created_at,
+            substr(CAST(l.app_type AS TEXT), 1, {text_limit}),
+            substr(CAST(l.provider_id AS TEXT), 1, {text_limit}),
+            substr(CAST({provider_name_expr} AS TEXT), 1, {text_limit}),
+            substr(CAST(l.model AS TEXT), 1, {text_limit}),
+            substr(CAST(l.request_model AS TEXT), 1, {text_limit}),
+            l.status_code,
+            l.input_tokens,
+            l.output_tokens,
+            l.cache_read_tokens,
+            l.cache_creation_tokens,
+            CAST(l.total_cost_usd AS REAL),
+            l.latency_ms,
+            l.first_token_ms,
+            l.duration_ms,
+            substr(CAST(l.session_id AS TEXT), 1, {text_limit}),
+            substr(CAST(l.provider_type AS TEXT), 1, {text_limit}),
+            l.is_streaming,
+            substr(CAST(l.error_message AS TEXT), 1, {error_limit}),
+            substr(CAST(l.data_source AS TEXT), 1, {text_limit}),
+            CASE
+                WHEN l.error_message IS NOT NULL
+                 AND substr(CAST(l.error_message AS TEXT), {error_probe}, 1) <> ''
+                THEN 1 ELSE 0
+            END,
+            l.rowid,
+            {text_truncation_mask}
+         FROM proxy_request_logs l
+         LEFT JOIN providers p ON p.id = l.provider_id AND p.app_type = l.app_type
+         WHERE {filters}
+         LIMIT 1",
+        filters = filters.join(" AND "),
+        error_limit = USAGE_LOG_ERROR_MESSAGE_MAX_CHARS,
+        error_probe = USAGE_LOG_ERROR_MESSAGE_MAX_CHARS.saturating_add(1),
+        text_limit = USAGE_TEXT_MAX_CHARS,
+        text_truncation_mask = usage_log_text_truncation_mask_sql(&provider_name_expr),
+    );
+    conn.query_row(
+        &sql,
+        rusqlite::params_from_iter(values),
+        usage_log_row_from_sql,
+    )
+    .optional()
+    .map_err(AppError::from)
 }
 
 fn usage_log_row_from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLogRow> {
@@ -2365,7 +2795,35 @@ fn usage_log_row_from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageLogR
         is_streaming: row.get::<_, i64>(18)? != 0,
         error_message: normalize_optional_string(row.get::<_, Option<String>>(19)?),
         data_source: normalize_optional_string(row.get::<_, Option<String>>(20)?),
+        error_message_truncated: row.get::<_, i64>(21)? != 0,
+        cursor_rowid: row.get(22)?,
+        text_truncation: row.get::<_, i64>(23)?.clamp(0, i64::from(u16::MAX)) as u16,
     })
+}
+
+fn usage_log_text_truncation_mask_sql(provider_name_expr: &str) -> String {
+    let text_limit = USAGE_TEXT_MAX_CHARS;
+    [
+        ("l.request_id", UsageLogTextField::RequestId),
+        ("l.app_type", UsageLogTextField::AppType),
+        ("l.provider_id", UsageLogTextField::ProviderId),
+        (provider_name_expr, UsageLogTextField::ProviderName),
+        ("l.model", UsageLogTextField::Model),
+        ("l.request_model", UsageLogTextField::RequestModel),
+        ("l.session_id", UsageLogTextField::SessionId),
+        ("l.provider_type", UsageLogTextField::ProviderType),
+        ("l.data_source", UsageLogTextField::DataSource),
+    ]
+    .into_iter()
+    .map(|(expression, field)| {
+        format!(
+            "CASE WHEN substr(CAST({expression} AS TEXT), {}, 1) <> '' THEN {} ELSE 0 END",
+            text_limit.saturating_add(1),
+            field.mask()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" | ")
 }
 
 fn load_usage_logs_total(
@@ -3028,6 +3486,502 @@ mod tests {
         assert_eq!(load_usage_logs_total(&conn, "codex", range)?, 1);
         assert_eq!(load_usage_logs_total(&conn, "codex", None)?, 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn usage_log_head_exposes_a_next_page_before_exact_count_arrives() {
+        let mut snapshot = UsageSnapshot::default();
+        let rows = (0..USAGE_LOG_PAGE_SIZE)
+            .map(|index| UsageLogRow {
+                request_id: format!("request-{index}"),
+                ..UsageLogRow::default()
+            })
+            .collect::<Vec<_>>();
+
+        snapshot.merge_log_head(
+            UsageRangePreset::SevenDays,
+            UsageLogPage {
+                rows,
+                has_more: true,
+                ..UsageLogPage::default()
+            },
+        );
+
+        assert_eq!(
+            snapshot.recent_logs_for(UsageRangePreset::Today).len(),
+            USAGE_LOG_PAGE_SIZE
+        );
+        assert_eq!(
+            snapshot.logs_total_for(UsageRangePreset::ThirtyDays),
+            USAGE_LOG_PAGE_SIZE as u64 + 1
+        );
+    }
+
+    #[test]
+    fn usage_log_head_stays_scoped_to_its_custom_range() {
+        let range = UsageCustomRange { start: 10, end: 20 };
+        let mut snapshot = UsageSnapshot::default();
+        snapshot.merge_log_head(
+            UsageRangePreset::Custom(range),
+            UsageLogPage {
+                rows: vec![UsageLogRow {
+                    request_id: "custom-request".to_string(),
+                    ..UsageLogRow::default()
+                }],
+                ..UsageLogPage::default()
+            },
+        );
+
+        assert_eq!(
+            snapshot
+                .recent_logs_for(UsageRangePreset::Custom(range))
+                .first()
+                .map(|row| row.request_id.as_str()),
+            Some("custom-request")
+        );
+        assert!(snapshot
+            .recent_logs_for(UsageRangePreset::Custom(UsageCustomRange {
+                start: 30,
+                end: 40,
+            }))
+            .is_empty());
+    }
+
+    #[test]
+    fn usage_log_keyset_pages_are_stable_across_equal_timestamps() -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        for (request_id, created_at) in [("c", 100), ("b", 100), ("a", 100), ("z", 99)] {
+            insert_usage_log(
+                &conn,
+                request_id,
+                "codex",
+                "_codex_session",
+                "gpt-5.4",
+                created_at,
+                10,
+                5,
+                0,
+                0,
+            )?;
+        }
+
+        let first =
+            load_usage_log_page(&conn, "codex", None, None, UsageLogPageDirection::Older, 2)?;
+        assert_eq!(
+            first
+                .rows
+                .iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c", "b"]
+        );
+        assert!(first.has_more);
+
+        let second = load_usage_log_page(
+            &conn,
+            "codex",
+            None,
+            first.next_cursor.as_ref(),
+            UsageLogPageDirection::Older,
+            2,
+        )?;
+        assert_eq!(
+            second
+                .rows
+                .iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "z"]
+        );
+        assert!(!second.has_more);
+        Ok(())
+    }
+
+    #[test]
+    fn usage_log_keyset_walks_large_timestamp_ties_in_both_directions() -> Result<(), AppError> {
+        const ROWS: usize = 1_037;
+        const PAGE_SIZE: usize = 37;
+
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        for index in 0..ROWS {
+            insert_usage_log(
+                &conn,
+                &format!("tie-{index:04}"),
+                "codex",
+                "_codex_session",
+                "gpt-5.4",
+                100,
+                10,
+                5,
+                0,
+                0,
+            )?;
+        }
+
+        let mut older_pages = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = load_usage_log_page(
+                &conn,
+                "codex",
+                None,
+                cursor.as_ref(),
+                UsageLogPageDirection::Older,
+                PAGE_SIZE,
+            )?;
+            assert!(!page.rows.is_empty());
+            older_pages.push(
+                page.rows
+                    .iter()
+                    .map(|row| row.cursor_rowid)
+                    .collect::<Vec<_>>(),
+            );
+            if !page.has_more {
+                break;
+            }
+            cursor = page.next_cursor;
+        }
+
+        let older_rowids = older_pages.iter().flatten().copied().collect::<Vec<_>>();
+        assert_eq!(older_rowids.len(), ROWS);
+        assert!(older_rowids.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(
+            older_rowids.iter().copied().collect::<HashSet<_>>().len(),
+            ROWS,
+        );
+
+        for current_page in (1..older_pages.len()).rev() {
+            let first_rowid = older_pages[current_page][0];
+            let page = load_usage_log_page(
+                &conn,
+                "codex",
+                None,
+                Some(&UsageLogCursor {
+                    created_at: 100,
+                    rowid: first_rowid,
+                }),
+                UsageLogPageDirection::Newer,
+                PAGE_SIZE,
+            )?;
+            assert_eq!(page.rows.len(), PAGE_SIZE);
+            assert_eq!(
+                page.rows
+                    .iter()
+                    .map(|row| row.cursor_rowid)
+                    .collect::<Vec<_>>(),
+                older_pages[current_page - 1],
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn usage_log_keyset_plan_uses_existing_index_without_a_temp_sort() -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        insert_usage_log(
+            &conn,
+            "plan-row",
+            "codex",
+            "_codex_session",
+            "gpt-5.4",
+            100,
+            10,
+            5,
+            0,
+            0,
+        )?;
+
+        for direction in [UsageLogPageDirection::Older, UsageLogPageDirection::Newer] {
+            let cursor = UsageLogCursor {
+                created_at: 100,
+                rowid: 1,
+            };
+            for part in [
+                UsageLogSeekPart::SameTimestamp,
+                UsageLogSeekPart::CrossTimestamp,
+            ] {
+                let (sql, values) = build_usage_log_page_query(
+                    "codex",
+                    None,
+                    Some(&cursor),
+                    direction,
+                    part,
+                    USAGE_LOG_PAGE_SIZE + 1,
+                );
+                assert!(
+                    !sql.contains("l.created_at < ? OR") && !sql.contains("l.created_at > ? OR"),
+                    "keyset seek regressed to an OR predicate: {sql}",
+                );
+                let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let details = statement
+                    .query_map(rusqlite::params_from_iter(values), |row| {
+                        row.get::<_, String>(3)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let plan = details.join("\n");
+                assert!(
+                    plan.contains("idx_request_logs_app_created_at"),
+                    "unexpected {direction:?}/{part:?} plan:\n{plan}",
+                );
+                assert!(
+                    !plan.to_ascii_uppercase().contains("TEMP B-TREE"),
+                    "temporary sort in {direction:?}/{part:?} plan:\n{plan}",
+                );
+            }
+        }
+
+        let (_, values) = build_usage_log_page_query(
+            "codex",
+            None,
+            None,
+            UsageLogPageDirection::Older,
+            UsageLogSeekPart::Head,
+            usize::MAX,
+        );
+        assert_eq!(
+            values.last(),
+            Some(&rusqlite::types::Value::Integer(
+                USAGE_LOG_PAGE_SIZE.saturating_add(1) as i64,
+            )),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn usage_log_queries_cap_error_text_before_materializing_rows() -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        insert_usage_log(
+            &conn,
+            "long-error",
+            "codex",
+            "_codex_session",
+            "gpt-5.4",
+            100,
+            10,
+            5,
+            0,
+            0,
+        )?;
+        conn.execute(
+            "UPDATE proxy_request_logs SET error_message = ?1 WHERE request_id = 'long-error'",
+            params!["界".repeat(5_000)],
+        )?;
+
+        let (list_sql, _) = build_usage_log_page_query(
+            "codex",
+            None,
+            None,
+            UsageLogPageDirection::Older,
+            UsageLogSeekPart::Head,
+            101,
+        );
+        assert!(list_sql.contains("substr(CAST(l.error_message AS TEXT), 1, 4096)"));
+        assert!(list_sql.contains("substr(CAST(l.error_message AS TEXT), 4097, 1) <> ''"));
+
+        let page = load_usage_log_page(
+            &conn,
+            "codex",
+            None,
+            None,
+            UsageLogPageDirection::Older,
+            100,
+        )?;
+        let row = page.rows.first().expect("list row");
+        assert_eq!(
+            row.error_message
+                .as_deref()
+                .map(|value| value.chars().count()),
+            Some(USAGE_LOG_ERROR_MESSAGE_MAX_CHARS),
+        );
+        assert!(row.error_message_truncated);
+
+        let rowid = row.cursor_rowid;
+        let detail = load_usage_log_detail(&conn, "codex", None, rowid)?.expect("detail row");
+        assert_eq!(
+            detail
+                .error_message
+                .as_deref()
+                .map(|value| value.chars().count()),
+            Some(USAGE_LOG_ERROR_MESSAGE_MAX_CHARS),
+        );
+        assert!(detail.error_message_truncated);
+
+        conn.execute(
+            "UPDATE proxy_request_logs SET error_message = ?1 WHERE request_id = 'long-error'",
+            params!["x".repeat(USAGE_LOG_ERROR_MESSAGE_MAX_CHARS)],
+        )?;
+        let exact =
+            load_usage_log_detail(&conn, "codex", None, rowid)?.expect("exact-limit detail row");
+        assert!(!exact.error_message_truncated);
+
+        conn.execute(
+            "UPDATE proxy_request_logs SET error_message = ?1 WHERE rowid = ?2",
+            params!["界".repeat(USAGE_LOG_ERROR_MESSAGE_MAX_CHARS), rowid],
+        )?;
+        let exact_multibyte = load_usage_log_detail(&conn, "codex", None, rowid)?
+            .expect("exact multibyte detail row");
+        assert_eq!(
+            exact_multibyte
+                .error_message
+                .as_deref()
+                .map(|value| value.chars().count()),
+            Some(USAGE_LOG_ERROR_MESSAGE_MAX_CHARS),
+        );
+        assert!(!exact_multibyte.error_message_truncated);
+        Ok(())
+    }
+
+    #[test]
+    fn usage_text_fields_are_bounded_before_row_materialization_and_rowid_stays_unique(
+    ) -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        for (request_id, model) in [("seed-a", "model-a"), ("seed-b", "model-b")] {
+            insert_usage_log(
+                &conn, request_id, "codex", "provider", model, 100, 10, 5, 0, 0,
+            )?;
+        }
+        let mut rowid_stmt = conn.prepare("SELECT rowid FROM proxy_request_logs ORDER BY rowid")?;
+        let rowids = rowid_stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(rowid_stmt);
+        let common = "界".repeat(USAGE_TEXT_MAX_CHARS + 40);
+        for (index, rowid) in rowids.iter().copied().enumerate() {
+            conn.execute(
+                "UPDATE proxy_request_logs
+                 SET request_id = ?1,
+                     provider_id = ?2,
+                     model = ?3,
+                     request_model = ?4,
+                     session_id = ?5,
+                     provider_type = ?6,
+                     data_source = ?7,
+                     status_code = ?8
+                 WHERE rowid = ?9",
+                params![
+                    format!("{common}-{index}"),
+                    &common,
+                    &common,
+                    &common,
+                    &common,
+                    &common,
+                    &common,
+                    200 + index as i64,
+                    rowid,
+                ],
+            )?;
+        }
+
+        let page = load_usage_log_page(
+            &conn,
+            "codex",
+            None,
+            None,
+            UsageLogPageDirection::Older,
+            100,
+        )?;
+        assert_eq!(page.rows.len(), 2);
+        assert_ne!(page.rows[0].cursor_rowid, page.rows[1].cursor_rowid);
+        assert_eq!(page.rows[0].request_id, page.rows[1].request_id);
+        for row in &page.rows {
+            for value in [
+                row.request_id.as_str(),
+                row.provider_id.as_str(),
+                row.provider_name
+                    .as_deref()
+                    .expect("provider name fallback"),
+                row.model.as_str(),
+                row.request_model.as_deref().expect("request model"),
+                row.session_id.as_deref().expect("session id"),
+                row.provider_type.as_deref().expect("provider type"),
+                row.data_source.as_deref().expect("data source"),
+            ] {
+                assert_eq!(value.chars().count(), USAGE_TEXT_MAX_CHARS);
+            }
+            for field in [
+                UsageLogTextField::RequestId,
+                UsageLogTextField::ProviderId,
+                UsageLogTextField::ProviderName,
+                UsageLogTextField::Model,
+                UsageLogTextField::RequestModel,
+                UsageLogTextField::SessionId,
+                UsageLogTextField::ProviderType,
+                UsageLogTextField::DataSource,
+            ] {
+                assert!(row.text_was_truncated(field));
+            }
+        }
+
+        let first =
+            load_usage_log_detail(&conn, "codex", None, rowids[0])?.expect("first detail by rowid");
+        let second = load_usage_log_detail(&conn, "codex", None, rowids[1])?
+            .expect("second detail by rowid");
+        assert_eq!(first.cursor_rowid, rowids[0]);
+        assert_eq!(second.cursor_rowid, rowids[1]);
+        assert_eq!(first.status_code, 200);
+        assert_eq!(second.status_code, 201);
+
+        let providers = load_usage_top_providers(&conn, "codex", 0, 200)?;
+        assert_eq!(
+            providers[0].provider_id.chars().count(),
+            USAGE_TEXT_MAX_CHARS
+        );
+        assert!(providers[0].provider_id.ends_with('…'));
+        assert!(providers[0]
+            .provider_name
+            .as_deref()
+            .is_some_and(|name| name.ends_with('…')));
+        let models = load_usage_top_models(&conn, "codex", 0, 200)?;
+        assert_eq!(models[0].model.chars().count(), USAGE_TEXT_MAX_CHARS);
+        assert!(models[0].model.ends_with('…'));
+        Ok(())
+    }
+
+    #[test]
+    fn usage_log_detail_refreshes_one_existing_request_without_paging() -> Result<(), AppError> {
+        let db = crate::Database::memory()?;
+        let conn = db.conn.lock().expect("lock memory db");
+        insert_usage_log(
+            &conn,
+            "detail-request",
+            "codex",
+            "_codex_session",
+            "gpt-old",
+            100,
+            10,
+            5,
+            0,
+            0,
+        )?;
+
+        let rowid = conn.query_row(
+            "SELECT rowid FROM proxy_request_logs WHERE request_id = ?1",
+            params!["detail-request"],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let original = load_usage_log_detail(&conn, "codex", None, rowid)?.expect("detail exists");
+        assert_eq!(original.model, "gpt-old");
+
+        conn.execute(
+            "UPDATE proxy_request_logs
+             SET model = 'gpt-new', total_cost_usd = '1.5000', error_message = 'updated'
+             WHERE request_id = ?1",
+            params!["detail-request"],
+        )?;
+        let refreshed =
+            load_usage_log_detail(&conn, "codex", None, rowid)?.expect("updated detail exists");
+        assert_eq!(refreshed.model, "gpt-new");
+        assert_eq!(refreshed.total_cost_usd, 1.5);
+        assert_eq!(refreshed.error_message.as_deref(), Some("updated"));
+
+        assert!(load_usage_log_detail(&conn, "claude", None, rowid)?.is_none());
+        assert!(load_usage_log_detail(&conn, "codex", Some((101, 200)), rowid)?.is_none());
         Ok(())
     }
 

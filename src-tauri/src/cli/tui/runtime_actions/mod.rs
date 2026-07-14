@@ -4,7 +4,7 @@ use crate::app_config::AppType;
 use crate::cli::i18n::{set_language, texts};
 use crate::error::AppError;
 
-use super::app::{Action, App, Focus, Overlay, TextViewState, ToastKind};
+use super::app::{Action, App, Focus, Overlay, SessionPageSource, TextViewState, ToastKind};
 use super::data::UiData;
 use super::runtime_systems::{
     LocalEnvReq, ManagedAuthReq, ModelFetchReq, ProxyReq, RequestTracker, SessionReq, SkillsReq,
@@ -90,6 +90,12 @@ pub(crate) fn apply_preloaded_app_switch(
     next_data: UiData,
 ) {
     app.clear_openclaw_daily_memory_search_state();
+    if app.app_type != next {
+        // A log-detail snapshot is scoped to one application. Clearing the
+        // browsing source here prevents a matching request id in another app
+        // from rendering the previous app's row.
+        app.usage.invalidate_log_pages();
+    }
     app.app_type = next;
     let original_route = app.route.clone();
     app.route = normalize_route_for_app(&app.app_type, &app.route);
@@ -139,6 +145,63 @@ pub(super) struct RuntimeActionContext<'a> {
     managed_auth_req_tx: Option<&'a mpsc::Sender<ManagedAuthReq>>,
 }
 
+/// Start one materialized Sessions search and settle it immediately if its
+/// worker channel is absent or disconnected. The request id check prevents an
+/// old send failure from clearing a newer query's spinner.
+pub(super) fn queue_sessions_deep_search(
+    app: &mut App,
+    session_req_tx: Option<&mpsc::Sender<SessionReq>>,
+    query: String,
+) {
+    let Some(tx) = session_req_tx else {
+        let request_id = begin_sessions_deep_search(app, query);
+        settle_sessions_deep_search_dispatch_error(
+            app,
+            request_id,
+            "sessions worker is not running".to_string(),
+        );
+        return;
+    };
+    let Some((base, base_reader)) = app.sessions.base_query_source() else {
+        app.sessions.deep_search_pending = Some((query, 0));
+        return;
+    };
+    let request_id = begin_sessions_deep_search(app, query.clone());
+    if let Err(error) = tx.send(SessionReq::Search {
+        request_id,
+        scope_epoch: app.sessions.scope_epoch,
+        query,
+        base,
+        base_reader,
+        query_namespace: app.sessions.query_namespace.clone(),
+    }) {
+        settle_sessions_deep_search_dispatch_error(app, request_id, error.to_string());
+    }
+}
+
+fn begin_sessions_deep_search(app: &mut App, query: String) -> u64 {
+    app.sessions.deep_search_query = Some(query);
+    app.sessions.clear_deep_search_results();
+    app.sessions.deep_search_pending = None;
+    app.sessions.last_error = None;
+    app.sessions.deep_search_seq = app.sessions.deep_search_seq.wrapping_add(1);
+    let request_id = app.sessions.deep_search_seq;
+    app.sessions.deep_search_active = Some(request_id);
+    request_id
+}
+
+fn settle_sessions_deep_search_dispatch_error(app: &mut App, request_id: u64, error: String) {
+    if app.sessions.deep_search_active != Some(request_id) {
+        return;
+    }
+    app.sessions.deep_search_active = None;
+    app.sessions.last_error = Some(error.clone());
+    app.push_toast(
+        texts::tui_sessions_toast_worker_unavailable(&error),
+        ToastKind::Warning,
+    );
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "TUI dispatcher receives independent worker channels and request trackers"
@@ -181,6 +244,12 @@ pub(crate) fn handle_action(
         managed_auth_req_tx,
     };
 
+    if ctx.app.sessions.take_message_cancel_pending() {
+        if let Some(tx) = ctx.session_req_tx {
+            let _ = tx.send(SessionReq::CancelMessages);
+        }
+    }
+
     match action {
         Action::None => Ok(()),
         Action::ReloadData => {
@@ -188,7 +257,15 @@ pub(crate) fn handle_action(
             ctx.app.maybe_prompt_import_candidate(ctx.data);
             Ok(())
         }
+        // The top-level TUI dispatcher owns the usage worker channel. Keeping
+        // this arm harmless also makes direct runtime-action tests exhaustive.
+        Action::UsageLogDetailRefresh { .. } => Ok(()),
         Action::SetAppType(next) => {
+            ctx.app.sessions.clear_detail();
+            let _ = ctx.app.sessions.take_message_cancel_pending();
+            if let Some(tx) = ctx.session_req_tx {
+                let _ = tx.send(SessionReq::CancelMessages);
+            }
             let next_data = UiData::load(&next)?;
             apply_preloaded_app_switch(ctx.app, ctx.data, next, next_data);
             ctx.app.maybe_prompt_import_candidate(ctx.data);
@@ -215,14 +292,6 @@ pub(crate) fn handle_action(
             Ok(())
         }
         Action::SessionsRefresh => {
-            let Some(tx) = ctx.session_req_tx else {
-                ctx.app.sessions.loading = false;
-                ctx.app.push_toast(
-                    texts::tui_sessions_toast_worker_unavailable("sessions worker is not running"),
-                    ToastKind::Warning,
-                );
-                return Ok(());
-            };
             // A scan already runs on a detached worker thread (workers.rs). If we
             // start another scan here it bumps scan_active to a new id, so the
             // in-flight thread's partial/finished messages (carrying the old id)
@@ -242,9 +311,21 @@ pub(crate) fn handle_action(
             } else {
                 ctx.app.app_type.as_str().to_string()
             };
+            let Some(tx) = ctx.session_req_tx else {
+                let request_id = ctx.app.sessions.start_scan(provider_id);
+                ctx.app
+                    .sessions
+                    .fail_scan(request_id, "sessions worker is not running".to_string());
+                ctx.app.push_toast(
+                    texts::tui_sessions_toast_worker_unavailable("sessions worker is not running"),
+                    ToastKind::Warning,
+                );
+                return Ok(());
+            };
             let request_id = ctx.app.sessions.start_scan(provider_id.clone());
             if let Err(err) = tx.send(SessionReq::Refresh {
                 request_id,
+                scope_epoch: ctx.app.sessions.scope_epoch,
                 provider_id,
                 // Manual `r` reload forces a full re-parse (ignore the mtime/size
                 // snapshot); the fresh results still refresh the persistent cache.
@@ -259,22 +340,14 @@ pub(crate) fn handle_action(
             Ok(())
         }
         Action::SessionsDeepSearch { query } => {
-            let Some(tx) = ctx.session_req_tx else {
-                return Ok(());
-            };
-            // Set the query immediately so the UI shows "searching" state
-            ctx.app.sessions.deep_search_query = Some(query.clone());
-            ctx.app.sessions.deep_search_results.clear();
-            ctx.app.sessions.deep_search_seq = ctx.app.sessions.deep_search_seq.wrapping_add(1);
-            let request_id = ctx.app.sessions.deep_search_seq;
-            ctx.app.sessions.deep_search_active = Some(request_id);
-            // Snapshot the sessions to search (respecting show_all / provider filter)
-            let sessions = ctx.app.sessions.rows.clone();
-            let _ = tx.send(SessionReq::Search {
-                request_id,
-                query,
-                sessions,
-            });
+            queue_sessions_deep_search(ctx.app, ctx.session_req_tx, query);
+            Ok(())
+        }
+        Action::SessionsDeepSearchCancel => {
+            ctx.app.sessions.deep_search_active = None;
+            if let Some(tx) = ctx.session_req_tx {
+                let _ = tx.send(SessionReq::CancelSearch);
+            }
             Ok(())
         }
         Action::SessionResume { command, cwd } => {
@@ -370,6 +443,26 @@ pub(crate) fn handle_action(
             Ok(())
         }
         Action::SwitchRoute(route) => {
+            if !matches!(route, super::route::Route::Sessions) {
+                ctx.app.sessions.materialized_query = None;
+                if ctx
+                    .app
+                    .sessions
+                    .page_token()
+                    .is_some_and(|token| token.source == SessionPageSource::Query)
+                {
+                    let _ = ctx.app.sessions.stage_base_restore();
+                }
+                ctx.app.sessions.deep_search_active = None;
+                ctx.app.sessions.deep_search_pending = None;
+                ctx.app.pending_deep_search = None;
+                ctx.app.sessions.clear_detail();
+                let _ = ctx.app.sessions.take_message_cancel_pending();
+                if let Some(tx) = ctx.session_req_tx {
+                    let _ = tx.send(SessionReq::CancelSearch);
+                    let _ = tx.send(SessionReq::CancelMessages);
+                }
+            }
             ctx.app.route = route;
             ctx.app.maybe_prompt_import_candidate(ctx.data);
             if matches!(ctx.app.route, super::route::Route::SkillsDiscover)
@@ -717,6 +810,90 @@ mod tests {
             None,
             action,
         )
+    }
+
+    fn app_with_base_session_manifest() -> (App, TempDir) {
+        let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+        let store = crate::session_manager::paged_manifest::PagedManifestStore::open_at(
+            manifest_dir.path(),
+        )
+        .expect("manifest fixture store");
+        let mut builder = store
+            .begin_build("claude")
+            .expect("manifest fixture builder");
+        builder
+            .push(crate::session_manager::SessionMeta {
+                provider_id: "claude".to_string(),
+                session_id: "session".to_string(),
+                source_path: Some("/tmp/session.jsonl".to_string()),
+                ..crate::session_manager::SessionMeta::default()
+            })
+            .expect("manifest fixture row");
+        let published = builder.publish().expect("publish manifest fixture");
+        let mut app = App::new(Some(AppType::Claude));
+        let _request_id = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        assert!(app.sessions.remember_base_manifest(
+            scope_epoch,
+            "claude",
+            published.generation.clone(),
+            published.total_rows,
+            published.reader.clone(),
+        ));
+        assert!(app.sessions.apply_opened_manifest(
+            scope_epoch,
+            "claude",
+            published.generation,
+            published.total_rows,
+            published.first_page.page_index,
+            published.first_page.rows,
+            published.reader,
+        ));
+        (app, manifest_dir)
+    }
+
+    #[test]
+    fn deep_search_disconnected_sender_settles_matching_request() {
+        let (mut app, _manifest_dir) = app_with_base_session_manifest();
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+
+        queue_sessions_deep_search(&mut app, Some(&tx), "needle".to_string());
+
+        assert_eq!(app.sessions.deep_search_query.as_deref(), Some("needle"));
+        assert!(app.sessions.deep_search_active.is_none());
+        assert!(app.sessions.last_error.is_some());
+        assert!(matches!(
+            app.toast.as_ref(),
+            Some(toast) if toast.kind == ToastKind::Warning
+        ));
+    }
+
+    #[test]
+    fn deep_search_without_system_is_visible_and_settled() {
+        let mut app = App::new(Some(AppType::Claude));
+
+        queue_sessions_deep_search(&mut app, None, "needle".to_string());
+
+        assert_eq!(app.sessions.deep_search_query.as_deref(), Some("needle"));
+        assert!(app.sessions.deep_search_active.is_none());
+        assert_eq!(
+            app.sessions.last_error.as_deref(),
+            Some("sessions worker is not running")
+        );
+        assert!(app.pending_deep_search.is_none());
+    }
+
+    #[test]
+    fn stale_deep_search_send_failure_cannot_clear_newer_spinner() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.sessions.deep_search_active = Some(8);
+
+        settle_sessions_deep_search_dispatch_error(&mut app, 7, "old failure".to_string());
+
+        assert_eq!(app.sessions.deep_search_active, Some(8));
+        assert!(app.sessions.last_error.is_none());
+        assert!(app.toast.is_none());
     }
 
     #[test]

@@ -67,11 +67,28 @@ pub(crate) enum LocalEnvMsg {
 pub(crate) enum SessionReq {
     Refresh {
         request_id: u64,
+        scope_epoch: u64,
         provider_id: String,
         /// When true (manual `r` reload), ignore the cached `(mtime, size)`
         /// snapshot and re-parse every file; the fresh results still refresh the
         /// persistent cache.
         force: bool,
+    },
+    LoadPage {
+        request_id: u64,
+        token: crate::cli::tui::app::SessionPageToken,
+        page: usize,
+        reader: crate::session_manager::paged_manifest::ManifestReader,
+    },
+    LocateManifest {
+        request_id: u64,
+        scope_epoch: u64,
+        source: crate::cli::tui::app::SessionPageSource,
+        scope: String,
+        generation: String,
+        fallback_absolute: usize,
+        anchor: Option<crate::cli::tui::app::SessionRowIdentity>,
+        reader: crate::session_manager::paged_manifest::ManifestReader,
     },
     LoadMessages {
         request_id: u64,
@@ -79,6 +96,9 @@ pub(crate) enum SessionReq {
         provider_id: String,
         source_path: String,
     },
+    /// Invalidate the current bounded detail read without entering the ordered
+    /// delete/control lane.
+    CancelMessages,
     Delete {
         request_id: u64,
         key: String,
@@ -88,46 +108,105 @@ pub(crate) enum SessionReq {
     },
     Search {
         request_id: u64,
+        scope_epoch: u64,
         query: String,
-        sessions: Vec<crate::session_manager::SessionMeta>,
+        base: crate::cli::tui::app::SessionPageToken,
+        base_reader: crate::session_manager::paged_manifest::ManifestReader,
+        query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
     },
+    /// Stop the current deep search without affecting refresh, message-load, or
+    /// delete work. Query edits and route/scope changes send this immediately;
+    /// the search dispatcher advances its generation so provider loops can
+    /// cooperatively stop disk and CPU work.
+    CancelSearch,
 }
 
 pub(crate) enum SessionMsg {
-    /// Stale-while-revalidate first paint: the list built straight from the
-    /// persistent cache, sent before the (slower) revalidating scan finishes so
-    /// the page renders immediately while the refresh indicator stays on.
-    ScanCachedSnapshot {
+    /// Fixed-cost scope open: at most one immutable 100-row manifest page.
+    ScopeOpened {
         request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        result: Result<
+            Option<(
+                crate::session_manager::paged_manifest::ManifestReader,
+                crate::session_manager::paged_manifest::ManifestPage,
+            )>,
+            String,
+        >,
+    },
+    ScanProvisional {
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
         rows: Vec<crate::session_manager::SessionMeta>,
     },
-    /// Progressive fill for the "all providers" scan: one provider's freshly
-    /// revalidated list, sent as soon as that provider finishes so a genuine
-    /// full scan (first-ever run, manual reload) paints provider by provider
-    /// instead of all at once. The refresh indicator stays on until
-    /// `ScanFinished`.
-    ScanPartial {
+    /// Authoritative rebuild publication. It contains only page zero; selection
+    /// reconciliation reads bounded pages on the worker before switching.
+    ManifestPublished {
         request_id: u64,
-        provider_id: String,
-        rows: Vec<crate::session_manager::SessionMeta>,
+        scope_epoch: u64,
+        scope: String,
+        result: Result<
+            (
+                crate::session_manager::paged_manifest::PublishedManifest,
+                crate::session_manager::paged_manifest::ManifestReader,
+            ),
+            String,
+        >,
     },
-    ScanFinished {
+    PageLoaded {
         request_id: u64,
-        result: Result<Vec<crate::session_manager::SessionMeta>, String>,
+        token: crate::cli::tui::app::SessionPageToken,
+        page: usize,
+        result: Result<crate::session_manager::paged_manifest::ManifestPage, String>,
+    },
+    ManifestLocated {
+        request_id: u64,
+        scope_epoch: u64,
+        generation: String,
+        result: Result<
+            (
+                crate::session_manager::paged_manifest::ManifestReader,
+                crate::session_manager::paged_manifest::ManifestPage,
+                usize,
+            ),
+            String,
+        >,
     },
     MessagesLoaded {
         request_id: u64,
         key: String,
-        result: Result<Vec<crate::session_manager::SessionMessage>, String>,
+        result: Result<crate::session_manager::SessionMessageBatch, String>,
     },
     DeleteFinished {
         request_id: u64,
         key: String,
         result: Result<(), String>,
     },
-    SearchFinished {
+    ManifestsPurged {
         request_id: u64,
-        result: Result<Vec<crate::session_manager::SessionSearchHit>, String>,
+        key: String,
+        base: Vec<(
+            String,
+            crate::session_manager::paged_manifest::PublishedManifest,
+            crate::session_manager::paged_manifest::ManifestReader,
+        )>,
+    },
+    QueryPublished {
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        base_generation: String,
+        query: String,
+        query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
+        result: Result<
+            (
+                crate::session_manager::paged_manifest::PublishedManifest,
+                crate::session_manager::paged_manifest::ManifestReader,
+            ),
+            String,
+        >,
     },
 }
 
@@ -199,20 +278,81 @@ pub(crate) enum UsagePricingReq {
         app_type: AppType,
         range: crate::cli::tui::data::UsageRangePreset,
     },
+    LoadLogPage {
+        request_id: u64,
+        generation: u64,
+        app_state_epoch: u64,
+        app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
+        page: usize,
+        cursor: crate::cli::tui::data::UsageLogCursor,
+        direction: crate::cli::tui::data::UsageLogPageDirection,
+        limit: usize,
+    },
+    LoadLogDetail {
+        request_id: u64,
+        generation: u64,
+        app_state_epoch: u64,
+        app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
+        log_rowid: i64,
+    },
     DropState {
         ack: mpsc::Sender<()>,
     },
 }
 
 pub(crate) enum UsagePricingMsg {
+    LogHeadLoaded {
+        request_id: u64,
+        generation: u64,
+        app_state_epoch: u64,
+        app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
+        result: Result<crate::cli::tui::data::UsageLogPage, UsageLogLoadError>,
+    },
     Loaded {
         request_id: u64,
         generation: u64,
         app_state_epoch: u64,
         app_type: AppType,
         range: crate::cli::tui::data::UsageRangePreset,
-        result: Result<crate::cli::tui::data::UsagePricingData, String>,
+        result: Box<Result<crate::cli::tui::data::UsagePricingData, UsagePricingLoadError>>,
     },
+    LogPageLoaded {
+        request_id: u64,
+        generation: u64,
+        app_state_epoch: u64,
+        app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
+        page: usize,
+        direction: crate::cli::tui::data::UsageLogPageDirection,
+        result: Result<crate::cli::tui::data::UsageLogPage, UsageLogLoadError>,
+    },
+    LogDetailLoaded {
+        request_id: u64,
+        generation: u64,
+        app_state_epoch: u64,
+        app_type: AppType,
+        range: crate::cli::tui::data::UsageRangePreset,
+        log_rowid: i64,
+        result: Result<Option<crate::cli::tui::data::UsageLogRow>, UsageLogLoadError>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum UsageLogLoadError {
+    Cancelled,
+    Failed(String),
+}
+
+#[derive(Debug)]
+pub(crate) enum UsagePricingLoadError {
+    /// The query was deliberately interrupted because a newer request or a
+    /// DropState barrier superseded it. This is control flow, not a user-facing
+    /// failure.
+    Cancelled,
+    Failed(String),
 }
 
 pub(crate) enum SessionUsageSyncReq {
@@ -371,7 +511,7 @@ pub(crate) struct LocalEnvSystem {
 pub(crate) struct SessionSystem {
     pub(crate) req_tx: mpsc::Sender<SessionReq>,
     pub(crate) result_rx: mpsc::Receiver<SessionMsg>,
-    pub(crate) _handle: std::thread::JoinHandle<()>,
+    pub(crate) _handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 pub(crate) struct QuotaSystem {
@@ -389,7 +529,7 @@ pub(crate) struct AppDataSystem {
 pub(crate) struct UsagePricingSystem {
     pub(crate) req_tx: mpsc::Sender<UsagePricingReq>,
     pub(crate) result_rx: mpsc::Receiver<UsagePricingMsg>,
-    pub(crate) _handle: std::thread::JoinHandle<()>,
+    pub(crate) _handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 pub(crate) struct SessionUsageSyncSystem {

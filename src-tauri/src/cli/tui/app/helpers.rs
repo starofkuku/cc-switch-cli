@@ -771,6 +771,68 @@ pub(crate) fn session_key(session: &crate::session_manager::SessionMeta) -> Stri
     )
 }
 
+/// Compare a persisted composite session key without allocating another
+/// `String`. Large authoritative scans can contain millions of rows, so callers
+/// that only need equality must not rebuild the key for every row.
+pub(crate) fn session_key_matches(
+    session: &crate::session_manager::SessionMeta,
+    key: &str,
+) -> bool {
+    let provider = session.provider_id.as_bytes();
+    let session_id = session.session_id.as_bytes();
+    let source = session
+        .source_path
+        .as_deref()
+        .unwrap_or_default()
+        .as_bytes();
+    let key = key.as_bytes();
+    let expected_len = provider
+        .len()
+        .saturating_add(1)
+        .saturating_add(session_id.len())
+        .saturating_add(1)
+        .saturating_add(source.len());
+    if key.len() != expected_len {
+        return false;
+    }
+
+    let Some(key) = key.strip_prefix(provider) else {
+        return false;
+    };
+    let Some(key) = key.strip_prefix(b":") else {
+        return false;
+    };
+    let Some(key) = key.strip_prefix(session_id) else {
+        return false;
+    };
+    let Some(key) = key.strip_prefix(b":") else {
+        return false;
+    };
+    key == source
+}
+
+#[cfg(test)]
+mod session_key_tests {
+    use super::*;
+
+    #[test]
+    fn composite_key_comparison_matches_builder_without_allocating() {
+        let row = crate::session_manager::SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "session:with:colons".to_string(),
+            source_path: Some("/tmp/a:b/session.jsonl".to_string()),
+            ..crate::session_manager::SessionMeta::default()
+        };
+        let key = session_key(&row);
+
+        assert!(session_key_matches(&row, &key));
+        assert!(!session_key_matches(
+            &row,
+            "claude:session:with:colons:/other"
+        ));
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn visible_sessions<'a>(
     filter: &FilterState,
@@ -788,85 +850,286 @@ pub(crate) fn visible_sessions<'a>(
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionVisibilityKey {
+    rows_ptr: usize,
+    rows_len: usize,
+    rows_revision: u64,
+    query: Option<String>,
+    app_provider_id: String,
+    show_all: bool,
+    rows_provider_id: Option<String>,
+    detail_key: Option<String>,
+    messages_revision: u64,
+    messages_loaded: bool,
+    deep_search_query: Option<String>,
+    deep_search_seq: u64,
+    deep_results_ptr: usize,
+    deep_results_len: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SessionVisibilityCache {
+    key: Option<SessionVisibilityKey>,
+    indices: std::rc::Rc<Vec<usize>>,
+    rebuilds: u64,
+}
+
+#[cfg(test)]
+impl SessionVisibilityCache {
+    pub(crate) fn rebuilds(&self) -> u64 {
+        self.rebuilds
+    }
+}
+
+pub(crate) enum SessionRowsView<'a> {
+    All(&'a [crate::session_manager::SessionMeta]),
+    Filtered {
+        rows: &'a [crate::session_manager::SessionMeta],
+        indices: std::rc::Rc<Vec<usize>>,
+    },
+}
+
+impl<'a> SessionRowsView<'a> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::All(rows) => rows.len(),
+            Self::Filtered { indices, .. } => indices.len(),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&'a crate::session_manager::SessionMeta> {
+        match self {
+            Self::All(rows) => rows.get(index),
+            Self::Filtered { rows, indices } => indices
+                .get(index)
+                .and_then(|row_index| rows.get(*row_index)),
+        }
+    }
+
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = &'a crate::session_manager::SessionMeta> + '_ {
+        (0..self.len()).filter_map(|index| self.get(index))
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "session visibility combines route, filter, loaded-detail, and deep-search state"
+)]
 pub(crate) fn visible_sessions_for_state<'a>(
     filter: &FilterState,
     app_type: &AppType,
     show_all: bool,
+    rows_provider_id: Option<&str>,
     rows: &'a [crate::session_manager::SessionMeta],
     detail_key: Option<&str>,
     messages_loaded: bool,
     messages: &[crate::session_manager::SessionMessage],
     deep_search_query: Option<&str>,
     deep_search_results: &[crate::session_manager::SessionSearchHit],
-) -> Vec<&'a crate::session_manager::SessionMeta> {
-    let query = filter.query_lower();
+    materialized_query: bool,
+    rows_revision: u64,
+    messages_revision: u64,
+    deep_search_seq: u64,
+    visibility_cache: &std::cell::RefCell<SessionVisibilityCache>,
+) -> SessionRowsView<'a> {
+    let query = (!materialized_query)
+        .then(|| filter.query_lower())
+        .flatten();
+    let deep_search_query = (!materialized_query).then_some(deep_search_query).flatten();
     let provider_id = app_type.as_str();
-    let message_match_key = query.as_deref().and_then(|_| {
-        loaded_detail_message_match_key(filter, detail_key, messages_loaded, messages)
-    });
+    if query.is_none()
+        && deep_search_query.is_none()
+        && (show_all || rows_provider_id == Some(provider_id))
+    {
+        return SessionRowsView::All(rows);
+    }
 
-    // If deep search is active, only show sessions that appear in search hits
-    // (merged with metadata matches).
-    let deep_search_source_paths: Option<std::collections::HashSet<&str>> =
-        if let Some(_q) = deep_search_query {
-            Some(
-                deep_search_results
-                    .iter()
-                    .map(|h| h.source_path.as_str())
-                    .collect(),
-            )
-        } else {
-            None
-        };
+    let key = SessionVisibilityKey {
+        rows_ptr: rows.as_ptr() as usize,
+        rows_len: rows.len(),
+        rows_revision,
+        query: query.clone(),
+        app_provider_id: provider_id.to_string(),
+        show_all,
+        rows_provider_id: rows_provider_id.map(str::to_string),
+        detail_key: detail_key.map(str::to_string),
+        messages_revision,
+        messages_loaded,
+        deep_search_query: deep_search_query.map(str::to_string),
+        deep_search_seq,
+        deep_results_ptr: deep_search_results.as_ptr() as usize,
+        deep_results_len: deep_search_results.len(),
+    };
+    {
+        let mut cache = visibility_cache.borrow_mut();
+        if cache.key.as_ref() != Some(&key) {
+            let message_match_key = query.as_deref().and_then(|_| {
+                loaded_detail_message_match_key(filter, detail_key, messages_loaded, messages)
+            });
+            let deep_search_source_paths: Option<std::collections::HashSet<&str>> =
+                deep_search_query.map(|_| {
+                    deep_search_results
+                        .iter()
+                        .map(|hit| hit.source_path.as_str())
+                        .collect()
+                });
 
-    rows.iter()
-        .filter(|row| show_all || row.provider_id == provider_id)
-        .filter(|row| {
-            // Deep search filtering: if active, show session if it's in search hits
-            // OR matches metadata filter
-            if let Some(ref hit_paths) = deep_search_source_paths {
-                let in_hits = row
-                    .source_path
-                    .as_deref()
-                    .is_some_and(|sp| hit_paths.contains(sp));
-                let meta_match = match &query {
-                    None => false,
-                    Some(q) => {
-                        session_matches_filter(row, q)
+            let indices = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| show_all || row.provider_id == provider_id)
+                .filter(|(_, row)| {
+                    if let Some(ref hit_paths) = deep_search_source_paths {
+                        let in_hits = row
+                            .source_path
+                            .as_deref()
+                            .is_some_and(|path| hit_paths.contains(path));
+                        let meta_match = query.as_deref().is_some_and(|query| {
+                            session_matches_filter(row, query)
+                                || message_match_key
+                                    .as_deref()
+                                    .is_some_and(|key| session_key_matches(row, key))
+                        });
+                        return in_hits || meta_match;
+                    }
+                    query.as_deref().is_none_or(|query| {
+                        session_matches_filter(row, query)
                             || message_match_key
                                 .as_deref()
-                                .is_some_and(|key| session_key(row) == key)
-                    }
-                };
-                return in_hits || meta_match;
-            }
-            // Normal metadata filter
-            match &query {
-                None => true,
-                Some(q) => {
-                    session_matches_filter(row, q)
-                        || message_match_key
-                            .as_deref()
-                            .is_some_and(|key| session_key(row) == key)
-                }
-            }
-        })
-        .collect()
+                                .is_some_and(|key| session_key_matches(row, key))
+                    })
+                })
+                .map(|(index, _)| index)
+                .collect();
+            cache.indices = std::rc::Rc::new(indices);
+            cache.key = Some(key);
+            cache.rebuilds = cache.rebuilds.wrapping_add(1);
+        }
+    }
+
+    SessionRowsView::Filtered {
+        rows,
+        indices: std::rc::Rc::clone(&visibility_cache.borrow().indices),
+    }
 }
 
-pub(crate) fn visible_session_messages(
-    sessions: &SessionsState,
-) -> Vec<(usize, &crate::session_manager::SessionMessage)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionMessageVisibilityKey {
+    messages_ptr: usize,
+    messages_len: usize,
+    messages_revision: u64,
+    query: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SessionMessageVisibilityCache {
+    key: Option<SessionMessageVisibilityKey>,
+    indices: std::rc::Rc<Vec<usize>>,
+    rebuilds: u64,
+}
+
+#[cfg(test)]
+impl SessionMessageVisibilityCache {
+    pub(crate) fn rebuilds(&self) -> u64 {
+        self.rebuilds
+    }
+}
+
+pub(crate) enum SessionMessagesView<'a> {
+    All(&'a [crate::session_manager::SessionMessage]),
+    Filtered {
+        messages: &'a [crate::session_manager::SessionMessage],
+        indices: std::rc::Rc<Vec<usize>>,
+    },
+}
+
+impl<'a> SessionMessagesView<'a> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::All(messages) => messages.len(),
+            Self::Filtered { indices, .. } => indices.len(),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn get(
+        &self,
+        visible_index: usize,
+    ) -> Option<(usize, &'a crate::session_manager::SessionMessage)> {
+        match self {
+            Self::All(messages) => messages
+                .get(visible_index)
+                .map(|message| (visible_index, message)),
+            Self::Filtered { messages, indices } => {
+                indices.get(visible_index).and_then(|message_index| {
+                    messages
+                        .get(*message_index)
+                        .map(|message| (*message_index, message))
+                })
+            }
+        }
+    }
+
+    pub(crate) fn first(&self) -> Option<(usize, &'a crate::session_manager::SessionMessage)> {
+        self.get(0)
+    }
+
+    pub(crate) fn visible_index_of(&self, message_index: usize) -> Option<usize> {
+        match self {
+            Self::All(messages) => (message_index < messages.len()).then_some(message_index),
+            Self::Filtered { indices, .. } => indices.binary_search(&message_index).ok(),
+        }
+    }
+
+    pub(crate) fn by_message_index(
+        &self,
+        message_index: usize,
+    ) -> Option<&'a crate::session_manager::SessionMessage> {
+        let visible_index = self.visible_index_of(message_index)?;
+        self.get(visible_index).map(|(_, message)| message)
+    }
+}
+
+pub(crate) fn visible_session_messages(sessions: &SessionsState) -> SessionMessagesView<'_> {
     let query = sessions.message_query_lower();
-    sessions
-        .messages
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| match &query {
-            None => true,
-            Some(query) => session_message_matches_message_filter(message, query),
-        })
-        .collect()
+    let Some(query) = query else {
+        return SessionMessagesView::All(&sessions.messages);
+    };
+    let key = SessionMessageVisibilityKey {
+        messages_ptr: sessions.messages.as_ptr() as usize,
+        messages_len: sessions.messages.len(),
+        messages_revision: sessions.messages_revision,
+        query: query.clone(),
+    };
+    {
+        let mut cache = sessions.message_visibility_cache.borrow_mut();
+        if cache.key.as_ref() != Some(&key) {
+            let indices = sessions
+                .messages
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| session_message_matches_message_filter(message, &query))
+                .map(|(index, _)| index)
+                .collect();
+            cache.indices = std::rc::Rc::new(indices);
+            cache.key = Some(key);
+            cache.rebuilds = cache.rebuilds.wrapping_add(1);
+        }
+    }
+    SessionMessagesView::Filtered {
+        messages: &sessions.messages,
+        indices: std::rc::Rc::clone(&sessions.message_visibility_cache.borrow().indices),
+    }
 }
 
 pub(crate) fn clamp_session_message_selection(sessions: &mut SessionsState) {
@@ -874,13 +1137,10 @@ pub(crate) fn clamp_session_message_selection(sessions: &mut SessionsState) {
         let visible = visible_session_messages(sessions);
         if visible.is_empty() {
             Some(0)
-        } else if visible
-            .iter()
-            .any(|(index, _)| *index == sessions.message_idx)
-        {
+        } else if visible.visible_index_of(sessions.message_idx).is_some() {
             None
         } else {
-            Some(visible[0].0)
+            visible.first().map(|(index, _)| index)
         }
     };
     if let Some(selected) = selected {

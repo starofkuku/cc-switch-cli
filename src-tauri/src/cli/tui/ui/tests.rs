@@ -555,6 +555,7 @@ fn tui_pricing_renders_catalog_and_recent_usage_context() {
         recent_unknown_models: 1,
         recent_unmatched_total_tokens: 500,
         recent_unmatched_total_cost_usd: 0.12,
+        ..ModelPricingSnapshot::default()
     };
 
     let all = all_text(&render_with_size(&app, &data, 180, 36));
@@ -681,6 +682,219 @@ fn tui_sessions_renders_split_detail_and_message_preview() {
     assert!(all.contains("demo-project"), "{all}");
     assert!(all.contains("codex resume abcdef123456"), "{all}");
     assert!(all.contains("Please review"), "{all}");
+}
+
+#[test]
+fn tui_sessions_page_boundary_uses_compact_bottom_border_cta() {
+    use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+    let _lang = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Sessions;
+    app.focus = Focus::Content;
+    let _request_id = app.sessions.start_scan("claude".to_string());
+    let scope_epoch = app.sessions.scope_epoch;
+    let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+    let store =
+        crate::session_manager::paged_manifest::PagedManifestStore::open_at(manifest_dir.path())
+            .expect("manifest fixture store");
+    let mut builder = store
+        .begin_build("claude")
+        .expect("manifest fixture builder");
+    for index in 0..101 {
+        builder
+            .push(crate::session_manager::SessionMeta {
+                provider_id: "claude".to_string(),
+                session_id: format!("session-{index}"),
+                title: Some(format!("Session {index}")),
+                summary: None,
+                project_dir: Some("/tmp/project".to_string()),
+                created_at: Some(1_735_689_600_000 - index),
+                last_active_at: Some(1_735_689_900_000 - index),
+                source_path: Some(format!("/tmp/session-{index}.jsonl")),
+                resume_command: Some(format!("claude --resume session-{index}")),
+            })
+            .expect("manifest fixture row");
+    }
+    let published = builder.publish().expect("publish manifest fixture");
+    assert!(app.sessions.apply_opened_manifest(
+        scope_epoch,
+        "claude",
+        published.generation,
+        published.total_rows,
+        published.first_page.page_index,
+        published.first_page.rows,
+        published.reader,
+    ));
+    app.on_sessions_wheel(
+        ScrollDirection::Down,
+        10_000,
+        WheelGestureId::from_raw(1),
+        &minimal_data(&app.app_type),
+    );
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        180,
+        40,
+    ));
+    assert!(all.contains("next page"), "{all}");
+    assert!(all.contains("Enter"), "{all}");
+    assert!(all.contains("Session 99"), "{all}");
+    assert!(!all.contains("Session 100"), "{all}");
+}
+
+#[test]
+fn tui_usage_log_footer_keeps_current_page_during_prefetch_then_shows_cta() {
+    use crate::cli::tui::input::{ScrollDirection, WheelGestureId};
+
+    let _lang = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::UsageLogs;
+    app.focus = Focus::Content;
+    app.usage.pane = UsagePane::Recent;
+    let mut data = minimal_data(&app.app_type);
+    data.usage.logs_total = 205;
+    data.usage.recent_logs = (0..100)
+        .map(|index| UsageLogRow {
+            request_id: format!("p0-{index}"),
+            model: format!("model-{index}"),
+            created_at: 1_000 - index,
+            cursor_rowid: index as i64 + 1,
+            ..UsageLogRow::default()
+        })
+        .collect();
+    app.on_usage_logs_wheel(
+        ScrollDirection::Down,
+        10_000,
+        WheelGestureId::from_raw(1),
+        &data,
+    );
+    assert!(app.usage.log_pager.start_request(
+        1,
+        9,
+        crate::cli::tui::data::UsageLogPageDirection::Older,
+    ));
+
+    let loading = all_text(&render_with_size(&app, &data, 180, 40));
+    assert!(loading.contains("Loading page 2"), "{loading}");
+    assert!(loading.contains("model-99"), "{loading}");
+
+    let page_rows = (0..50)
+        .map(|index| UsageLogRow {
+            request_id: format!("p1-{index}"),
+            model: format!("next-{index}"),
+            created_at: 899 - index,
+            ..UsageLogRow::default()
+        })
+        .collect::<Vec<_>>();
+    let next_cursor = page_rows
+        .last()
+        .map(crate::cli::tui::data::UsageLogCursor::from_row);
+    assert!(app.usage.log_pager.finish_request(
+        1,
+        9,
+        crate::cli::tui::data::UsageLogPageDirection::Older,
+        crate::cli::tui::data::UsageLogPage {
+            rows: page_rows,
+            next_cursor,
+            has_more: false,
+            ..crate::cli::tui::data::UsageLogPage::default()
+        },
+    ));
+
+    let ready = all_text(&render_with_size(&app, &data, 180, 40));
+    assert!(ready.contains("Scroll again"), "{ready}");
+    assert!(ready.contains("next page"), "{ready}");
+    assert!(ready.contains("model-99"), "{ready}");
+    assert!(!ready.contains("next-0"), "{ready}");
+    assert!(ready.contains("150 total rows"), "{ready}");
+    assert!(!ready.contains("205 total rows"), "{ready}");
+}
+
+#[test]
+fn tui_usage_background_prefetch_error_does_not_advertise_enter_retry_on_a_row() {
+    let _lang = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::UsageLogs;
+    app.focus = Focus::Content;
+    app.usage.pane = UsagePane::Recent;
+    let mut data = minimal_data(&app.app_type);
+    data.usage.logs_total = 200;
+    data.usage.recent_logs = (0..100)
+        .map(|index| UsageLogRow {
+            request_id: format!("p0-{index}"),
+            model: format!("model-{index}"),
+            created_at: 1_000 - index,
+            cursor_rowid: index + 1,
+            ..UsageLogRow::default()
+        })
+        .collect();
+    app.usage.sync_log_pager(
+        &app.app_type,
+        app.usage.range,
+        &data.usage.recent_logs,
+        data.usage.logs_total,
+    );
+    assert!(app.usage.log_pager.start_request(
+        1,
+        11,
+        crate::cli::tui::data::UsageLogPageDirection::Older,
+    ));
+    assert!(app.usage.log_pager.fail_request(
+        1,
+        11,
+        crate::cli::tui::data::UsageLogPageDirection::Older,
+        "offline".to_string(),
+    ));
+
+    let rendered = all_text(&render_with_size(&app, &data, 180, 40));
+    assert!(!rendered.contains("Enter to retry"), "{rendered}");
+    assert!(rendered.contains("model-0"), "{rendered}");
+
+    let action = app.on_usage_logs_key(
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+        &data,
+    );
+    assert!(matches!(
+        action,
+        Action::SwitchRoute(Route::UsageLogDetail { rowid }) if rowid == 1
+    ));
+}
+
+#[test]
+fn tui_usage_log_detail_marks_a_capped_error_message() {
+    let _lang = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::UsageLogDetail { rowid: 99 };
+    app.focus = Focus::Content;
+    app.usage.remember_log_detail(
+        AppType::Claude,
+        UsageRangePreset::SevenDays,
+        UsageLogRow {
+            request_id: "long-error".to_string(),
+            cursor_rowid: 99,
+            error_message: Some("upstream response failed".to_string()),
+            error_message_truncated: true,
+            ..UsageLogRow::default()
+        },
+    );
+
+    let rendered = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        180,
+        40,
+    ));
+    assert!(rendered.contains("upstream response failed"), "{rendered}");
+    assert!(
+        rendered.contains("display capped at 4096 characters"),
+        "{rendered}",
+    );
 }
 
 #[test]

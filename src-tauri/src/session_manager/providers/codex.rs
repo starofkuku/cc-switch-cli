@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -9,11 +8,15 @@ use serde_json::Value;
 use crate::codex_config::get_codex_config_dir;
 use crate::session_manager::cache::{self, FileScanTarget};
 use crate::session_manager::scan_cache_store::ScanCacheStore;
-use crate::session_manager::{SearchSnippet, SessionMessage, SessionMeta, SessionSearchHit};
+use crate::session_manager::{
+    SearchSnippet, SessionMessage, SessionMessageBatch, SessionMessageBatchBuilder, SessionMeta,
+    SessionSearchHit,
+};
 
 use super::utils::{
-    build_snippet, extract_text, parse_timestamp_to_ms, path_basename, read_head_tail_lines,
-    truncate_summary, TITLE_MAX_CHARS,
+    build_snippet_cancellable, extract_text, file_modified_ms, parse_timestamp_to_ms,
+    path_basename, read_head_tail_lines_bounded, truncate_summary, visit_bounded_lines_cancellable,
+    visit_bounded_lines_cancellable_with_status, TITLE_MAX_CHARS,
 };
 
 const PROVIDER_ID: &str = "codex";
@@ -50,36 +53,143 @@ pub(crate) fn scan_sessions_cached(store: &ScanCacheStore, force: bool) -> Vec<S
     )
 }
 
-fn scan_targets() -> Vec<FileScanTarget> {
-    let config_dir = get_codex_config_dir();
-    let mut targets = Vec::new();
-    cache::collect_targets_recursive(&config_dir.join("sessions"), "jsonl", &mut targets);
-    cache::collect_targets_recursive(&config_dir.join("archived_sessions"), "jsonl", &mut targets);
-    targets
+pub(crate) fn scan_sessions_progressive(
+    store: Option<&ScanCacheStore>,
+    force: bool,
+    on_session: &mut dyn FnMut(&SessionMeta),
+) -> Vec<SessionMeta> {
+    let targets = scan_targets();
+    match store {
+        Some(store) => cache::scan_provider_cached_progressive(
+            store,
+            PROVIDER_ID,
+            targets,
+            force,
+            parse_session,
+            |_| true,
+            on_session,
+        ),
+        None => cache::scan_provider_uncached_progressive(targets, parse_session, on_session),
+    }
 }
 
-pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let file = File::open(path).map_err(|e| format!("Failed to open session file: {e}"))?;
-    let reader = BufReader::new(file);
-    let mut messages = Vec::new();
+pub(crate) fn scan_sessions_progressive_cancellable(
+    store: Option<&ScanCacheStore>,
+    force: bool,
+    on_session: &mut dyn FnMut(&SessionMeta),
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<SessionMeta>> {
+    let targets = scan_targets_cancellable(is_cancelled)?;
+    match store {
+        Some(store) => cache::scan_provider_cached_progressive_cancellable(
+            store,
+            PROVIDER_ID,
+            targets,
+            force,
+            parse_session,
+            |_| true,
+            on_session,
+            is_cancelled,
+        ),
+        None => cache::scan_provider_uncached_progressive_cancellable(
+            targets,
+            parse_session,
+            on_session,
+            is_cancelled,
+        ),
+    }
+}
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&line) {
+pub(crate) fn stream_sessions_cancellable(
+    store: Option<&ScanCacheStore>,
+    force: bool,
+    on_session: &mut dyn FnMut(SessionMeta) -> ControlFlow<()>,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<cache::StreamScanStats, cache::StreamScanStop> {
+    let config_dir = get_codex_config_dir();
+    cache::stream_file_provider_cancellable(
+        store,
+        PROVIDER_ID,
+        force,
+        |path| {
+            if is_cancelled() {
+                return Err(cache::StreamScanStop::Cancelled);
+            }
+            let meta = parse_session_authoritative(path)?;
+            if is_cancelled() {
+                Err(cache::StreamScanStop::Cancelled)
+            } else {
+                Ok(meta)
+            }
+        },
+        |_| true,
+        cache::stat_target,
+        move |on_target, cancel| {
+            cache::visit_targets_recursive_cancellable(
+                &config_dir.join("sessions"),
+                "jsonl",
+                on_target,
+                cancel,
+            )?;
+            cache::visit_targets_recursive_cancellable(
+                &config_dir.join("archived_sessions"),
+                "jsonl",
+                on_target,
+                cancel,
+            )
+        },
+        on_session,
+        is_cancelled,
+    )
+}
+
+fn scan_targets() -> Vec<FileScanTarget> {
+    scan_targets_cancellable(&|| false).expect("non-cancellable target scan cannot stop")
+}
+
+fn scan_targets_cancellable(
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<Vec<FileScanTarget>> {
+    let config_dir = get_codex_config_dir();
+    let mut targets = Vec::new();
+    if !cache::collect_targets_recursive_cancellable(
+        &config_dir.join("sessions"),
+        "jsonl",
+        &mut targets,
+        is_cancelled,
+    ) || !cache::collect_targets_recursive_cancellable(
+        &config_dir.join("archived_sessions"),
+        "jsonl",
+        &mut targets,
+        is_cancelled,
+    ) {
+        return None;
+    }
+    Some(targets)
+}
+
+pub fn load_messages(path: &Path) -> Result<SessionMessageBatch, String> {
+    load_messages_cancellable(path, &|| false)
+}
+
+pub(crate) fn load_messages_cancellable(
+    path: &Path,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<SessionMessageBatch, String> {
+    let mut batch = SessionMessageBatchBuilder::new();
+    let status = visit_bounded_lines_cancellable_with_status(path, is_cancelled, &mut |line| {
+        let value: Value = match serde_json::from_str(line) {
             Ok(parsed) => parsed,
-            Err(_) => continue,
+            Err(_) => return ControlFlow::Continue(()),
         };
 
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
-            continue;
+            return ControlFlow::Continue(());
         }
 
         let payload = match value.get("payload") {
             Some(payload) => payload,
-            None => continue,
+            None => return ControlFlow::Continue(()),
         };
 
         let payload_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
@@ -110,46 +220,56 @@ pub fn load_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
                     .to_string();
                 ("tool".to_string(), output)
             }
-            _ => continue,
+            _ => return ControlFlow::Continue(()),
         };
 
         if content.trim().is_empty() {
-            continue;
+            return ControlFlow::Continue(());
         }
 
         let ts = value.get("timestamp").and_then(parse_timestamp_to_ms);
 
-        messages.push(SessionMessage { role, content, ts });
+        batch.push(SessionMessage { role, content, ts })
+    })
+    .map_err(|error| format!("Failed to read session file: {error}"))?
+    .ok_or_else(|| "Session message preview was cancelled".to_string())?;
+    if status.oversized_record_skipped {
+        batch.mark_truncated();
     }
 
-    Ok(messages)
+    Ok(batch.finish())
 }
 
 /// Search a single Codex session file for `needle` (case-insensitive).
+#[allow(dead_code)]
 pub fn search_session(meta: &SessionMeta, needle: &str) -> Option<SessionSearchHit> {
+    search_session_cancellable(meta, needle, &|| false)
+}
+
+pub(crate) fn search_session_cancellable(
+    meta: &SessionMeta,
+    needle: &str,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Option<SessionSearchHit> {
+    if is_cancelled() {
+        return None;
+    }
     let source_path = meta.source_path.as_deref()?;
     let path = Path::new(source_path);
-    let file = File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    let lower_needle = needle.to_lowercase();
     let mut snippets: Vec<SearchSnippet> = Vec::new();
     const MAX_SNIPPETS: usize = 5;
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
+    visit_bounded_lines_cancellable(path, is_cancelled, &mut |line| {
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => return ControlFlow::Continue(()),
         };
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
-            continue;
+            return ControlFlow::Continue(());
         }
         let payload = match value.get("payload") {
-            Some(p) => p,
-            None => continue,
+            Some(payload) => payload,
+            None => return ControlFlow::Continue(()),
         };
         let payload_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
         let (role, content) = match payload_type {
@@ -177,17 +297,26 @@ pub fn search_session(meta: &SessionMeta, needle: &str) -> Option<SessionSearchH
                     .to_string();
                 ("tool".to_string(), output)
             }
-            _ => continue,
+            _ => return ControlFlow::Continue(()),
         };
-        if content.trim().is_empty() || !content.to_lowercase().contains(&lower_needle) {
-            continue;
+        if content.trim().is_empty() {
+            return ControlFlow::Continue(());
         }
-        if let Some(snippet) = build_snippet(&content, needle) {
-            snippets.push(SearchSnippet { role, snippet });
-            if snippets.len() >= MAX_SNIPPETS {
-                break;
+        match build_snippet_cancellable(&content, needle, is_cancelled) {
+            Ok(Some(snippet)) => {
+                snippets.push(SearchSnippet { role, snippet });
+                if snippets.len() >= MAX_SNIPPETS {
+                    return ControlFlow::Break(());
+                }
             }
+            Ok(None) => {}
+            Err(_) => return ControlFlow::Break(()),
         }
+        ControlFlow::Continue(())
+    })
+    .ok()??;
+    if is_cancelled() {
+        return None;
     }
     if snippets.is_empty() {
         return None;
@@ -222,15 +351,28 @@ pub fn delete_session(_root: &Path, path: &Path, session_id: &str) -> Result<boo
 }
 
 fn parse_session(path: &Path) -> Option<SessionMeta> {
-    let (head, tail) = read_head_tail_lines(path, 10, 30).ok()?;
+    parse_session_authoritative(path).ok().flatten()
+}
 
+fn parse_session_authoritative(path: &Path) -> Result<Option<SessionMeta>, cache::StreamScanStop> {
+    let (head, tail) = read_head_tail_lines_bounded(path, 10, 30).map_err(|error| {
+        log::warn!(
+            "authoritative Codex metadata read failed at {}: {error}",
+            path.display()
+        );
+        cache::StreamScanStop::Incomplete
+    })?;
+    Ok(parse_session_lines(path, &head, &tail))
+}
+
+fn parse_session_lines(path: &Path, head: &[String], tail: &[String]) -> Option<SessionMeta> {
     let mut session_id: Option<String> = None;
     let mut project_dir: Option<String> = None;
     let mut created_at: Option<i64> = None;
     let mut first_user_message: Option<String> = None;
 
     // Extract metadata and first user message from head lines
-    for line in &head {
+    for line in head {
         let value: Value = match serde_json::from_str(line) {
             Ok(parsed) => parsed,
             Err(_) => continue,
@@ -325,9 +467,15 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
                 .as_deref()
                 .and_then(path_basename)
                 .map(|v| v.to_string())
+        })
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .map(|value| truncate_summary(value, TITLE_MAX_CHARS))
         });
 
     let summary = summary.map(|text| truncate_summary(&text, 160));
+    let fallback_time = file_modified_ms(path);
 
     Some(SessionMeta {
         provider_id: PROVIDER_ID.to_string(),
@@ -335,8 +483,8 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         title,
         summary,
         project_dir,
-        created_at,
-        last_active_at,
+        created_at: created_at.or(fallback_time),
+        last_active_at: last_active_at.or(fallback_time).or(created_at),
         source_path: Some(path.to_string_lossy().to_string()),
         resume_command: Some(format!("codex resume {session_id}")),
     })
@@ -377,6 +525,7 @@ fn collect_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
 
     #[test]
@@ -541,5 +690,47 @@ mod tests {
 
         assert_eq!(msgs[3].role, "assistant");
         assert_eq!(msgs[3].content, "Done.");
+    }
+
+    #[test]
+    fn load_messages_stops_reading_jsonl_at_the_preview_limit() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        let mut transcript = String::new();
+        for index in 0..1_000 {
+            transcript.push_str(&format!(
+                "{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":\"message {index}\"}}}}\n"
+            ));
+        }
+        std::fs::write(&path, transcript).expect("write");
+        let cancellation_checks = AtomicUsize::new(0);
+
+        let batch = load_messages_cancellable(&path, &|| {
+            cancellation_checks.fetch_add(1, Ordering::AcqRel);
+            false
+        })
+        .expect("load bounded preview");
+
+        assert_eq!(
+            batch.messages.len(),
+            crate::session_manager::SESSION_MESSAGE_PREVIEW_MAX_MESSAGES
+        );
+        assert!(batch.truncated);
+        assert!(
+            cancellation_checks.load(Ordering::Acquire)
+                <= crate::session_manager::SESSION_MESSAGE_PREVIEW_MAX_MESSAGES + 2,
+            "the JSONL visitor must not scan the tail after the batch fills"
+        );
+    }
+
+    #[test]
+    fn load_messages_observes_cancellation_before_reading() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.jsonl");
+        std::fs::write(&path, "{}\n").expect("write");
+
+        let error = load_messages_cancellable(&path, &|| true).expect_err("cancelled load");
+
+        assert!(error.contains("cancelled"));
     }
 }

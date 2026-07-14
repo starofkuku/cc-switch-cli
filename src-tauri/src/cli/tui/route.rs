@@ -6,7 +6,7 @@ pub enum Route {
     Providers,
     Usage,
     UsageLogs,
-    UsageLogDetail { request_id: String },
+    UsageLogDetail { rowid: i64 },
     Pricing,
     Sessions,
     Mcp,
