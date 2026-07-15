@@ -1,5 +1,17 @@
 use super::*;
 
+fn model_fetch_model_index(
+    models_len: usize,
+    filtered_indices: Option<&[usize]>,
+    filtered_index: usize,
+) -> Option<usize> {
+    let model_index = match filtered_indices {
+        Some(indices) => indices.get(filtered_index).copied()?,
+        None => filtered_index,
+    };
+    (model_index < models_len).then_some(model_index)
+}
+
 impl App {
     pub(super) fn handle_picker_overlay_key(
         &mut self,
@@ -127,7 +139,7 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() {
-                    let fields_len = provider.hermes_model_fields().len();
+                    let fields_len = provider.hermes_model_field_count();
                     if fields_len > 0 {
                         provider.hermes_models_field_idx =
                             (provider.hermes_models_field_idx + 1).min(fields_len - 1);
@@ -390,7 +402,7 @@ impl App {
             .managed_auth_status
             .as_ref()
             .filter(|status| status.provider == auth_provider)
-            .map(|status| status.accounts.clone())
+            .map(|status| status.accounts.as_slice())
             .unwrap_or_default();
         let row_count = if binding {
             accounts.len() + 1
@@ -707,22 +719,17 @@ impl App {
             input,
             query,
             models,
+            filtered_indices,
+            filter_incomplete,
             selected_idx,
+            selection_active,
             ..
         } = &mut self.overlay
         else {
             return None;
         };
 
-        let filtered: Vec<&String> = if query.trim().is_empty() {
-            models.iter().collect()
-        } else {
-            let q = query.trim().to_lowercase();
-            models
-                .iter()
-                .filter(|model| model.to_lowercase().contains(&q))
-                .collect()
-        };
+        let filtered_len = filtered_indices.as_ref().map_or(models.len(), Vec::len);
 
         let is_claude_model = *field == ProviderAddField::ClaudeModelConfig;
         let restore_idx = claude_idx.unwrap_or(0);
@@ -741,38 +748,47 @@ impl App {
             }
             KeyCode::Up => {
                 *selected_idx = selected_idx.saturating_sub(1);
-                if let Some(model) = filtered.get(*selected_idx) {
-                    input.set((*model).to_string());
-                }
+                *selection_active = filtered_len > 0;
                 Action::None
             }
             KeyCode::Down => {
-                if !filtered.is_empty() {
-                    *selected_idx = (*selected_idx + 1).min(filtered.len() - 1);
-                    if let Some(model) = filtered.get(*selected_idx) {
-                        input.set((*model).to_string());
-                    }
+                if filtered_len > 0 {
+                    *selected_idx = (*selected_idx + 1).min(filtered_len - 1);
                 }
+                *selection_active = filtered_len > 0;
                 Action::None
             }
             KeyCode::Tab => {
-                if let Some(model) = filtered.get(*selected_idx) {
-                    input.set((*model).to_string());
-                    *query = input.value.clone();
-                    *selected_idx = 0;
-                }
+                *selection_active = filtered_len > 0;
                 Action::None
             }
             KeyCode::Enter => {
-                let mut selected_model = input.value.trim().to_string();
-                if selected_model.is_empty() {
-                    if let Some(first) = filtered.first() {
-                        selected_model = first.to_string();
-                    } else {
+                let input_is_blank = input.value.len() <= MODEL_FETCH_QUERY_MAX_BYTES
+                    && input.value.trim().is_empty();
+                let use_fetched_model = *selection_active || input_is_blank;
+                let selected_model = if use_fetched_model {
+                    let selected = if *selection_active { *selected_idx } else { 0 };
+                    let Some(model_index) = model_fetch_model_index(
+                        models.len(),
+                        filtered_indices.as_deref(),
+                        selected,
+                    ) else {
+                        self.close_overlay();
+                        return Some(Action::None);
+                    };
+                    std::mem::take(&mut models[model_index])
+                } else if input.value.len() <= MODEL_FETCH_QUERY_MAX_BYTES {
+                    let value = std::mem::take(&mut input.value);
+                    let selected = value.trim().to_string();
+                    if selected.is_empty() {
                         self.close_overlay();
                         return Some(Action::None);
                     }
-                }
+                    selected
+                } else {
+                    *filter_incomplete = true;
+                    return Some(Action::None);
+                };
 
                 let field = *field;
                 let claude_idx = *claude_idx;
@@ -805,9 +821,21 @@ impl App {
                 Action::None
             }
             _ => {
-                if input.apply_key(key).is_some_and(|edit| edit.changed) {
-                    *query = input.value.clone();
-                    *selected_idx = 0;
+                if let Some(edit) = input.apply_key_with_policy(
+                    key,
+                    TextInputPolicy {
+                        max_chars: Some(MODEL_FETCH_QUERY_MAX_CHARS),
+                        sanitize: None,
+                    },
+                ) {
+                    *selection_active = false;
+                    if edit.changed {
+                        *query = input.value.clone();
+                        let filter = model_fetch_filter(models, query);
+                        *filtered_indices = filter.indices;
+                        *filter_incomplete = filter.incomplete;
+                        *selected_idx = 0;
+                    }
                 }
                 Action::None
             }
@@ -1011,7 +1039,7 @@ impl App {
                     if !fields.is_empty() {
                         mcp.field_idx = mcp.field_idx.min(fields.len() - 1);
                     }
-                    mcp.editing = false;
+                    mcp.clear_text_edit();
                 }
                 Action::None
             }

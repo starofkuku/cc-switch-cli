@@ -353,21 +353,11 @@ fn render_section_block(
     );
 }
 
-fn inline_value(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
-    }
-}
-
-fn inline_env_value(key: &str, value: &Value) -> String {
-    let mut map = serde_json::Map::new();
-    map.insert(key.to_string(), value.clone());
-
-    redact_sensitive_json(&Value::Object(map))
-        .get(key)
-        .map(inline_value)
-        .unwrap_or_else(|| inline_value(value))
+fn inline_env_value(_key: &str, _value: &Value) -> String {
+    // Environment values are credential-bearing by semantics, regardless of
+    // whether their variable name resembles a public preview field such as
+    // MODEL, NAME, or API.
+    redacted_secret_placeholder().to_string()
 }
 
 fn pad_display_width(text: &str, width: usize) -> String {

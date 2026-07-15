@@ -40,7 +40,107 @@ use crate::{
 };
 
 #[test]
-fn provider_form_shows_full_api_key_in_table_value() {
+fn visible_text_window_keeps_only_the_ascii_viewport_tail() {
+    let value = format!("{}TAIL", "x".repeat(1_000_000));
+
+    let (visible, cursor_x) = super::visible_text_window(&value, value.len(), 10);
+
+    assert_eq!(visible, "xxxxxTAIL");
+    assert_eq!(cursor_x, 9);
+}
+
+#[test]
+fn visible_text_window_respects_unicode_display_width() {
+    let (visible, cursor_x) = super::visible_text_window("ab你cd", "ab你".len(), 4);
+
+    assert_eq!(visible, "b你c");
+    assert_eq!(cursor_x, 3);
+}
+
+#[test]
+fn visible_text_window_bounds_zero_width_unicode_output() {
+    let value = "\u{0301}".repeat(1_000_000);
+
+    let (visible, cursor_x) = super::visible_text_window(&value, value.len(), 8);
+
+    assert!(visible.chars().count() <= 48);
+    assert_eq!(cursor_x, 0);
+}
+
+#[test]
+fn visible_text_window_bounds_a_million_multibyte_characters() {
+    let value = format!("{}TAIL", "你".repeat(1_000_000));
+
+    let (visible, cursor_x) = super::visible_text_window(&value, value.len(), 10);
+
+    assert!(UnicodeWidthStr::width(visible.as_str()) <= 10);
+    assert!(visible.chars().count() <= 10);
+    assert!(visible.ends_with("TAIL"));
+    assert_eq!(cursor_x, 8);
+}
+
+#[test]
+fn masked_inline_window_never_materializes_the_complete_secret() {
+    let input = TextInput::new("x".repeat(1_000_000));
+
+    let (visible, cursor_x) = super::inline_input_window(&input, 10, true);
+
+    assert_eq!(visible.chars().count(), 9);
+    assert!(visible.chars().all(|ch| ch == '•'));
+    assert_eq!(cursor_x, 9);
+}
+
+#[test]
+fn masked_inline_window_bounds_a_multibyte_secret() {
+    let input = TextInput::new("你".repeat(1_000_000));
+
+    let (visible, cursor_x) = super::inline_input_window(&input, 10, true);
+
+    assert_eq!(visible.chars().count(), 9);
+    assert!(visible.chars().all(|ch| ch == '•'));
+    assert_eq!(cursor_x, 9);
+}
+
+#[test]
+fn passive_text_helpers_bound_leading_space_and_zero_width_inputs() {
+    let leading = format!("{}secret-tail", " ".repeat(1_000_000));
+    let combining = "\u{0301}".repeat(1_000_000);
+
+    let leading_summary = super::bounded_trimmed_text_for_display(&leading);
+    let combining_summary = super::bounded_trimmed_text_for_display(&combining);
+    let truncated = super::truncate_to_display_width(&combining, 8);
+
+    assert_eq!(leading_summary, "…");
+    assert!(combining_summary.chars().count() <= 2_049);
+    assert!(combining_summary.ends_with('…'));
+    assert!(truncated.chars().count() <= 49);
+    assert!(truncated.ends_with('…'));
+}
+
+#[test]
+fn visible_selection_window_stays_fixed_around_edges_and_selection() {
+    assert_eq!(super::visible_selection_window(0, 0, 10), 0..0);
+    assert_eq!(super::visible_selection_window(100, 0, 10), 0..10);
+    assert_eq!(super::visible_selection_window(100, 50, 10), 45..55);
+    assert_eq!(super::visible_selection_window(100, 99, 10), 90..100);
+    assert_eq!(super::visible_selection_window(3, usize::MAX, 10), 0..3);
+}
+
+#[test]
+fn passive_json_redaction_bounds_a_million_byte_object_key() {
+    let mut object = serde_json::Map::new();
+    object.insert("K".repeat(1_000_000), json!("secret-value"));
+
+    let redacted = super::redact_sensitive_json(&serde_json::Value::Object(object));
+    let rendered = serde_json::to_string(&redacted).expect("redacted JSON should serialize");
+
+    assert!(rendered.len() < 1_000, "preview was not bounded");
+    assert!(!rendered.contains("secret-value"));
+    assert!(rendered.contains("[redacted]"));
+}
+
+#[test]
+fn provider_form_redacts_api_key_in_table_value() {
     let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
     form.claude_api_key.set("sk-test-1234567890");
 
@@ -48,7 +148,472 @@ fn provider_form_shows_full_api_key_in_table_value() {
         &form,
         crate::cli::tui::form::ProviderAddField::ClaudeApiKey,
     );
-    assert_eq!(value, "sk-test-1234567890");
+    assert_eq!(value, "[redacted]");
+}
+
+#[test]
+fn provider_and_usage_passive_url_rows_hide_embedded_credentials() {
+    let raw = "https://user:pass@example.test/v1/private?api_key=P2_URL_SECRET#fragment";
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.claude_base_url.set(raw);
+    form.usage_query_base_url.set(raw);
+
+    let (_, provider_value) = super::provider_field_label_and_value(
+        &form,
+        crate::cli::tui::form::ProviderAddField::ClaudeBaseUrl,
+    );
+    let (_, usage_value) = super::usage_query_field_label_and_value(
+        &form,
+        crate::cli::tui::form::UsageQueryField::BaseUrl,
+    );
+
+    assert_eq!(provider_value, "https://example.test");
+    assert_eq!(usage_value, "https://example.test");
+    for value in [&provider_value, &usage_value] {
+        assert!(!value.contains("user"));
+        assert!(!value.contains("pass"));
+        assert!(!value.contains("P2_URL_SECRET"));
+        assert!(!value.contains("private"));
+    }
+    assert_eq!(form.claude_base_url.value, raw);
+    assert_eq!(form.usage_query_base_url.value, raw);
+}
+
+#[test]
+fn provider_inline_secret_edit_never_writes_plaintext_to_the_frame() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "sk-inline-super-secret";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::Fields;
+    form.name.set("Demo");
+    form.claude_api_key.set(secret);
+    assert!(form.begin_main_text_edit(ProviderAddField::ClaudeApiKey));
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(all.contains('•'), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn mcp_preview_redacts_all_environment_values() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "value-with-an-unremarkable-key";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.focus = FormFocus::JsonPreview;
+    form.id.set("server");
+    form.name.set("Server");
+    form.command.set("node");
+    form.env_rows.push(crate::cli::tui::form::McpEnvVarRow {
+        key: "CUSTOM_VALUE".to_string(),
+        value: secret.to_string(),
+    });
+    app.form = Some(FormState::McpAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        80,
+        35,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(all.contains("CUSTOM_VALUE"), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn mcp_preview_redacts_custom_header_values_by_container() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "custom-header-super-secret";
+    let server = crate::app_config::McpServer {
+        id: "remote".to_string(),
+        name: "Remote".to_string(),
+        server: json!({
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+                "X-Custom-Auth": secret,
+                "User-Agent": "safe-but-hidden-too"
+            }
+        }),
+        apps: crate::app_config::McpApps::default(),
+        description: None,
+        homepage: None,
+        docs: None,
+        tags: Vec::new(),
+    };
+    let mut form = crate::cli::tui::form::McpAddFormState::from_server(&server);
+    form.focus = FormFocus::JsonPreview;
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::McpAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(!all.contains("safe-but-hidden-too"), "{all}");
+    assert!(all.contains("X-Custom-Auth"), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn mcp_passive_stdio_fields_and_preview_hide_argument_payloads() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.focus = FormFocus::Fields;
+    form.id.set("server");
+    form.name.set("Server");
+    form.command.set("/usr/local/bin/node");
+    form.set_args_values(vec![
+        "--api-key".to_string(),
+        "B6_ARGS_SECRET".to_string(),
+        "positional-secret".to_string(),
+    ]);
+    app.form = Some(FormState::McpAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.contains("node"), "{all}");
+    assert!(all.contains(&texts::tui_mcp_args_hidden_count(3)), "{all}");
+    assert!(!all.contains("B6_ARGS_SECRET"), "{all}");
+    assert!(!all.contains("positional-secret"), "{all}");
+}
+
+#[test]
+fn mcp_passive_remote_fields_and_preview_show_only_url_origin() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.focus = FormFocus::Fields;
+    form.id.set("remote");
+    form.name.set("Remote");
+    form.server_type = crate::cli::tui::form::McpTransport::Http;
+    form.url
+        .set("https://user:pass@mcp.example.test/secret-path?access_token=URL_SECRET#frag");
+    app.form = Some(FormState::McpAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.contains("https://mcp.example.test"), "{all}");
+    for hidden in ["user:pass", "secret-path", "URL_SECRET", "access_token"] {
+        assert!(!all.contains(hidden), "{all}");
+    }
+}
+
+#[test]
+fn mcp_passive_fields_fail_closed_for_invalid_url_and_shell_command() {
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.command.set("sh -c secret");
+    let (_, command) =
+        super::mcp_field_label_and_value(&form, crate::cli::tui::form::McpAddField::Command);
+    assert_eq!(command, "[redacted]");
+
+    form.server_type = crate::cli::tui::form::McpTransport::Http;
+    form.url.set("not-a-url-with-secret");
+    let (_, url) = super::mcp_field_label_and_value(&form, crate::cli::tui::form::McpAddField::Url);
+    assert_eq!(url, "[redacted]");
+}
+
+#[test]
+fn mcp_passive_redaction_never_mutates_the_serialized_form_payload() {
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.command.set("node");
+    form.set_args_values(vec![
+        "--api-key".to_string(),
+        "persistence-secret".to_string(),
+    ]);
+    form.env_rows.push(crate::cli::tui::form::McpEnvVarRow {
+        key: "CUSTOM_VALUE".to_string(),
+        value: "environment-secret".to_string(),
+    });
+
+    let raw = form.to_mcp_server_json_value();
+    let redacted = super::redact_sensitive_json(&raw);
+
+    assert_eq!(raw["server"]["command"], json!("node"));
+    assert_eq!(
+        raw["server"]["args"],
+        json!(["--api-key", "persistence-secret"])
+    );
+    assert_eq!(
+        raw["server"]["env"]["CUSTOM_VALUE"],
+        json!("environment-secret")
+    );
+    assert_eq!(redacted["server"]["args"], json!("[redacted]"));
+    assert_eq!(
+        redacted["server"]["env"]["CUSTOM_VALUE"],
+        json!("[redacted]")
+    );
+}
+
+#[test]
+fn mcp_env_picker_never_renders_environment_values() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "picker-super-secret";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.env_rows.push(crate::cli::tui::form::McpEnvVarRow {
+        key: "CUSTOM_VALUE".to_string(),
+        value: secret.to_string(),
+    });
+    app.form = Some(FormState::McpAdd(form));
+    app.overlay = Overlay::McpEnvPicker { selected: 0 };
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        100,
+        35,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(all.contains("CUSTOM_VALUE"), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn mcp_env_picker_materializes_only_the_selected_large_collection_window() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let selected = 9_999usize;
+    let mut form = crate::cli::tui::form::McpAddFormState::new();
+    form.env_rows = (0..10_000)
+        .map(|index| crate::cli::tui::form::McpEnvVarRow {
+            key: format!("ENV-{index:05}"),
+            value: format!("secret-{index}"),
+        })
+        .collect();
+    form.env_rows[selected].key = format!("SELECTED-ENV-{}", "X".repeat(1_000_000));
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::McpAdd(form));
+    app.overlay = Overlay::McpEnvPicker { selected };
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        100,
+        35,
+    ));
+    assert!(all.contains("SELECTED-ENV"), "{all}");
+    assert!(!all.contains("ENV-00000"), "{all}");
+    assert!(!all.contains("secret-9999"), "{all}");
+}
+
+#[test]
+fn mcp_env_value_editor_masks_the_active_value() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "editor-super-secret";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::McpAdd(
+        crate::cli::tui::form::McpAddFormState::new(),
+    ));
+    app.overlay = Overlay::McpEnvEntryEditor(crate::cli::tui::app::McpEnvEntryEditorState {
+        row: None,
+        return_selected: 0,
+        field: crate::cli::tui::app::McpEnvEditorField::Value,
+        key: TextInput::new("CUSTOM_VALUE"),
+        value: TextInput::new(secret),
+    });
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        100,
+        35,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(all.contains("CUSTOM_VALUE"), "{all}");
+    assert!(all.contains('•'), "{all}");
+}
+
+#[test]
+fn model_fetch_picker_renders_only_the_selected_large_collection_window() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let selected = 9_999usize;
+    let mut models = (0..10_000)
+        .map(|index| format!("FETCHED-{index:05}"))
+        .collect::<Vec<_>>();
+    models[selected] = format!("SELECTED-FETCHED-{}", "X".repeat(1_000_000));
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.overlay = Overlay::ModelFetchPicker {
+        request_id: 1,
+        field: ProviderAddField::ClaudeModelConfig,
+        claude_idx: Some(0),
+        input: TextInput::new(""),
+        query: String::new(),
+        fetching: false,
+        models,
+        filtered_indices: None,
+        filter_incomplete: false,
+        error: None,
+        selected_idx: selected,
+        selection_active: false,
+    };
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        100,
+        35,
+    ));
+    assert!(all.contains("SELECTED-FETCHED"), "{all}");
+    assert!(!all.contains("FETCHED-00000"), "{all}");
+}
+
+#[test]
+fn model_fetch_picker_discloses_when_search_results_are_budget_limited() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.overlay = Overlay::ModelFetchPicker {
+        request_id: 1,
+        field: ProviderAddField::ClaudeModelConfig,
+        claude_idx: Some(0),
+        input: TextInput::new("model"),
+        query: "model".to_string(),
+        fetching: false,
+        models: vec!["model-a".to_string()],
+        filtered_indices: Some(vec![0]),
+        filter_incomplete: true,
+        error: None,
+        selected_idx: 0,
+        selection_active: false,
+    };
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        100,
+        35,
+    ));
+    assert!(all.contains("Search is limited; refine the query"), "{all}");
+}
+
+#[test]
+fn provider_inline_cursor_and_error_stay_on_the_selected_row() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::Fields;
+    form.name.set("alpha");
+    form.name.cursor = 3;
+    assert!(form.begin_main_text_edit(ProviderAddField::Name));
+    form.set_main_field_error(ProviderAddField::Name, "bad value");
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let data = minimal_data(&app.app_type);
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal created");
+    terminal
+        .draw(|frame| super::render(frame, &app, &data))
+        .expect("draw ok");
+    let cursor = terminal.get_cursor_position().expect("cursor position");
+    let buf = terminal.backend().buffer();
+
+    assert!(line_at(buf, cursor.y).contains("alpha"));
+    assert!(line_at(buf, cursor.y + 1).contains("! bad value"));
+    assert!(!all_text(buf).contains(" Editing "));
+}
+
+#[test]
+fn provider_form_uses_one_pane_when_compact_and_two_when_wide() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::Fields;
+    app.form = Some(FormState::ProviderAdd(form));
+    let data = minimal_data(&app.app_type);
+
+    let compact_fields = all_text(&render_with_size(&app, &data, 80, 35));
+    assert!(compact_fields.contains("┌ Fields "), "{compact_fields}");
+    assert!(!compact_fields.contains("┌ JSON "), "{compact_fields}");
+
+    if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
+        form.focus = FormFocus::JsonPreview;
+    }
+    let compact_preview = all_text(&render_with_size(&app, &data, 80, 35));
+    assert!(!compact_preview.contains("┌ Fields "), "{compact_preview}");
+    assert!(compact_preview.contains("┌ JSON "), "{compact_preview}");
+
+    let wide = all_text(&render_with_size(&app, &data, 160, 40));
+    assert!(wide.contains("┌ Fields "), "{wide}");
+    assert!(wide.contains("┌ JSON "), "{wide}");
 }
 
 #[test]
@@ -1239,16 +1804,49 @@ fn redact_sensitive_json_keeps_non_secret_token_count_fields_visible() {
     let value = json!({
         "env": {
             "AWS_SECRET_ACCESS_KEY": "aws-secret-value",
-            "AWS_ACCESS_KEY_ID": "AKIA1234567890"
+            "AWS_ACCESS_KEY_ID": "AKIA1234567890",
+            "GITHUB_PAT": "ghp-visible-secret",
+            "DATABASE_URL": "postgres://user:password@example.test/db"
         },
         "models": [
             {
                 "maxTokens": 8192,
+                "max_output_tokens": 4096,
                 "apiKey": "sk-openclaw-secret"
             }
         ],
         "tokenLimit": 12345,
-        "password": "hidden"
+        "auths": { "name": "auths-container-secret" },
+        "oauths": { "maxTokens": 7777 },
+        "pats": { "tokenLimit": 8888 },
+        "unknown": {
+            "name": "unknown-parent-secret",
+            "maxTokens": 9999
+        },
+        "password": "hidden",
+        "cookies": { "session": "cookie-container-secret" },
+        "credentials": { "value": "credential-container-secret" },
+        "passwords": ["password-container-secret"],
+        "api_keys": { "primary": "api-key-container-secret" },
+        "auth_tokens": { "primary": "auth-token-container-secret" },
+        "headers": {
+            "X-Custom-Auth": "custom-header-secret",
+            "User-Agent": "safe-but-hidden"
+        },
+        "env_http_headers": {
+            "Authorization": "AUTH_HEADER_ENV",
+            "nested": {
+                "env": {
+                    "GITHUB_PAT": "nested-env-header-secret"
+                }
+            }
+        },
+        "evil_env_http_headers": {
+            "Authorization": "Bearer disguised-header-secret"
+        },
+        "PRIVATE_KEY": "private-key-value",
+        "SECRET_FOO": "secret-prefix-value",
+        "API_SECRET_VALUE": "secret-middle-value"
     });
 
     let redacted = super::redact_sensitive_json(&value);
@@ -1258,10 +1856,727 @@ fn redact_sensitive_json_keeps_non_secret_token_count_fields_visible() {
         json!("[redacted]")
     );
     assert_eq!(redacted["env"]["AWS_ACCESS_KEY_ID"], json!("[redacted]"));
+    assert_eq!(redacted["env"]["GITHUB_PAT"], json!("[redacted]"));
+    assert_eq!(redacted["env"]["DATABASE_URL"], json!("[redacted]"));
     assert_eq!(redacted["models"][0]["maxTokens"], json!(8192));
+    assert_eq!(redacted["models"][0]["max_output_tokens"], json!(4096));
     assert_eq!(redacted["tokenLimit"], json!(12345));
+    assert_eq!(redacted["auths"], json!("[redacted]"));
+    assert_eq!(redacted["oauths"], json!("[redacted]"));
+    assert_eq!(redacted["pats"], json!("[redacted]"));
+    assert_eq!(redacted["unknown"], json!("[redacted]"));
     assert_eq!(redacted["models"][0]["apiKey"], json!("[redacted]"));
     assert_eq!(redacted["password"], json!("[redacted]"));
+    assert_eq!(redacted["cookies"], json!("[redacted]"));
+    assert_eq!(redacted["credentials"], json!("[redacted]"));
+    assert_eq!(redacted["passwords"], json!("[redacted]"));
+    assert_eq!(redacted["api_keys"], json!("[redacted]"));
+    assert_eq!(redacted["auth_tokens"], json!("[redacted]"));
+    assert_eq!(redacted["headers"]["X-Custom-Auth"], json!("[redacted]"));
+    assert_eq!(redacted["headers"]["User-Agent"], json!("[redacted]"));
+    assert_eq!(
+        redacted["env_http_headers"]["Authorization"],
+        json!("[redacted]")
+    );
+    assert_eq!(redacted["env_http_headers"]["nested"], json!("[redacted]"));
+    assert_eq!(
+        redacted["evil_env_http_headers"]["Authorization"],
+        json!("[redacted]")
+    );
+    assert_eq!(redacted["PRIVATE_KEY"], json!("[redacted]"));
+    assert_eq!(redacted["SECRET_FOO"], json!("[redacted]"));
+    assert_eq!(redacted["API_SECRET_VALUE"], json!("[redacted]"));
+}
+
+#[test]
+fn redact_sensitive_json_only_exposes_token_metrics_with_unsigned_integer_types() {
+    let value = json!({
+        "models": [{
+            "maxTokens": "8192-secret",
+            "minTokens": -1,
+            "inputTokens": 1.5,
+            "outputTokens": true,
+            "promptTokens": { "value": 2 },
+            "completionTokens": [3]
+        }],
+        "tokenLimit": "12345-secret"
+    });
+
+    let redacted = super::redact_sensitive_json(&value);
+
+    for key in ["maxTokens", "minTokens", "inputTokens", "outputTokens"] {
+        assert_eq!(redacted["models"][0][key], json!("[redacted]"));
+    }
+    assert_eq!(redacted["models"][0]["promptTokens"], json!("[redacted]"));
+    assert_eq!(
+        redacted["models"][0]["completionTokens"],
+        json!("[redacted]")
+    );
+    assert_eq!(redacted["tokenLimit"], json!("[redacted]"));
+}
+
+#[test]
+fn redacted_preview_collapses_opaque_payloads_and_bounds_known_collections() {
+    let models = (0..10_000)
+        .map(|index| {
+            json!({
+                "id": format!("model-{index}"),
+                "apiKey": format!("secret-{index}")
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = json!({
+        "args": (0..10_000).map(|index| format!("arg-secret-{index}")).collect::<Vec<_>>(),
+        "models": models,
+    });
+
+    let redacted = super::redact_sensitive_json(&value);
+    let rendered_models = redacted["models"]
+        .as_array()
+        .expect("models should retain a bounded preview array");
+
+    assert_eq!(redacted["args"], json!("[redacted]"));
+    assert!(rendered_models.len() <= 129);
+    assert!(rendered_models
+        .last()
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| value.contains("preview truncated")));
+    let text = serde_json::to_string(&redacted).expect("redacted preview should serialize");
+    assert!(!text.contains("arg-secret-9999"));
+    assert!(!text.contains("secret-9999"));
+}
+
+#[test]
+fn codex_auth_preview_masks_every_leaf_regardless_of_field_name_or_type() {
+    let auth = json!({
+        "id": "public-looking-secret",
+        "name": "another-secret",
+        "maxTokens": 8192,
+        "nested": { "enabled": true }
+    });
+
+    let redacted = super::redact_codex_auth_json(&auth);
+
+    assert_eq!(redacted["id"], json!("[redacted]"));
+    assert_eq!(redacted["name"], json!("[redacted]"));
+    assert_eq!(redacted["maxTokens"], json!("[redacted]"));
+    assert_eq!(redacted["nested"], json!("[redacted]"));
+}
+
+#[test]
+fn provider_json_preview_never_renders_arbitrary_env_values() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "ghp-live-preview-secret";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::JsonPreview;
+    form.extra = json!({
+        "settingsConfig": {
+            "env": {
+                "GITHUB_PAT": secret,
+                "NON_STANDARD_CREDENTIAL_NAME": "another-secret"
+            },
+            "cookies": {
+                "session": "provider-cookie-secret"
+            },
+            "credentials": {
+                "value": "provider-credential-secret"
+            }
+        }
+    });
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(!all.contains("another-secret"), "{all}");
+    assert!(!all.contains("provider-cookie-secret"), "{all}");
+    assert!(!all.contains("provider-credential-secret"), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn provider_json_preview_omits_million_byte_scalar_before_save_projection() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::JsonPreview;
+    form.claude_api_key.set("S".repeat(1_000_000));
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(
+        all.contains(texts::tui_preview_omitted_too_large()),
+        "{all}"
+    );
+    assert!(!all.contains("SSSSSSSS"), "{all}");
+}
+
+#[test]
+fn provider_passive_fields_bound_million_byte_classifiers_and_validation() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    for app_type in [AppType::Claude, AppType::Codex, AppType::Hermes] {
+        let mut app = App::new(Some(app_type.clone()));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        let mut form = crate::cli::tui::form::ProviderAddFormState::new(app_type);
+        form.focus = FormFocus::Fields;
+        form.name.set(" ".repeat(1_000_000));
+        form.website_url.set("W".repeat(1_000_000));
+        form.claude_base_url.set("C".repeat(1_000_000));
+        form.custom_user_agent.set("U".repeat(1_000_000));
+        form.hermes_api_mode = "H".repeat(1_000_000);
+        app.form = Some(FormState::ProviderAdd(form));
+
+        let all = all_text(&render_with_size(
+            &app,
+            &minimal_data(&app.app_type),
+            160,
+            40,
+        ));
+        assert!(all.len() < 20_000, "passive frame was not bounded");
+    }
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.custom_user_agent.set("U".repeat(1_000_000));
+    form.open_local_proxy_settings_page();
+    app.form = Some(FormState::ProviderAdd(form));
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.len() < 20_000, "validation frame was not bounded");
+}
+
+#[test]
+fn codex_model_catalog_renders_only_the_selected_large_collection_window() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let selected = 9_999usize;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Codex);
+    form.codex_model_catalog = (0..10_000)
+        .map(|index| crate::cli::tui::form::CodexModelCatalogRow {
+            model: format!("MODEL-{index:05}"),
+            display_name: format!("Display {index:05}"),
+            context_window: "128k".to_string(),
+        })
+        .collect();
+    form.codex_model_catalog[selected].model = format!("SELECTED-CODEX-{}", "X".repeat(1_000_000));
+    form.codex_model_catalog_idx = selected;
+    form.open_codex_model_catalog_page();
+
+    let mut app = App::new(Some(AppType::Codex));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.contains("SELECTED-CODEX"), "{all}");
+    assert!(!all.contains("MODEL-00000"), "{all}");
+}
+
+#[test]
+fn provider_json_preview_omits_oversized_nested_source_and_common_snippet() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    for (extra, common_snippet, include_common_config) in [
+        (
+            json!({
+                "settingsConfig": {
+                    "env": { "TOKEN": "N".repeat(1_000_000) }
+                }
+            }),
+            String::new(),
+            true,
+        ),
+        (json!({}), " ".repeat(1_000_000), true),
+        // The save projection calls `trim()` before it checks this toggle, so
+        // an inactive snippet must still be rejected by the render preflight.
+        (json!({}), " ".repeat(1_000_000), false),
+    ] {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+        form.focus = FormFocus::JsonPreview;
+        form.include_common_config = include_common_config;
+        form.extra = extra;
+        app.form = Some(FormState::ProviderAdd(form));
+
+        let mut data = minimal_data(&app.app_type);
+        data.config.common_snippet = common_snippet;
+        let all = all_text(&render_with_size(&app, &data, 160, 40));
+        assert!(
+            all.contains(texts::tui_preview_omitted_too_large()),
+            "{all}"
+        );
+        assert!(!all.contains("NNNNNNNN"), "{all}");
+    }
+}
+
+#[test]
+fn codex_toml_preview_redacts_literal_secrets_but_keeps_safe_references() {
+    let source = r#"experimental_bearer_token = "top-level-secret"
+max_tokens = 8192
+token_limit = 12345
+
+[model_providers.relay]
+experimental_bearer_token = "provider-secret"
+
+[model_providers.relay.http_headers]
+Authorization = "Bearer header-secret"
+X-Custom-Auth = "custom-header-secret"
+User-Agent = "cc-switch-test"
+
+[mcp_servers.demo.env]
+PRIVATE_KEY = "private-env-secret"
+SECRET_FOO = "other-env-secret"
+
+[mcp_servers.demo.env_http_headers]
+Authorization = "AUTH_HEADER_ENV"
+
+[mcp_servers.demo.env_http_headers.nested.env]
+GITHUB_PAT = "nested-env-header-secret"
+
+[evil_env_http_headers]
+Authorization = "Bearer disguised-header-secret"
+
+[cookies]
+session = "cookie-container-secret"
+
+[credentials]
+value = "credential-container-secret"
+
+[passwords]
+primary = "password-container-secret"
+
+[api_keys]
+primary = "api-key-container-secret"
+
+[auth_tokens]
+primary = "auth-token-container-secret"
+"#;
+
+    let redacted = super::redact_sensitive_toml(source);
+
+    for secret in [
+        "top-level-secret",
+        "provider-secret",
+        "header-secret",
+        "custom-header-secret",
+        "private-env-secret",
+        "other-env-secret",
+        "AUTH_HEADER_ENV",
+        "nested-env-header-secret",
+        "disguised-header-secret",
+        "cookie-container-secret",
+        "credential-container-secret",
+        "password-container-secret",
+        "api-key-container-secret",
+        "auth-token-container-secret",
+    ] {
+        assert!(!redacted.contains(secret), "{redacted}");
+    }
+    assert!(redacted.contains("[redacted]"), "{redacted}");
+    assert!(redacted.contains("max_tokens = 8192"), "{redacted}");
+    assert!(redacted.contains("token_limit = 12345"), "{redacted}");
+    assert!(!redacted.contains("cc-switch-test"), "{redacted}");
+    assert!(redacted.contains("env_http_headers"), "{redacted}");
+}
+
+#[test]
+fn codex_toml_preview_fails_closed_when_toml_is_invalid() {
+    let source = "experimental_bearer_token = \"unterminated-secret";
+    let redacted = super::redact_sensitive_toml(source);
+
+    assert_eq!(redacted, "[redacted]");
+    assert!(!redacted.contains("unterminated-secret"));
+}
+
+#[test]
+fn codex_toml_preview_omits_oversized_input_before_parsing() {
+    let source = " ".repeat(super::TOML_PREVIEW_MAX_INPUT_BYTES + 1);
+    let redacted = super::redact_sensitive_toml(&source);
+
+    assert_eq!(redacted, texts::tui_preview_omitted_too_large());
+}
+
+#[test]
+fn codex_toml_preview_bounds_known_collections_and_depth() {
+    let models = (0..500)
+        .map(|index| format!("{{ name = \"model-{index}\", apiKey = \"secret-{index}\" }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let redacted = super::redact_sensitive_toml(&format!("models = [{models}]"));
+
+    assert!(redacted.contains("preview truncated"), "{redacted}");
+    assert!(!redacted.contains("secret-499"), "{redacted}");
+    assert!(redacted.len() <= super::TOML_PREVIEW_MAX_INPUT_BYTES);
+
+    let deep_key = std::iter::repeat_n("models", 20)
+        .collect::<Vec<_>>()
+        .join(".");
+    let deep = super::redact_sensitive_toml(&format!("{deep_key} = {{ name = \"deep-secret\" }}"));
+    assert!(deep.contains("preview truncated"), "{deep}");
+    assert!(!deep.contains("deep-secret"), "{deep}");
+}
+
+#[test]
+fn compact_codex_preview_builds_only_the_selected_bounded_section() {
+    let hidden_config_secret = "hidden-config-secret";
+    let hidden_auth_secret = "hidden-auth-secret";
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Codex);
+    form.id.set("relay");
+    form.name.set("Relay");
+    form.codex_api_key.set("current-api-key-secret");
+    form.extra = json!({
+        "settingsConfig": {
+            "auth": { "CUSTOM_AUTH": hidden_auth_secret },
+            "config": format!(
+                "token = \"{hidden_config_secret}\"\n# {}",
+                "x".repeat(super::TOML_PREVIEW_MAX_INPUT_BYTES)
+            )
+        }
+    });
+
+    let auth = super::codex_auth_preview_text(&form);
+    assert!(auth.contains("CUSTOM_AUTH"), "{auth}");
+    assert!(auth.contains("OPENAI_API_KEY"), "{auth}");
+    assert!(!auth.contains(hidden_auth_secret), "{auth}");
+    assert!(!auth.contains(hidden_config_secret), "{auth}");
+    assert!(
+        !auth.contains(texts::tui_preview_omitted_too_large()),
+        "{auth}"
+    );
+
+    let config = super::codex_config_preview_text(&form);
+    assert_eq!(config, texts::tui_preview_omitted_too_large());
+    assert!(!config.contains(hidden_config_secret));
+}
+
+#[test]
+fn codex_toml_preview_only_exposes_token_metrics_with_nonnegative_integer_types() {
+    let source = r#"max_tokens = "8192-secret"
+min_tokens = -1
+input_tokens = 1.5
+output_tokens = true
+prompt_tokens = [3]
+token_limit = "12345-secret"
+max_output_tokens = 4096
+
+[unknown]
+max_tokens = 9999
+
+[auths]
+name = "auths-container-secret"
+
+[oauths]
+max_tokens = 7777
+
+[pats]
+token_limit = 8888
+"#;
+
+    let redacted = super::redact_sensitive_toml(source);
+
+    assert!(redacted.contains("max_output_tokens = 4096"), "{redacted}");
+    for hidden in [
+        "8192-secret",
+        "12345-secret",
+        "auths-container-secret",
+        "max_tokens = 9999",
+        "max_tokens = 7777",
+        "token_limit = 8888",
+    ] {
+        assert!(!redacted.contains(hidden), "{redacted}");
+    }
+    assert!(redacted.matches("[redacted]").count() >= 10, "{redacted}");
+}
+
+#[test]
+fn passive_display_helpers_strip_url_secrets_and_reject_shell_commands() {
+    assert_eq!(
+        super::safe_url_origin_for_display(
+            "https://user:pass@[2001:db8::1]:8443/path/token?secret=value#fragment"
+        ),
+        "https://[2001:db8::1]:8443"
+    );
+    assert_eq!(
+        super::safe_url_origin_for_display("file:///tmp/secret"),
+        "[redacted]"
+    );
+    assert_eq!(
+        super::safe_executable_basename_for_display("/usr/local/bin/node"),
+        "node"
+    );
+    assert_eq!(
+        super::safe_executable_basename_for_display(r"C:\tools\node.exe"),
+        "node.exe"
+    );
+    assert_eq!(
+        super::safe_executable_basename_for_display("API_KEY=secret node"),
+        "[redacted]"
+    );
+    assert_eq!(
+        super::safe_executable_basename_for_display("sh -c secret"),
+        "[redacted]"
+    );
+}
+
+#[test]
+fn codex_provider_form_never_renders_toml_bearer_tokens() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "sk-live-preview-secret";
+    let plural_container_secret = "codex-cookie-container-secret";
+    let mut app = App::new(Some(AppType::Codex));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Codex);
+    form.focus = FormFocus::JsonPreview;
+    form.codex_preview_section = crate::cli::tui::form::CodexPreviewSection::Config;
+    form.extra = json!({
+        "settingsConfig": {
+            "auth": {},
+            "config": format!(
+                "experimental_bearer_token = \"{secret}\"\nmodel = \"gpt-5.4\"\n\n[cookies]\nsession = \"{plural_container_secret}\"\n"
+            )
+        }
+    });
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(!all.contains(plural_container_secret), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+    assert!(all.contains("gpt-5.4"), "{all}");
+}
+
+#[test]
+fn usage_query_script_validation_error_is_persistent_beside_preview() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let error = "Script must contain return";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.open_usage_query_page();
+    form.usage_query_enabled = true;
+    form.focus = FormFocus::JsonPreview;
+    form.set_usage_query_field_error(crate::cli::tui::form::UsageQueryField::Script, error);
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        80,
+        35,
+    ));
+    assert!(all.contains(&format!("! {error}")), "{all}");
+}
+
+#[test]
+fn usage_query_custom_script_preview_fails_closed_for_unknown_literals() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let secret = "hardcoded-script-secret";
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.open_usage_query_page();
+    form.usage_query_enabled = true;
+    form.usage_query_template = crate::cli::tui::form::UsageQueryTemplate::Custom;
+    form.usage_query_api_key.set("");
+    form.usage_query_access_token.set("");
+    form.usage_query_code = format!(
+        "fetch(url, {{ headers: {{ Authorization: \"Bearer {secret}\" }} }}); return {{}};"
+    );
+    form.focus = FormFocus::JsonPreview;
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(!all.contains(secret), "{all}");
+    assert!(all.contains("[redacted]"), "{all}");
+}
+
+#[test]
+fn usage_query_passive_preview_does_not_trim_a_million_byte_script() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.open_usage_query_page();
+    form.usage_query_enabled = true;
+    form.usage_query_template = crate::cli::tui::form::UsageQueryTemplate::Custom;
+    form.usage_query_code = " ".repeat(1_000_000);
+    form.focus = FormFocus::JsonPreview;
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.contains("[redacted]"), "{all}");
+    assert!(all.len() < 20_000, "script preview frame was not bounded");
+}
+
+#[test]
+fn usage_query_exact_builtin_script_remains_previewable() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.open_usage_query_page();
+    form.usage_query_enabled = true;
+    form.usage_query_template = crate::cli::tui::form::UsageQueryTemplate::General;
+    form.usage_query_code =
+        crate::cli::tui::form::ProviderAddFormState::USAGE_QUERY_GENERAL_PRESET.to_string();
+    form.focus = FormFocus::JsonPreview;
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        160,
+        40,
+    ));
+    assert!(all.contains("response.balance"), "{all}");
+}
+
+#[test]
+fn prompt_long_wrapped_line_keeps_tail_and_cursor_visible() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let content = format!("{}TAIL", "x".repeat(500));
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Prompts;
+    app.focus = Focus::Content;
+    let mut form = PromptMetaFormState::new("long-line".to_string(), "Long line".to_string());
+    form.focus = FormFocus::Content;
+    form.content.replace_text(&content);
+    form.content.cursor_col = content.chars().count();
+    app.form = Some(FormState::PromptMeta(form));
+
+    let data = minimal_data(&app.app_type);
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).expect("terminal created");
+    terminal
+        .draw(|frame| super::render(frame, &app, &data))
+        .expect("draw ok");
+    let cursor = terminal.get_cursor_position().expect("cursor position");
+    let buf = terminal.backend().buffer();
+
+    assert!(all_text(buf).contains("TAIL"), "{}", all_text(buf));
+    assert!(
+        line_at(buf, cursor.y).contains("TAIL"),
+        "{}",
+        line_at(buf, cursor.y)
+    );
+}
+
+#[test]
+fn prompt_passive_render_jumps_a_stale_origin_near_a_distant_cursor() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let line_count = 100_000usize;
+    let content = (0..line_count)
+        .map(|index| {
+            if index + 1 == line_count {
+                "DISTANT-CURSOR-TARGET".to_string()
+            } else {
+                format!("line-{index:05}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut form = PromptMetaFormState::new("large-prompt".to_string(), "Large".to_string());
+    form.focus = FormFocus::Content;
+    form.content.replace_text(content);
+    form.content.cursor_row = line_count - 1;
+    form.content.cursor_col = "DISTANT-CURSOR-TARGET".len();
+    form.content.scroll = 0;
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Prompts;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::PromptMeta(form));
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        80,
+        20,
+    ));
+    assert!(all.contains("DISTANT-CURSOR-TARGET"), "{all}");
+    assert!(!all.contains("line-00000"), "{all}");
 }
 
 #[test]
@@ -1358,7 +2673,7 @@ fn provider_form_fields_show_dashed_divider_before_hermes_rate_limit_delay() {
 }
 
 #[test]
-fn provider_form_usage_query_entry_uses_open_hint_not_value() {
+fn provider_form_usage_query_entry_shows_status_and_open_affordance() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -1370,28 +2685,12 @@ fn provider_form_usage_query_entry_uses_open_hint_not_value() {
     form.focus = FormFocus::Fields;
     form.name.set("Demo Provider");
 
-    // The value column no longer prints the bare "open" label; it stays blank.
     let (_label, value) = super::provider_field_label_and_value(
         &form,
         crate::cli::tui::form::ProviderAddField::UsageQuery,
     );
-    assert!(
-        value.is_empty(),
-        "usage query value column should be blank, got: {value:?}"
-    );
-
-    // The open affordance moves to the help line under the table.
-    let (hint_line, _) = super::provider_field_editor_line(
-        &form,
-        Some(crate::cli::tui::form::ProviderAddField::UsageQuery),
-        80,
-    );
-    let hint: String = hint_line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    assert!(hint.contains("open") || hint.contains("打开"), "{hint}");
+    assert!(value.contains("Disabled"), "{value}");
+    assert!(value.ends_with('›'), "{value}");
 
     app.form = Some(FormState::ProviderAdd(form));
     let all = all_text(&render(&app, &minimal_data(&app.app_type)));
@@ -1987,6 +3286,44 @@ fn hermes_models_overlay_separates_models_with_dashed_divider() {
         first_model < divider && divider < second_model,
         "expected dashed divider between Hermes models, got:\n{content}"
     );
+}
+
+#[test]
+fn hermes_models_overlay_materializes_only_the_selected_large_collection_window() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let selected = 9_999usize;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Hermes);
+    form.focus = FormFocus::Fields;
+    form.hermes_models = (0..10_000)
+        .map(|index| {
+            json!({
+                "id": format!("HERMES-{index:05}"),
+                "name": format!("Hermes {index:05}"),
+                "context_length": 131_072
+            })
+        })
+        .collect();
+    form.hermes_models[selected]["id"] =
+        json!(format!("SELECTED-HERMES-{}", "X".repeat(1_000_000)));
+    form.hermes_models_field_idx = selected.saturating_mul(3);
+
+    let mut app = App::new(Some(AppType::Hermes));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.form = Some(FormState::ProviderAdd(form));
+    app.overlay = Overlay::HermesModelsPicker { editing: false };
+
+    let all = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        120,
+        40,
+    ));
+    assert!(all.contains("SELECTED-HERMES"), "{all}");
+    assert!(!all.contains("HERMES-00000"), "{all}");
 }
 
 #[test]
@@ -4331,7 +5668,8 @@ fn mcp_page_renders_opencode_column() {
             homepage: None,
             docs: None,
             tags: vec![],
-        },
+        }
+        .into(),
     }];
 
     let buf = render(&app, &data);
@@ -4367,7 +5705,8 @@ fn mcp_page_renders_hermes_column() {
             homepage: None,
             docs: None,
             tags: vec![],
-        },
+        }
+        .into(),
     }];
 
     let buf = render(&app, &data);
@@ -4422,7 +5761,8 @@ fn mcp_page_uses_space_toggle_key() {
             homepage: None,
             docs: None,
             tags: vec![],
-        },
+        }
+        .into(),
     }];
     let buf = render(&app, &data);
     let all = all_text(&buf);
@@ -4640,22 +5980,27 @@ fn provider_form_truncates_overflowing_values_with_ellipsis() {
     let mut app = App::new(Some(AppType::Claude));
     app.route = Route::Providers;
     app.focus = Focus::Content;
-    app.form = Some(crate::cli::tui::form::FormState::ProviderAdd(
-        crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude),
-    ));
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    let long_name = "provider-name-that-is-deliberately-too-long-for-the-value-column";
+    form.name.set(long_name);
+    app.form = Some(crate::cli::tui::form::FormState::ProviderAdd(form));
     let data = minimal_data(&app.app_type);
 
     let buf = render(&app, &data);
     let row = (0..buf.area.height)
         .map(|y| line_at(&buf, y))
-        .find(|line| line.contains("Anthropic Messages"))
-        .expect("api format row should render");
+        .find(|line| line.contains("provider-name-that"))
+        .expect("name row should render");
 
     // The value column is too narrow for the full label at 120 cols; it
     // used to be cut dead ("…Messages (Nativ") with no truncation marker.
     assert!(
         row.contains('…'),
         "cut-off value should end with an ellipsis: {row:?}"
+    );
+    assert!(
+        !row.contains(long_name),
+        "value should be truncated: {row:?}"
     );
 }
 
@@ -4713,7 +6058,8 @@ fn mcp_page_shows_summary_bar() {
                 homepage: None,
                 docs: None,
                 tags: vec![],
-            },
+            }
+            .into(),
         },
         super::super::data::McpRow {
             id: "m2".to_string(),
@@ -4732,7 +6078,8 @@ fn mcp_page_shows_summary_bar() {
                 homepage: None,
                 docs: None,
                 tags: vec![],
-            },
+            }
+            .into(),
         },
     ];
 
@@ -5730,6 +7077,7 @@ fn openclaw_config_route_render_uses_dedicated_env_page() {
         vars: std::collections::HashMap::from([
             ("OPENCLAW_ENV_TOKEN".to_string(), json!("demo-token")),
             ("OPENCLAW_ENV_MODE".to_string(), json!("development")),
+            ("MODEL".to_string(), json!("P2_ENV_SECRET")),
         ]),
     });
     data.config.openclaw_warnings = Some(vec![crate::openclaw_config::OpenClawHealthWarning {
@@ -5761,9 +7109,12 @@ fn openclaw_config_route_render_uses_dedicated_env_page() {
         "{all}"
     );
     assert!(
-        line_with(&all, "OPENCLAW_ENV_MODE").contains("development"),
+        line_with(&all, "OPENCLAW_ENV_MODE").contains("[redacted]"),
         "{all}"
     );
+    assert!(!all.contains("development"), "{all}");
+    assert!(line_with(&all, "MODEL").contains("[redacted]"), "{all}");
+    assert!(!all.contains("P2_ENV_SECRET"), "{all}");
     assert!(
         !has_visible_action_button_or_block(&content, texts::tui_openclaw_tools_save_label()),
         "{all}"
@@ -5787,7 +7138,7 @@ fn openclaw_config_route_render_uses_dedicated_env_page() {
 }
 
 #[test]
-fn openclaw_env_route_render_aligns_redacted_and_plain_values_in_two_columns() {
+fn openclaw_env_route_render_aligns_all_protected_values_in_two_columns() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -5807,13 +7158,14 @@ fn openclaw_env_route_render_aligns_redacted_and_plain_values_in_two_columns() {
     let buf = render_with_size(&app, &data, 120, 24);
     let content = content_text(&app, &buf);
     let redacted_line = line_with(&content, "OPENCLAW_ENV_TOKEN");
-    let plain_line = line_with(&content, "MODE");
+    let second_redacted_line = line_with(&content, "MODE");
 
     assert_eq!(
         display_column_in_line(redacted_line, "[redacted]"),
-        display_column_in_line(plain_line, "development"),
+        display_column_in_line(second_redacted_line, "[redacted]"),
         "{content}"
     );
+    assert!(!content.contains("development"), "{content}");
 }
 
 #[test]
@@ -5978,23 +7330,23 @@ fn openclaw_env_route_render_styles_redacted_values_as_protected_tokens() {
 
     let buf = render_with_size(&app, &data, 120, 24);
     let content = content_text(&app, &buf);
-    let redacted_row_index = line_index(&content, "[redacted]");
-    let redacted_row = line_with(&content, "[redacted]");
+    let redacted_row_index = line_index(&content, "OPENCLAW_ENV_TOKEN");
+    let redacted_row = line_with(&content, "OPENCLAW_ENV_TOKEN");
     let redacted_label_col = column_in_line(redacted_row, "OPENCLAW_ENV_TOKEN");
     let redacted_col = column_in_line(redacted_row, "[redacted]");
     let redacted_label_cell = content_cell_at(&app, &buf, redacted_label_col, redacted_row_index);
     let redacted_cell = content_cell_at(&app, &buf, redacted_col, redacted_row_index);
 
-    let plain_row_index = line_index(&content, "development");
-    let plain_row = line_with(&content, "development");
-    let plain_label_col = column_in_line(plain_row, "OPENCLAW_ENV_MODE");
-    let plain_col = column_in_line(plain_row, "development");
-    let plain_label_cell = content_cell_at(&app, &buf, plain_label_col, plain_row_index);
-    let plain_cell = content_cell_at(&app, &buf, plain_col, plain_row_index);
+    let second_row_index = line_index(&content, "OPENCLAW_ENV_MODE");
+    let second_row = line_with(&content, "OPENCLAW_ENV_MODE");
+    let second_label_col = column_in_line(second_row, "OPENCLAW_ENV_MODE");
+    let second_redacted_col = column_in_line(second_row, "[redacted]");
+    let second_label_cell = content_cell_at(&app, &buf, second_label_col, second_row_index);
+    let second_redacted_cell = content_cell_at(&app, &buf, second_redacted_col, second_row_index);
 
-    assert_eq!(
-        cell_style_signature(plain_cell),
-        cell_style_signature(plain_label_cell),
+    assert_ne!(
+        cell_style_signature(second_redacted_cell),
+        cell_style_signature(second_label_cell),
         "{content}"
     );
     assert_ne!(
@@ -6002,9 +7354,9 @@ fn openclaw_env_route_render_styles_redacted_values_as_protected_tokens() {
         cell_style_signature(redacted_label_cell),
         "{content}"
     );
-    assert_ne!(
+    assert_eq!(
         cell_style_signature(redacted_cell),
-        cell_style_signature(plain_cell),
+        cell_style_signature(second_redacted_cell),
         "{content}"
     );
 }
@@ -6029,12 +7381,12 @@ fn openclaw_env_no_color_keeps_protected_placeholder_visible() {
 
     let content = content_text(&app, &render_with_size(&app, &data, 120, 24));
     let redacted_line = line_with(&content, "OPENCLAW_ENV_TOKEN");
-    let plain_line = line_with(&content, "OPENCLAW_ENV_MODE");
+    let second_redacted_line = line_with(&content, "OPENCLAW_ENV_MODE");
 
     assert!(redacted_line.contains("[redacted]"), "{content}");
     assert!(!redacted_line.contains("demo-token"), "{content}");
-    assert!(plain_line.contains("development"), "{content}");
-    assert!(!plain_line.contains("[redacted]"), "{content}");
+    assert!(second_redacted_line.contains("[redacted]"), "{content}");
+    assert!(!second_redacted_line.contains("development"), "{content}");
 }
 
 #[test]
@@ -8841,7 +10193,7 @@ fn openclaw_agents_route_render_keeps_runtime_rows_single_line_when_space_is_tig
 }
 
 #[test]
-fn openclaw_agents_route_wraps_runtime_notes_without_wrapping_value_rows() {
+fn openclaw_agents_route_wraps_runtime_notes_and_hides_unknown_preview_values() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -8889,13 +10241,16 @@ fn openclaw_agents_route_wraps_runtime_notes_without_wrapping_value_rows() {
         &buffer_cell_text(texts::tui_openclaw_agents_max_concurrent()),
     );
     let warning_tail = line_index(&content, "timeoutSeconds.");
-    let json_tail = line_index(&content, "after wrap\"");
+    let unknown_line = line_index(&content, "visibilityNote");
+    let redacted_line = line_index(&content, "[redacted]");
 
     assert!(warning_tail < workspace_line, "{content}");
     assert_eq!(timeout_line, workspace_line + 1, "{content}");
     assert_eq!(context_line, timeout_line + 1, "{content}");
     assert_eq!(max_line, context_line + 1, "{content}");
-    assert!(json_tail > max_line, "{content}");
+    assert!(unknown_line > max_line, "{content}");
+    assert!(redacted_line >= unknown_line, "{content}");
+    assert!(!content.contains("retained after wrap"), "{content}");
 }
 
 #[test]
@@ -9254,14 +10609,20 @@ fn workspace_daily_memory_route_render_shows_search_results_when_query_is_active
 }
 
 #[test]
-fn provider_form_model_field_enter_hint_uses_fetch_model() {
+fn provider_form_model_field_hints_enter_edit_and_f_fetch() {
     let keys =
         super::add_form_key_items(FormFocus::Fields, false, Some(ProviderAddField::CodexModel));
     let enter_label = keys
         .iter()
         .find(|(key, _label)| *key == "Enter")
         .map(|(_key, label)| *label);
-    assert_eq!(enter_label, Some(texts::tui_key_fetch_model()));
+    assert_eq!(enter_label, Some(texts::tui_key_edit_mode()));
+    assert_eq!(
+        keys.iter()
+            .find(|(key, _label)| *key == "f")
+            .map(|(_key, label)| *label),
+        Some(texts::tui_key_fetch_model())
+    );
 }
 
 #[test]

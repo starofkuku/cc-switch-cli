@@ -131,9 +131,10 @@ pub(crate) fn render_overlay(
         }
         Overlay::ModelFetchPicker {
             input,
-            query,
             fetching,
             models,
+            filtered_indices,
+            filter_incomplete,
             error,
             selected_idx,
             ..
@@ -142,9 +143,10 @@ pub(crate) fn render_overlay(
             content_area,
             theme,
             input,
-            query,
             *fetching,
             models,
+            filtered_indices.as_deref(),
+            *filter_incomplete,
             error.as_deref(),
             *selected_idx,
         ),

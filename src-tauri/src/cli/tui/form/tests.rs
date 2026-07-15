@@ -2671,6 +2671,31 @@ fn provider_add_form_codex_model_catalog_saves_normalized_models_and_syncs_prima
 }
 
 #[test]
+fn codex_config_preview_builder_matches_save_when_enabled_catalog_is_empty() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("custom");
+    form.name.set("Custom");
+    form.codex_base_url.set("https://api.example.com/v1");
+    form.codex_model.set("fallback-model");
+    form.codex_local_routing_enabled = true;
+    form.codex_model_catalog = vec![CodexModelCatalogRow {
+        model: "   ".to_string(),
+        display_name: "Ignored".to_string(),
+        context_window: "128k".to_string(),
+    }];
+
+    let preview_config = form.effective_codex_config_text();
+    let saved = form.to_provider_json_value();
+    let saved_config = saved["settingsConfig"]["config"]
+        .as_str()
+        .expect("Codex config should be serialized");
+
+    assert_eq!(preview_config, saved_config);
+    assert!(saved_config.contains("model = \"fallback-model\""));
+    assert!(saved["settingsConfig"].get("modelCatalog").is_none());
+}
+
+#[test]
 fn provider_add_form_codex_openai_official_hides_provider_specific_fields() {
     let mut form = ProviderAddFormState::new(AppType::Codex);
     let existing_ids = Vec::<String>::new();
@@ -2931,8 +2956,11 @@ fn mcp_add_form_builds_server_and_apps() {
     form.id.set("m1");
     form.name.set("Server One");
     form.command.set("npx");
-    form.args
-        .set("-y @modelcontextprotocol/server-filesystem /tmp");
+    form.set_args_values(vec![
+        "-y".to_string(),
+        "@modelcontextprotocol/server-filesystem".to_string(),
+        "/tmp".to_string(),
+    ]);
     form.apps.claude = true;
     form.apps.codex = false;
     form.apps.gemini = true;
@@ -2949,6 +2977,113 @@ fn mcp_add_form_builds_server_and_apps() {
     assert_eq!(server["apps"]["gemini"], true);
     assert_eq!(server["apps"]["opencode"], false);
     assert_eq!(server["apps"]["hermes"], true);
+}
+
+#[test]
+fn mcp_form_round_trips_quoted_whitespace_and_empty_arguments_losslessly() {
+    let expected = vec![
+        "--header".to_string(),
+        "Authorization: Bearer abc".to_string(),
+        "/path with spaces".to_string(),
+        String::new(),
+    ];
+    let server = crate::app_config::McpServer {
+        id: "lossless".to_string(),
+        name: "Lossless".to_string(),
+        server: json!({
+            "type": "stdio",
+            "command": "node",
+            "args": expected,
+        }),
+        apps: crate::app_config::McpApps::default(),
+        description: None,
+        homepage: None,
+        docs: None,
+        tags: Vec::new(),
+    };
+
+    let mut form = McpAddFormState::from_server(&server);
+    assert!(!form.args_text_is_materialized_for_test());
+    let serialized = form.to_mcp_server_json_value();
+
+    assert_eq!(serialized["server"]["args"], json!(expected));
+    assert!(form.begin_text_edit(McpAddField::Args));
+    assert_eq!(shlex::split(&form.args.value), Some(expected));
+    assert!(!form.has_unsaved_changes());
+}
+
+#[test]
+fn mcp_form_only_replaces_canonical_arguments_after_valid_explicit_edit() {
+    let mut form = McpAddFormState::new();
+    form.set_args_values(vec!["original".to_string()]);
+    form.rebase_initial_snapshot();
+
+    form.args
+        .set("--header 'Authorization: Bearer abc' '/path with spaces' ''");
+    assert!(form.commit_args_input());
+    assert_eq!(
+        form.to_mcp_server_json_value()["server"]["args"],
+        json!([
+            "--header",
+            "Authorization: Bearer abc",
+            "/path with spaces",
+            ""
+        ])
+    );
+
+    form.args.set("'unterminated");
+    assert!(!form.commit_args_input());
+    assert_eq!(
+        form.to_mcp_server_json_value()["server"]["args"][0],
+        "--header"
+    );
+    assert!(form.has_unsaved_changes());
+}
+
+#[test]
+fn mcp_form_preserves_imported_nul_arguments_without_offering_lossy_text_editing() {
+    let mut form = McpAddFormState::new();
+    form.set_args_values(vec!["contains\0nul".to_string()]);
+
+    assert!(!form.can_edit_field(McpAddField::Args));
+    assert_eq!(
+        form.to_mcp_server_json_value()["server"]["args"],
+        json!(["contains\0nul"])
+    );
+}
+
+#[test]
+fn mcp_form_keeps_large_imported_arguments_lazy_and_lossless() {
+    let expected = (0..10_000)
+        .map(|index| format!("argument-{index}"))
+        .collect::<Vec<_>>();
+    let server = crate::app_config::McpServer {
+        id: "large-argv".to_string(),
+        name: "Large argv".to_string(),
+        server: json!({
+            "type": "stdio",
+            "command": "node",
+            "args": expected,
+        }),
+        apps: crate::app_config::McpApps::default(),
+        description: None,
+        homepage: None,
+        docs: None,
+        tags: Vec::new(),
+    };
+
+    let shared = std::sync::Arc::new(server);
+    let form = McpAddFormState::from_shared_server(std::sync::Arc::clone(&shared));
+
+    assert!(form.shares_source_for_test(&shared));
+    assert!(!form.args_text_is_materialized_for_test());
+    assert_eq!(form.args_count(), expected.len());
+    assert!(!form.can_edit_field(McpAddField::Args));
+    assert_eq!(
+        form.to_mcp_server_json_value()["server"]["args"],
+        json!(expected)
+    );
+    assert!(!form.has_unsaved_changes());
 }
 
 #[test]

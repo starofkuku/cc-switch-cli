@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use chrono::{Days, Local, NaiveDate, TimeZone};
 use indexmap::IndexMap;
@@ -181,7 +182,7 @@ pub struct ProvidersSnapshot {
 #[derive(Debug, Clone)]
 pub struct McpRow {
     pub id: String,
-    pub server: McpServer,
+    pub server: Arc<McpServer>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1598,7 +1599,10 @@ fn load_mcp(state: &AppState) -> Result<McpSnapshot, AppError> {
     let servers = McpService::get_all_servers(state)?;
     let mut rows = servers
         .into_iter()
-        .map(|(id, server)| McpRow { id, server })
+        .map(|(id, server)| McpRow {
+            id,
+            server: Arc::new(server),
+        })
         .collect::<Vec<_>>();
 
     rows.sort_by(|a, b| a.id.cmp(&b.id));

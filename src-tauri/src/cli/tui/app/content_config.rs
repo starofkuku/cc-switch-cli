@@ -1359,7 +1359,9 @@ impl App {
         self.overlay = Overlay::None;
         self.focus = Focus::Content;
         self.editor = None;
-        self.form = Some(FormState::McpAdd(McpAddFormState::from_server(&row.server)));
+        self.form = Some(FormState::McpAdd(McpAddFormState::from_shared_server(
+            std::sync::Arc::clone(&row.server),
+        )));
     }
 
     pub(crate) fn open_prompt_create_form(&mut self, data: &UiData) {

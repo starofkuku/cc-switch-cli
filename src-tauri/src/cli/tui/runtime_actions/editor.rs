@@ -662,6 +662,14 @@ fn submit_provider_form_apply_usage_script_code(
 ) -> Result<(), AppError> {
     if let Some(FormState::ProviderAdd(form)) = ctx.app.form.as_mut() {
         form.usage_query_code = content;
+        if let Some(message) = form.usage_query_script_validation_error() {
+            form.set_usage_query_field_error(
+                crate::cli::tui::form::UsageQueryField::Script,
+                message,
+            );
+        } else {
+            form.clear_usage_query_field_error(crate::cli::tui::form::UsageQueryField::Script);
+        }
         form.touch_usage_query();
     }
     ctx.app.editor = None;
@@ -1329,6 +1337,38 @@ mod tests {
                 ("x-custom-trace".to_string(), "trace-1".to_string()),
             ])
         );
+    }
+
+    #[test]
+    #[serial(home_settings)]
+    fn applying_invalid_usage_script_keeps_an_inline_validation_error() {
+        let mut fixture = runtime_ctx(AppType::Claude);
+        let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+        form.usage_query_enabled = true;
+        form.usage_query_template = crate::cli::tui::form::UsageQueryTemplate::General;
+        fixture.app.form = Some(FormState::ProviderAdd(form));
+        fixture.app.open_editor(
+            "Usage query script",
+            crate::cli::tui::app::EditorKind::Plain,
+            "",
+            EditorSubmit::ProviderFormApplyUsageScriptCode,
+        );
+
+        let mut ctx = runtime_action_ctx(&mut fixture);
+        super::submit(
+            &mut ctx,
+            EditorSubmit::ProviderFormApplyUsageScriptCode,
+            "const result = response;".to_string(),
+        )
+        .expect("script should apply to the draft");
+
+        assert!(ctx.app.editor.is_none());
+        let Some(FormState::ProviderAdd(form)) = ctx.app.form.as_ref() else {
+            panic!("expected provider form");
+        };
+        assert!(form
+            .usage_query_field_error(crate::cli::tui::form::UsageQueryField::Script)
+            .is_some_and(|message| message.contains("return")));
     }
 
     #[test]

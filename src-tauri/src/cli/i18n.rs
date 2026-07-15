@@ -2838,6 +2838,34 @@ pub mod texts {
         }
     }
 
+    pub fn tui_mcp_args_hidden_count(count: usize) -> String {
+        if count == 0 {
+            String::new()
+        } else if is_chinese() {
+            format!("{count} 个参数（已隐藏）")
+        } else if count == 1 {
+            "1 argument (hidden)".to_string()
+        } else {
+            format!("{count} arguments (hidden)")
+        }
+    }
+
+    pub fn tui_mcp_args_invalid() -> &'static str {
+        if is_chinese() {
+            "参数格式无效，请检查引号或转义符"
+        } else {
+            "Invalid argument syntax; check quotes and escapes"
+        }
+    }
+
+    pub fn tui_preview_omitted_too_large() -> &'static str {
+        if is_chinese() {
+            "[预览已省略：配置过大]"
+        } else {
+            "[preview omitted: configuration too large]"
+        }
+    }
+
     pub fn tui_mcp_env_editor_hint() -> &'static str {
         if is_chinese() {
             "按 Enter 管理环境变量"
@@ -3500,6 +3528,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_model_fetch_results_limited() -> &'static str {
+        if is_chinese() {
+            "搜索范围已受限，请输入更精确的关键词"
+        } else {
+            "Search is limited; refine the query"
+        }
+    }
+
     pub fn tui_model_fetch_error_hint(err: &str) -> String {
         if is_chinese() {
             format!("获取失败: {}", err)
@@ -4009,6 +4045,22 @@ pub mod texts {
             "应用"
         } else {
             "apply"
+        }
+    }
+
+    pub fn tui_key_next_field() -> &'static str {
+        if is_chinese() {
+            "应用并下一项"
+        } else {
+            "apply & next"
+        }
+    }
+
+    pub fn tui_key_previous_field() -> &'static str {
+        if is_chinese() {
+            "应用并上一项"
+        } else {
+            "apply & previous"
         }
     }
 

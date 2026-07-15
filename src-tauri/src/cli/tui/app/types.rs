@@ -2991,8 +2991,20 @@ pub enum Overlay {
         query: String,
         fetching: bool,
         models: Vec<String>,
+        /// `None` means the unfiltered full model list. Search input updates
+        /// this cache explicitly, so periodic redraws never rescan every
+        /// fetched model.
+        filtered_indices: Option<Vec<usize>>,
+        /// Search is deliberately budgeted so a hostile model endpoint cannot
+        /// monopolize the TUI thread. When true, the visible matches are only
+        /// a bounded subset and the picker asks the user to refine the query.
+        filter_incomplete: bool,
         error: Option<String>,
         selected_idx: usize,
+        /// Navigation selects a fetched result without copying its complete
+        /// model id into the search input. Typing resets this flag so Enter can
+        /// still submit a custom model id.
+        selection_active: bool,
     },
     OpenClawToolsProfilePicker {
         selected: Option<usize>,
@@ -3069,6 +3081,96 @@ pub enum Overlay {
         success: bool,
         message: String,
     },
+}
+
+pub(crate) const MODEL_FETCH_QUERY_MAX_CHARS: usize = 128;
+pub(crate) const MODEL_FETCH_QUERY_MAX_BYTES: usize = MODEL_FETCH_QUERY_MAX_CHARS * 4;
+pub(crate) const MODEL_FETCH_FILTER_MAX_MODELS: usize = 16 * 1024;
+pub(crate) const MODEL_FETCH_FILTER_MAX_SOURCE_BYTES: usize = 512 * 1024;
+pub(crate) const MODEL_FETCH_FILTER_MAX_MATCHES: usize = 2 * 1024;
+const MODEL_FETCH_FILTER_MODEL_PREFIX_BYTES: usize = 512;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ModelFetchFilterResult {
+    pub(crate) indices: Option<Vec<usize>>,
+    pub(crate) incomplete: bool,
+}
+
+fn model_fetch_bounded_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut end = text.len().min(max_bytes);
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn model_fetch_prefix_contains(prefix: &str, query_lower: &str) -> bool {
+    if prefix.is_ascii() && query_lower.is_ascii() {
+        return prefix
+            .as_bytes()
+            .windows(query_lower.len())
+            .any(|window| window.eq_ignore_ascii_case(query_lower.as_bytes()));
+    }
+
+    prefix.to_lowercase().contains(query_lower)
+}
+
+/// Build a search cache under hard row, byte, per-item, and result budgets.
+/// Model endpoints are untrusted: an individual id or the returned collection
+/// can be arbitrarily large, while this function runs on the TUI event thread.
+pub(crate) fn model_fetch_filter(models: &[String], query: &str) -> ModelFetchFilterResult {
+    if query.len() > MODEL_FETCH_QUERY_MAX_BYTES {
+        return ModelFetchFilterResult {
+            indices: Some(Vec::new()),
+            incomplete: true,
+        };
+    }
+
+    let query = query.trim();
+    if query.is_empty() {
+        return ModelFetchFilterResult::default();
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut indices = Vec::new();
+    let mut scanned_bytes = 0usize;
+    let mut incomplete = false;
+
+    for (index, model) in models
+        .iter()
+        .enumerate()
+        .take(MODEL_FETCH_FILTER_MAX_MODELS)
+    {
+        let remaining_bytes = MODEL_FETCH_FILTER_MAX_SOURCE_BYTES.saturating_sub(scanned_bytes);
+        if remaining_bytes == 0 {
+            incomplete = true;
+            break;
+        }
+
+        let prefix = model_fetch_bounded_prefix(
+            model,
+            remaining_bytes.min(MODEL_FETCH_FILTER_MODEL_PREFIX_BYTES),
+        );
+        scanned_bytes = scanned_bytes.saturating_add(prefix.len());
+        incomplete |= prefix.len() < model.len();
+
+        if model_fetch_prefix_contains(prefix, &query_lower) {
+            indices.push(index);
+            if indices.len() == MODEL_FETCH_FILTER_MAX_MATCHES {
+                incomplete = true;
+                break;
+            }
+        }
+    }
+
+    if models.len() > MODEL_FETCH_FILTER_MAX_MODELS {
+        incomplete = true;
+    }
+
+    ModelFetchFilterResult {
+        indices: Some(indices),
+        incomplete,
+    }
 }
 
 impl Overlay {

@@ -81,7 +81,7 @@ pub(super) fn render_claude_model_picker_overlay(
         let rows = labels.iter().enumerate().map(|(idx, label)| {
             let value = provider
                 .claude_model_input(idx)
-                .map(|input| input.value.trim().to_string())
+                .map(|input| bounded_trimmed_text_for_display(&input.value))
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| texts::tui_na().to_string());
             Row::new(vec![Cell::from(cell_pad(label)), Cell::from(value)])
@@ -413,42 +413,47 @@ pub(super) fn render_managed_account_picker_overlay(
         return;
     }
 
-    let mut items = Vec::new();
-    if binding {
-        let marker = if selected_account_id.is_none() {
-            texts::tui_marker_active()
-        } else {
-            texts::tui_marker_inactive()
-        };
-        items.push(ListItem::new(Line::raw(format!(
-            "{marker}  {}",
-            texts::tui_managed_accounts_follow_default()
-        ))));
-    }
+    let row_count = status.accounts.len() + usize::from(binding);
+    let selected = selected.min(row_count.saturating_sub(1));
+    let visible = visible_selection_window(row_count, selected, body_area.height.max(1) as usize);
+    let visible_start = visible.start;
+    let items = visible.filter_map(|row| {
+        if binding && row == 0 {
+            let marker = if selected_account_id.is_none() {
+                texts::tui_marker_active()
+            } else {
+                texts::tui_marker_inactive()
+            };
+            return Some(ListItem::new(Line::raw(format!(
+                "{marker}  {}",
+                texts::tui_managed_accounts_follow_default()
+            ))));
+        }
 
-    for account in &status.accounts {
+        let account = status
+            .accounts
+            .get(row.saturating_sub(usize::from(binding)))?;
         let marker = if selected_account_id == Some(account.id.as_str()) {
             texts::tui_marker_active()
         } else {
             texts::tui_marker_inactive()
         };
+        let login = bounded_trimmed_text_for_display(&account.login);
         let suffix = if account.is_default {
             format!(" ({})", texts::tui_managed_accounts_default())
         } else {
             String::new()
         };
-        items.push(ListItem::new(Line::raw(format!(
-            "{marker}  {}{suffix}",
-            account.login
-        ))));
-    }
+        Some(ListItem::new(Line::raw(format!(
+            "{marker}  {login}{suffix}"
+        ))))
+    });
 
     let list = List::new(items)
         .highlight_style(selection_style(theme))
         .highlight_symbol(highlight_symbol(theme));
     let mut state = ListState::default();
-    let row_count = status.accounts.len() + usize::from(binding);
-    state.select(Some(selected.min(row_count.saturating_sub(1))));
+    state.select(Some(selected.saturating_sub(visible_start)));
     frame.render_stateful_widget(list, body_area, &mut state);
 }
 
@@ -576,7 +581,8 @@ pub(super) fn render_hermes_models_picker_overlay(
 
     // +1 row over the historic height (24 -> 25) compensates for the frame's
     // gap row so the model table keeps its full 16-row capacity.
-    let title = texts::tui_hermes_models_title(provider.name.value.trim());
+    let provider_name = bounded_trimmed_text_for_display(&provider.name.value);
+    let title = texts::tui_hermes_models_title(&provider_name);
     let body = overlay_frame_at(
         frame,
         centered_rect_fixed(86, 25, content_area),
@@ -595,8 +601,8 @@ pub(super) fn render_hermes_models_picker_overlay(
         ])
         .split(body);
 
-    let fields = provider.hermes_model_fields();
-    if fields.is_empty() {
+    let field_count = provider.hermes_models.len().saturating_mul(3);
+    if field_count == 0 {
         frame.render_widget(
             Paragraph::new(Line::styled(
                 texts::tui_hermes_models_no_models(),
@@ -607,10 +613,27 @@ pub(super) fn render_hermes_models_picker_overlay(
             chunks[0],
         );
     } else {
-        let rows_data = fields
-            .iter()
-            .map(|field| hermes_model_field_label_and_value(provider, *field))
-            .collect::<Vec<_>>();
+        // Each model consumes three data rows and, except for the first, one
+        // separator. Slice before constructing rows so periodic redraws stay
+        // proportional to the viewport rather than the full imported catalog.
+        let selected_field_idx = provider.hermes_models_field_idx.min(field_count - 1);
+        let selected_model_idx = selected_field_idx / 3;
+        let table_row_capacity = chunks[0].height.saturating_sub(3) as usize;
+        let model_capacity = (table_row_capacity.saturating_add(1) / 4).max(1);
+        let visible_models = visible_selection_window(
+            provider.hermes_models.len(),
+            selected_model_idx,
+            model_capacity,
+        );
+        let mut rows_data = Vec::with_capacity(visible_models.len().saturating_mul(3));
+        for model_idx in visible_models.clone() {
+            for field_offset in 0..3 {
+                rows_data.push(hermes_model_field_label_and_value(
+                    provider,
+                    hermes_model_field_at(model_idx, field_offset),
+                ));
+            }
+        }
         let label_col_width = field_label_column_width(
             rows_data
                 .iter()
@@ -624,7 +647,11 @@ pub(super) fn render_hermes_models_picker_overlay(
             Cell::from(texts::tui_header_value()),
         ])
         .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
-        let mut rows = Vec::with_capacity(rows_data.len() + provider.hermes_models.len());
+        let mut rows = Vec::with_capacity(
+            rows_data
+                .len()
+                .saturating_add(visible_models.len().saturating_sub(1)),
+        );
         for (idx, (label, value)) in rows_data.iter().enumerate() {
             if idx > 0 && idx % 3 == 0 {
                 rows.push(
@@ -655,9 +682,12 @@ pub(super) fn render_hermes_models_picker_overlay(
         .highlight_symbol(highlight_symbol(theme));
 
         let mut state = TableState::default();
-        state.select(Some(hermes_model_visual_row_index(
-            provider.hermes_models_field_idx.min(fields.len() - 1),
-        )));
+        let selected_model_offset = selected_model_idx.saturating_sub(visible_models.start);
+        state.select(Some(
+            selected_model_offset
+                .saturating_mul(4)
+                .saturating_add(selected_field_idx % 3),
+        ));
         frame.render_stateful_widget(table, chunks[0], &mut state);
     }
 
@@ -675,8 +705,12 @@ pub(super) fn render_hermes_models_picker_overlay(
     render_hermes_model_picker_input(frame, provider, chunks[2], theme, editing);
 }
 
-fn hermes_model_visual_row_index(field_idx: usize) -> usize {
-    field_idx + field_idx / 3
+fn hermes_model_field_at(model_idx: usize, field_offset: usize) -> HermesModelField {
+    match field_offset {
+        0 => HermesModelField::Id(model_idx),
+        1 => HermesModelField::Name(model_idx),
+        _ => HermesModelField::ContextLength(model_idx),
+    }
 }
 
 fn hermes_model_field_label_and_value(
@@ -707,11 +741,11 @@ fn hermes_model_string(provider: &ProviderAddFormState, index: usize, key: &str)
         .and_then(|value| {
             value
                 .as_str()
-                .map(str::to_string)
+                .map(bounded_trimmed_text_for_display)
                 .or_else(|| value.as_i64().map(|number| number.to_string()))
                 .or_else(|| value.as_u64().map(|number| number.to_string()))
         })
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| texts::tui_na().to_string())
 }
 
@@ -771,9 +805,10 @@ pub(super) fn render_model_fetch_picker_overlay(
     content_area: Rect,
     theme: &theme::Theme,
     input: &TextInput,
-    query: &str,
     fetching: bool,
     models: &[String],
+    filtered_indices: Option<&[usize]>,
+    filter_incomplete: bool,
     error: Option<&str>,
     selected_idx: usize,
 ) {
@@ -828,7 +863,7 @@ pub(super) fn render_model_fetch_picker_overlay(
     let y = input_inner.y;
     frame.set_cursor_position((x, y));
 
-    let list_area = chunks[1];
+    let mut list_area = chunks[1];
     if fetching {
         let text = texts::tui_loading().to_string();
         let p = Paragraph::new(Line::styled(text, Style::default().fg(theme.accent)))
@@ -838,6 +873,7 @@ pub(super) fn render_model_fetch_picker_overlay(
     }
 
     if let Some(err) = error {
+        let err = bounded_trimmed_text_for_display(err);
         let p = Paragraph::new(Line::styled(err, Style::default().fg(theme.err)))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
@@ -845,17 +881,24 @@ pub(super) fn render_model_fetch_picker_overlay(
         return;
     }
 
-    let filtered: Vec<&String> = if query.trim().is_empty() {
-        models.iter().collect()
-    } else {
-        let q = query.trim().to_lowercase();
-        models
-            .iter()
-            .filter(|m| m.to_lowercase().contains(&q))
-            .collect()
-    };
+    if filter_incomplete {
+        let limited_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(list_area);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                texts::tui_model_fetch_results_limited(),
+                Style::default().fg(theme.warn),
+            ))
+            .alignment(Alignment::Center),
+            limited_chunks[0],
+        );
+        list_area = limited_chunks[1];
+    }
 
-    if filtered.is_empty() {
+    let filtered_len = filtered_indices.map_or(models.len(), <[usize]>::len);
+    if filtered_len == 0 {
         let hint = if models.is_empty() {
             texts::tui_model_fetch_no_models().to_string()
         } else {
@@ -867,10 +910,20 @@ pub(super) fn render_model_fetch_picker_overlay(
         return;
     }
 
-    let items: Vec<ListItem> = filtered
-        .iter()
-        .map(|m| ListItem::new(Line::raw(*m)))
-        .collect();
+    let selected_idx = selected_idx.min(filtered_len - 1);
+    let visible =
+        visible_selection_window(filtered_len, selected_idx, list_area.height.max(1) as usize);
+    let visible_start = visible.start;
+    let items = visible.filter_map(|filtered_index| {
+        let model_index = match filtered_indices {
+            Some(indices) => indices.get(filtered_index).copied()?,
+            None => filtered_index,
+        };
+        let model = models.get(model_index)?;
+        Some(ListItem::new(Line::raw(bounded_trimmed_text_for_display(
+            model,
+        ))))
+    });
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::NONE))
@@ -878,7 +931,7 @@ pub(super) fn render_model_fetch_picker_overlay(
         .highlight_symbol(highlight_symbol(theme));
 
     let mut state = ratatui::widgets::ListState::default();
-    state.select(Some(selected_idx));
+    state.select(Some(selected_idx.saturating_sub(visible_start)));
 
     frame.render_stateful_widget(list, list_area, &mut state);
 }

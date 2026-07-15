@@ -7,7 +7,8 @@ use crate::settings::{
 };
 
 use super::super::app::{
-    App, ConfirmAction, ConfirmOverlay, LoadingKind, Overlay, SessionsPane, ToastKind,
+    model_fetch_filter, App, ConfirmAction, ConfirmOverlay, LoadingKind, Overlay, SessionsPane,
+    ToastKind,
 };
 use super::super::data::{load_state, UiData};
 use super::super::runtime_actions::app_display_name;
@@ -778,7 +779,11 @@ pub(crate) fn handle_model_fetch_msg(app: &mut App, msg: ModelFetchMsg) {
                 request_id: current_request_id,
                 fetching: ref mut f,
                 models: ref mut m,
+                query: ref q,
+                filtered_indices: ref mut filtered,
+                filter_incomplete: ref mut incomplete,
                 error: ref mut e,
+                ref mut selection_active,
                 field: ref current_field,
                 claude_idx: ref current_claude_idx,
                 ..
@@ -795,6 +800,10 @@ pub(crate) fn handle_model_fetch_msg(app: &mut App, msg: ModelFetchMsg) {
                                 *e = Some(texts::tui_model_fetch_no_models().to_string());
                             } else {
                                 *m = fetched_models;
+                                let filter = model_fetch_filter(m, q);
+                                *filtered = filter.indices;
+                                *incomplete = filter.incomplete;
+                                *selection_active = false;
                                 *e = None;
                             }
                         }
@@ -1454,6 +1463,8 @@ mod tests {
     use super::*;
     use crate::app_config::AppType;
     use crate::cli::tui::data::{ProviderUsageQuota, QuotaTarget, QuotaTargetKind};
+    use crate::cli::tui::form::ProviderAddField;
+    use crate::cli::tui::text_edit::TextInput;
     use crate::services::local_env_check::{LocalTool, ToolCheckResult, ToolCheckStatus};
     use crate::services::{CredentialStatus, SubscriptionQuota};
     use crate::session_manager::SessionMeta;
@@ -1466,6 +1477,48 @@ mod tests {
                 version: version.to_string(),
             },
         }
+    }
+
+    #[test]
+    fn model_fetch_result_rebuilds_the_explicit_search_cache() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.overlay = Overlay::ModelFetchPicker {
+            request_id: 7,
+            field: ProviderAddField::ClaudeModelConfig,
+            claude_idx: Some(0),
+            input: TextInput::new("alp"),
+            query: "alp".to_string(),
+            fetching: true,
+            models: Vec::new(),
+            filtered_indices: None,
+            filter_incomplete: false,
+            error: None,
+            selected_idx: 0,
+            selection_active: false,
+        };
+
+        handle_model_fetch_msg(
+            &mut app,
+            ModelFetchMsg::Finished {
+                request_id: 7,
+                field: ProviderAddField::ClaudeModelConfig,
+                claude_idx: Some(0),
+                result: Ok(vec![
+                    "beta".to_string(),
+                    "alpha".to_string(),
+                    "alphabet".to_string(),
+                ]),
+            },
+        );
+
+        assert!(matches!(
+            app.overlay,
+            Overlay::ModelFetchPicker {
+                fetching: false,
+                filtered_indices: Some(ref indices),
+                ..
+            } if indices == &[1, 2]
+        ));
     }
 
     #[test]

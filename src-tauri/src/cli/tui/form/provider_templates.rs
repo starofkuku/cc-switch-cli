@@ -482,6 +482,9 @@ impl ProviderAddFormState {
         let total_templates = builtin_defs.len() + sponsor_presets.len() + after_sponsor_defs.len();
         let idx = idx.min(total_templates.saturating_sub(1));
         self.template_idx = idx;
+        self.field_errors.clear();
+        self.usage_query_field_errors.clear();
+        self.clear_text_edit();
         self.id_is_manual = false;
         self.reset_local_proxy_settings_state();
 

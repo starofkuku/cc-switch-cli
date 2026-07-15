@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::tui::data;
+use url::Url;
 
 pub(super) fn pane_border_style(app: &App, pane: Focus, theme: &super::theme::Theme) -> Style {
     if app.focus == pane {
@@ -246,25 +247,100 @@ pub(super) fn truncate_to_display_width(text: &str, width: u16) -> String {
         return String::new();
     }
 
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-
-    if width == 1 {
-        return "…".to_string();
-    }
-
+    const MAX_CHARS_PER_COLUMN: usize = 4;
+    const EXTRA_ZERO_WIDTH_CHARS: usize = 16;
+    let max_chars = width
+        .saturating_mul(MAX_CHARS_PER_COLUMN)
+        .saturating_add(EXTRA_ZERO_WIDTH_CHARS);
     let mut out = String::new();
     let mut used = 0usize;
-    for c in text.chars() {
+    let mut end_byte = 0usize;
+    let mut truncated = false;
+    for (count, (byte, c)) in text.char_indices().enumerate() {
+        if count >= max_chars {
+            truncated = true;
+            break;
+        }
         let w = UnicodeWidthChar::width(c).unwrap_or(0);
-        if used.saturating_add(w) > width.saturating_sub(1) {
+        if used.saturating_add(w) > width {
+            truncated = true;
             break;
         }
         out.push(c);
         used = used.saturating_add(w);
+        end_byte = byte.saturating_add(c.len_utf8());
+    }
+    truncated |= end_byte < text.len();
+
+    if !truncated {
+        return out;
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    while used > width.saturating_sub(1) {
+        let Some(c) = out.pop() else {
+            break;
+        };
+        used = used.saturating_sub(UnicodeWidthChar::width(c).unwrap_or(0));
     }
     out.push('…');
+    out
+}
+
+/// Produce a small passive summary without trimming, measuring, or cloning an
+/// arbitrary complete input. Passive rows always show a bounded prefix and an
+/// ellipsis when the source exceeds this fixed safety budget.
+pub(super) fn bounded_trimmed_text_for_display(text: &str) -> String {
+    const MAX_DISPLAY_WIDTH: usize = 512;
+    const MAX_SCANNED_CHARS: usize = 2_048;
+
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut started = false;
+    let mut end_byte = 0usize;
+    let mut truncated = false;
+
+    for (count, (byte, ch)) in text.char_indices().enumerate() {
+        if count >= MAX_SCANNED_CHARS {
+            truncated = true;
+            break;
+        }
+        end_byte = byte.saturating_add(ch.len_utf8());
+        if !started && ch.is_whitespace() {
+            continue;
+        }
+        started = true;
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used.saturating_add(char_width) > MAX_DISPLAY_WIDTH {
+            truncated = true;
+            break;
+        }
+        out.push(ch);
+        used = used.saturating_add(char_width);
+    }
+    truncated |= end_byte < text.len();
+
+    while out.chars().next_back().is_some_and(char::is_whitespace) {
+        let Some(ch) = out.pop() else {
+            break;
+        };
+        used = used.saturating_sub(UnicodeWidthChar::width(ch).unwrap_or(0));
+    }
+
+    if truncated {
+        while used > MAX_DISPLAY_WIDTH.saturating_sub(1) {
+            let Some(ch) = out.pop() else {
+                break;
+            };
+            used = used.saturating_sub(UnicodeWidthChar::width(ch).unwrap_or(0));
+        }
+        out.push('…');
+    }
     out
 }
 
@@ -984,6 +1060,26 @@ pub(super) fn inset_top(area: Rect, top: u16) -> Rect {
     }
 }
 
+/// Returns a fixed-size slice around the selected row. Renderers use this
+/// before constructing ratatui rows so a large imported collection cannot turn
+/// every periodic redraw into O(total rows) work.
+pub(super) fn visible_selection_window(
+    len: usize,
+    selected: usize,
+    capacity: usize,
+) -> std::ops::Range<usize> {
+    if len == 0 || capacity == 0 {
+        return 0..0;
+    }
+
+    let capacity = capacity.min(len);
+    let selected = selected.min(len - 1);
+    let start = selected
+        .saturating_sub(capacity / 2)
+        .min(len.saturating_sub(capacity));
+    start..start.saturating_add(capacity)
+}
+
 pub(super) fn field_label_column_width<'a, I>(labels: I, left_padding: u16) -> u16
 where
     I: IntoIterator<Item = &'a str>,
@@ -1000,52 +1096,689 @@ pub(super) fn redacted_secret_placeholder() -> &'static str {
     "[redacted]"
 }
 
-pub(super) fn redact_sensitive_json(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| {
-                    let next = if is_sensitive_display_key(key) {
-                        redact_value_payload(value)
-                    } else {
-                        redact_sensitive_json(value)
-                    };
-                    (key.clone(), next)
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.iter().map(redact_sensitive_json).collect()),
-        _ => value.clone(),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewValuePolicy {
+    Opaque,
+    SecretMap,
+    Walk,
+    PublicText,
+    PublicStringArray,
+    SafeUrl,
+    SafeCommand,
+    PublicBoolean,
+    TokenCount,
+    NonNegativeNumber,
+}
+
+const PREVIEW_NODE_BUDGET: usize = 2_048;
+const PREVIEW_MAX_COLLECTION_ITEMS: usize = 128;
+const PREVIEW_MAX_DEPTH: usize = 16;
+const PREVIEW_KEY_MAX_CHARS: usize = 128;
+const PREVIEW_KEY_MAX_INPUT_BYTES: usize = 512;
+pub(super) const TOML_PREVIEW_MAX_INPUT_BYTES: usize = 256 * 1024;
+
+struct PreviewBudget {
+    remaining: usize,
+}
+
+impl PreviewBudget {
+    fn new() -> Self {
+        Self {
+            remaining: PREVIEW_NODE_BUDGET,
+        }
+    }
+
+    fn take(&mut self) -> bool {
+        if self.remaining == 0 {
+            return false;
+        }
+        self.remaining -= 1;
+        true
     }
 }
 
-fn redact_value_payload(value: &Value) -> Value {
+pub(super) fn redact_sensitive_json(value: &Value) -> Value {
+    let mut budget = PreviewBudget::new();
+    redact_sensitive_json_with_budget(value, &mut budget, 0)
+}
+
+fn redact_sensitive_json_with_budget(
+    value: &Value,
+    budget: &mut PreviewBudget,
+    depth: usize,
+) -> Value {
+    if depth >= PREVIEW_MAX_DEPTH || budget.remaining == 0 {
+        return preview_truncated_value();
+    }
+
     match value {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(key, value)| (key.clone(), redact_value_payload(value)))
-                .collect(),
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            let mut rendered = 0usize;
+            for (key, value) in map.iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+                if !budget.take() {
+                    break;
+                }
+                let display_key = unique_preview_key(&out, bounded_preview_key(key));
+                out.insert(
+                    display_key,
+                    redact_json_entry(key, value, budget, depth.saturating_add(1)),
+                );
+                rendered += 1;
+            }
+            let hidden = map.len().saturating_sub(rendered);
+            if hidden > 0 {
+                insert_json_truncation(&mut out, hidden);
+            }
+            Value::Object(out)
+        }
+        Value::Array(_) => redact_value_payload(value),
+        _ => redact_value_payload(value),
+    }
+}
+
+/// Codex auth data has no passive-display scalar values. Slot names and shape
+/// remain useful, but every leaf stays opaque until the user opens the editor.
+pub(super) fn redact_codex_auth_json(value: &Value) -> Value {
+    let mut budget = PreviewBudget::new();
+    redact_secret_map(value, &mut budget)
+}
+
+fn redact_json_entry(key: &str, value: &Value, budget: &mut PreviewBudget, depth: usize) -> Value {
+    match preview_value_policy(key) {
+        PreviewValuePolicy::Opaque => redact_value_payload(value),
+        PreviewValuePolicy::SecretMap => redact_secret_map(value, budget),
+        PreviewValuePolicy::Walk => match value {
+            Value::Object(_) => redact_sensitive_json_with_budget(value, budget, depth),
+            Value::Array(items) => {
+                let mut out = Vec::new();
+                for item in items.iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+                    if !budget.take() {
+                        break;
+                    }
+                    out.push(match item {
+                        Value::Object(_) => redact_sensitive_json_with_budget(item, budget, depth),
+                        _ => redact_value_payload(item),
+                    });
+                }
+                let hidden = items.len().saturating_sub(out.len());
+                if hidden > 0 {
+                    out.push(preview_truncated_count_value(hidden));
+                }
+                Value::Array(out)
+            }
+            _ => redact_value_payload(value),
+        },
+        PreviewValuePolicy::PublicText => value
+            .as_str()
+            .filter(|text| is_safe_public_text(text))
+            .map_or_else(
+                || redact_value_payload(value),
+                |text| Value::String(text.to_string()),
+            ),
+        PreviewValuePolicy::PublicStringArray => match value {
+            Value::Array(items) => {
+                let mut out = items
+                    .iter()
+                    .take(PREVIEW_MAX_COLLECTION_ITEMS)
+                    .map(|item| {
+                        item.as_str()
+                            .filter(|text| is_safe_public_text(text))
+                            .map_or_else(
+                                || redact_value_payload(item),
+                                |text| Value::String(text.to_string()),
+                            )
+                    })
+                    .collect::<Vec<_>>();
+                let hidden = items.len().saturating_sub(out.len());
+                if hidden > 0 {
+                    out.push(preview_truncated_count_value(hidden));
+                }
+                Value::Array(out)
+            }
+            _ => redact_value_payload(value),
+        },
+        PreviewValuePolicy::SafeUrl => value.as_str().map_or_else(
+            || redact_value_payload(value),
+            |text| Value::String(safe_url_origin_for_display(text)),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(redact_value_payload).collect()),
+        PreviewValuePolicy::SafeCommand => value.as_str().map_or_else(
+            || redact_value_payload(value),
+            |text| Value::String(safe_executable_basename_for_display(text)),
+        ),
+        PreviewValuePolicy::PublicBoolean => value
+            .as_bool()
+            .map(Value::Bool)
+            .unwrap_or_else(|| redact_value_payload(value)),
+        PreviewValuePolicy::TokenCount => value
+            .as_u64()
+            .map(|number| Value::Number(number.into()))
+            .unwrap_or_else(|| redact_value_payload(value)),
+        PreviewValuePolicy::NonNegativeNumber => value
+            .as_f64()
+            .filter(|number| number.is_finite() && *number >= 0.0)
+            .map_or_else(|| redact_value_payload(value), |_| value.clone()),
+    }
+}
+
+fn redact_secret_map(value: &Value, budget: &mut PreviewBudget) -> Value {
+    let Value::Object(map) = value else {
+        return redact_value_payload(value);
+    };
+
+    let mut out = serde_json::Map::new();
+    let mut rendered = 0usize;
+    for key in map.keys().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+        if !budget.take() {
+            break;
+        }
+        let display_key = unique_preview_key(&out, bounded_preview_key(key));
+        out.insert(
+            display_key,
+            Value::String(redacted_secret_placeholder().to_string()),
+        );
+        rendered += 1;
+    }
+    let hidden = map.len().saturating_sub(rendered);
+    if hidden > 0 {
+        insert_json_truncation(&mut out, hidden);
+    }
+    Value::Object(out)
+}
+
+fn bounded_preview_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let mut out = chars
+        .by_ref()
+        .take(PREVIEW_KEY_MAX_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
+}
+
+fn unique_preview_key(map: &serde_json::Map<String, Value>, base: String) -> String {
+    if !map.contains_key(&base) {
+        return base;
+    }
+    for suffix in 2usize.. {
+        let candidate = format!("{base} ({suffix})");
+        if !map.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("an unused preview key suffix must exist")
+}
+
+fn insert_json_truncation(map: &mut serde_json::Map<String, Value>, hidden: usize) {
+    let key = unique_preview_key(map, "…".to_string());
+    map.insert(key, preview_truncated_count_value(hidden));
+}
+
+fn preview_truncated_count_value(hidden: usize) -> Value {
+    Value::String(format!("[preview truncated: {hidden} more entries]"))
+}
+
+fn preview_truncated_value() -> Value {
+    Value::String("[preview truncated]".to_string())
+}
+
+/// Builds a display-only Codex TOML preview with secret-bearing values
+/// removed. Invalid TOML is deliberately fail-closed: showing a placeholder
+/// is safer than falling back to the original, potentially sensitive text.
+pub(super) fn redact_sensitive_toml(text: &str) -> String {
+    if text.len() > TOML_PREVIEW_MAX_INPUT_BYTES {
+        return texts::tui_preview_omitted_too_large().to_string();
+    }
+    if text.trim().is_empty() {
+        return String::new();
+    }
+
+    let Ok(mut value) = toml::from_str::<toml::Value>(text) else {
+        return redacted_secret_placeholder().to_string();
+    };
+    let mut budget = PreviewBudget::new();
+    redact_sensitive_toml_value(&mut value, &mut budget, 0);
+    let rendered = toml::to_string_pretty(&value)
+        .unwrap_or_else(|_| redacted_secret_placeholder().to_string());
+    if rendered.len() > TOML_PREVIEW_MAX_INPUT_BYTES {
+        texts::tui_preview_omitted_too_large().to_string()
+    } else {
+        rendered
+    }
+}
+
+fn redact_sensitive_toml_value(value: &mut toml::Value, budget: &mut PreviewBudget, depth: usize) {
+    if depth >= PREVIEW_MAX_DEPTH || budget.remaining == 0 {
+        redact_toml_truncated(value);
+        return;
+    }
+
+    match value {
+        toml::Value::Table(table) => {
+            let original_len = table.len();
+            let original = std::mem::take(table);
+            let mut rendered = 0usize;
+            for (key, mut child) in original.into_iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+                if !budget.take() {
+                    break;
+                }
+                redact_toml_entry(&key, &mut child, budget, depth.saturating_add(1));
+                let display_key = unique_toml_preview_key(table, bounded_preview_key(&key));
+                table.insert(display_key, child);
+                rendered += 1;
+            }
+            insert_toml_truncation(table, original_len.saturating_sub(rendered));
+        }
+        toml::Value::Array(items) => {
+            redact_toml_array(items, budget, depth, false);
+        }
+        _ => redact_toml_payload(value),
+    }
+}
+
+fn redact_toml_entry(key: &str, value: &mut toml::Value, budget: &mut PreviewBudget, depth: usize) {
+    match preview_value_policy(key) {
+        PreviewValuePolicy::Opaque => redact_toml_payload(value),
+        PreviewValuePolicy::SecretMap => redact_toml_secret_map(value, budget),
+        PreviewValuePolicy::Walk => match value {
+            toml::Value::Table(_) => redact_sensitive_toml_value(value, budget, depth),
+            toml::Value::Array(items) => {
+                redact_toml_array(items, budget, depth, true);
+            }
+            _ => redact_toml_payload(value),
+        },
+        PreviewValuePolicy::PublicText => {
+            if !matches!(value, toml::Value::String(text) if is_safe_public_text(text)) {
+                redact_toml_payload(value);
+            }
+        }
+        PreviewValuePolicy::PublicStringArray => match value {
+            toml::Value::Array(items) => {
+                let original_len = items.len();
+                let original = std::mem::take(items);
+                for mut item in original.into_iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+                    if !budget.take() {
+                        break;
+                    }
+                    if !matches!(&item, toml::Value::String(text) if is_safe_public_text(text)) {
+                        redact_toml_payload(&mut item);
+                    }
+                    items.push(item);
+                }
+                let hidden = original_len.saturating_sub(items.len());
+                if hidden > 0 {
+                    items.push(toml_preview_truncation_value(hidden));
+                }
+            }
+            _ => redact_toml_payload(value),
+        },
+        PreviewValuePolicy::SafeUrl => match value {
+            toml::Value::String(text) => {
+                *text = safe_url_origin_for_display(text);
+            }
+            _ => redact_toml_payload(value),
+        },
+        PreviewValuePolicy::SafeCommand => match value {
+            toml::Value::String(text) => {
+                *text = safe_executable_basename_for_display(text);
+            }
+            _ => redact_toml_payload(value),
+        },
+        PreviewValuePolicy::PublicBoolean => {
+            if !value.is_bool() {
+                redact_toml_payload(value);
+            }
+        }
+        PreviewValuePolicy::TokenCount => {
+            if !matches!(value, toml::Value::Integer(number) if *number >= 0) {
+                redact_toml_payload(value);
+            }
+        }
+        PreviewValuePolicy::NonNegativeNumber => {
+            let valid = match value {
+                toml::Value::Integer(number) => *number >= 0,
+                toml::Value::Float(number) => number.is_finite() && *number >= 0.0,
+                _ => false,
+            };
+            if !valid {
+                redact_toml_payload(value);
+            }
+        }
+    }
+}
+
+fn redact_toml_array(
+    items: &mut Vec<toml::Value>,
+    budget: &mut PreviewBudget,
+    depth: usize,
+    walk_tables: bool,
+) {
+    let original_len = items.len();
+    let original = std::mem::take(items);
+    for mut item in original.into_iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+        if !budget.take() {
+            break;
+        }
+        if walk_tables && item.is_table() {
+            redact_sensitive_toml_value(&mut item, budget, depth.saturating_add(1));
+        } else {
+            redact_toml_payload(&mut item);
+        }
+        items.push(item);
+    }
+    let hidden = original_len.saturating_sub(items.len());
+    if hidden > 0 {
+        items.push(toml_preview_truncation_value(hidden));
+    }
+}
+
+fn redact_toml_payload(value: &mut toml::Value) {
+    *value = toml::Value::String(redacted_secret_placeholder().to_string());
+}
+
+fn redact_toml_secret_map(value: &mut toml::Value, budget: &mut PreviewBudget) {
+    let toml::Value::Table(table) = value else {
+        redact_toml_payload(value);
+        return;
+    };
+
+    let original_len = table.len();
+    let original = std::mem::take(table);
+    for (key, _child) in original.into_iter().take(PREVIEW_MAX_COLLECTION_ITEMS) {
+        if !budget.take() {
+            break;
+        }
+        let display_key = unique_toml_preview_key(table, bounded_preview_key(&key));
+        table.insert(
+            display_key,
+            toml::Value::String(redacted_secret_placeholder().to_string()),
+        );
+    }
+    let hidden = original_len.saturating_sub(table.len());
+    insert_toml_truncation(table, hidden);
+}
+
+fn redact_toml_truncated(value: &mut toml::Value) {
+    *value = toml::Value::String("[preview truncated]".to_string());
+}
+
+fn toml_preview_truncation_value(hidden: usize) -> toml::Value {
+    toml::Value::String(format!("[preview truncated: {hidden} more entries]"))
+}
+
+fn unique_toml_preview_key(table: &toml::map::Map<String, toml::Value>, base: String) -> String {
+    if !table.contains_key(&base) {
+        return base;
+    }
+    for suffix in 2usize.. {
+        let candidate = format!("{base} ({suffix})");
+        if !table.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("an unused TOML preview key suffix must exist")
+}
+
+fn insert_toml_truncation(table: &mut toml::map::Map<String, toml::Value>, hidden: usize) {
+    if hidden == 0 {
+        return;
+    }
+    let key = unique_toml_preview_key(table, "…".to_string());
+    table.insert(key, toml_preview_truncation_value(hidden));
+}
+
+pub(super) fn redact_value_payload(value: &Value) -> Value {
+    match value {
         Value::Null => Value::Null,
         _ => Value::String(redacted_secret_placeholder().to_string()),
     }
 }
 
-fn is_sensitive_display_key(key: &str) -> bool {
-    let normalized = key
-        .chars()
+fn normalized_display_key(key: &str) -> String {
+    key.chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(|ch| ch.to_lowercase())
-        .collect::<String>();
+        .collect::<String>()
+}
 
-    normalized == "authorization"
-        || normalized.ends_with("authorization")
-        || normalized.ends_with("apikey")
-        || normalized.ends_with("token")
-        || normalized.ends_with("password")
-        || normalized.ends_with("secret")
-        || normalized.ends_with("awsaccesskeyid")
-        || normalized.ends_with("awssecretaccesskey")
-        || normalized.ends_with("secretkey")
+fn preview_value_policy(key: &str) -> PreviewValuePolicy {
+    // Key classification normalizes the complete key. Imported JSON can use
+    // arbitrarily large object keys, so fail closed before normalization and
+    // keep passive previews on a fixed per-key budget.
+    if key.len() > PREVIEW_KEY_MAX_INPUT_BYTES {
+        return PreviewValuePolicy::Opaque;
+    }
+    let normalized = normalized_display_key(key);
+
+    if is_env_header_reference_container(&normalized)
+        || is_literal_header_container(&normalized)
+        || is_literal_env_container(&normalized)
+    {
+        return PreviewValuePolicy::SecretMap;
+    }
+
+    if is_token_metric_key(&normalized) {
+        return PreviewValuePolicy::TokenCount;
+    }
+
+    if is_sensitive_display_key(&normalized) {
+        return PreviewValuePolicy::Opaque;
+    }
+
+    if is_safe_url_key(&normalized) {
+        return PreviewValuePolicy::SafeUrl;
+    }
+
+    if normalized == "command" {
+        return PreviewValuePolicy::SafeCommand;
+    }
+
+    if matches!(normalized.as_str(), "tags" | "capabilities") {
+        return PreviewValuePolicy::PublicStringArray;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "server"
+            | "models"
+            | "options"
+            | "limit"
+            | "limits"
+            | "apps"
+            | "features"
+            | "modelproviders"
+            | "mcpservers"
+            | "catalog"
+            | "modelcatalog"
+    ) {
+        return PreviewValuePolicy::Walk;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "id" | "name"
+            | "description"
+            | "model"
+            | "modelid"
+            | "modelname"
+            | "type"
+            | "api"
+            | "apimode"
+            | "wireapi"
+            | "npm"
+            | "transport"
+            | "protocol"
+            | "language"
+            | "templatetype"
+            | "unit"
+            | "reasoningeffort"
+            | "reasoningsummary"
+    ) {
+        return PreviewValuePolicy::PublicText;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "enabled"
+            | "disabled"
+            | "claude"
+            | "codex"
+            | "gemini"
+            | "opencode"
+            | "hermes"
+            | "requiresopenaiauth"
+            | "supportsthinking"
+            | "supportseffort"
+            | "store"
+            | "stream"
+    ) {
+        return PreviewValuePolicy::PublicBoolean;
+    }
+
+    if matches!(
+        normalized.as_str(),
+        "timeout"
+            | "autointerval"
+            | "autoqueryinterval"
+            | "ratelimitdelay"
+            | "context"
+            | "output"
+            | "contextwindow"
+            | "maxoutput"
+            | "maxinput"
+    ) {
+        return PreviewValuePolicy::NonNegativeNumber;
+    }
+
+    PreviewValuePolicy::Opaque
+}
+
+fn is_env_header_reference_container(normalized: &str) -> bool {
+    normalized == "envhttpheaders"
+}
+
+fn is_literal_header_container(normalized: &str) -> bool {
+    !is_env_header_reference_container(normalized)
+        && (normalized.ends_with("headers") || normalized.ends_with("headeroverrides"))
+}
+
+fn is_literal_env_container(normalized: &str) -> bool {
+    normalized == "env"
+}
+
+fn is_sensitive_display_key(normalized: &str) -> bool {
+    let auth_like = normalized.contains("auth")
+        && !normalized.contains("author")
+        && !normalized.contains("authority");
+
+    auth_like
+        || matches!(normalized, "key" | "keys" | "pat" | "pats" | "pin" | "pins")
+        || normalized.contains("apikey")
+        || normalized.contains("accesskey")
+        || normalized.contains("token")
+        || normalized.contains("password")
+        || normalized.contains("passphrase")
+        || normalized.contains("privatekey")
+        || normalized.contains("secret")
+        || normalized.contains("credential")
+        || normalized.contains("cookie")
+        || normalized.contains("bearer")
+}
+
+fn is_token_metric_key(normalized: &str) -> bool {
+    matches!(
+        normalized,
+        "maxtokens"
+            | "mintokens"
+            | "maxinputtokens"
+            | "maxoutputtokens"
+            | "inputtokens"
+            | "outputtokens"
+            | "totaltokens"
+            | "prompttokens"
+            | "completiontokens"
+            | "reasoningtokens"
+            | "cachedtokens"
+            | "cachedinputtokens"
+            | "cachecreationinputtokens"
+            | "tokenlimit"
+            | "inputtokenlimit"
+            | "outputtokenlimit"
+    )
+}
+
+fn is_safe_url_key(normalized: &str) -> bool {
+    normalized.ends_with("url")
+        || normalized.ends_with("uri")
+        || matches!(normalized, "homepage" | "docs")
+}
+
+fn is_safe_public_text(text: &str) -> bool {
+    let mut count = 0usize;
+    for ch in text.chars().take(513) {
+        if ch.is_control() {
+            return false;
+        }
+        count += 1;
+    }
+    count <= 512
+}
+
+pub(super) fn safe_public_text_for_display(text: &str) -> String {
+    if is_safe_public_text(text) {
+        text.to_string()
+    } else {
+        redacted_secret_placeholder().to_string()
+    }
+}
+
+pub(super) fn safe_url_origin_for_display(raw: &str) -> String {
+    const MAX_SAFE_URL_INPUT_BYTES: usize = 8 * 1024;
+    if raw.len() > MAX_SAFE_URL_INPUT_BYTES {
+        return redacted_secret_placeholder().to_string();
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let Ok(parsed) = Url::parse(trimmed) else {
+        return redacted_secret_placeholder().to_string();
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return redacted_secret_placeholder().to_string();
+    }
+
+    let origin = parsed.origin().ascii_serialization();
+    if origin == "null" {
+        redacted_secret_placeholder().to_string()
+    } else {
+        origin
+    }
+}
+
+pub(super) fn safe_executable_basename_for_display(raw: &str) -> String {
+    const MAX_SAFE_COMMAND_INPUT_BYTES: usize = 8 * 1024;
+    if raw.len() > MAX_SAFE_COMMAND_INPUT_BYTES {
+        return redacted_secret_placeholder().to_string();
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    const SHELL_META: &str = ";&|`$<>(){}[]*?!%=\"'";
+    if trimmed.chars().any(|ch| {
+        ch.is_whitespace() || ch.is_control() || SHELL_META.chars().any(|meta| meta == ch)
+    }) {
+        return redacted_secret_placeholder().to_string();
+    }
+
+    let basename = trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty() && name.chars().count() <= 128);
+    basename.map_or_else(|| redacted_secret_placeholder().to_string(), str::to_string)
 }

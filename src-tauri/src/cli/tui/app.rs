@@ -44,8 +44,8 @@ pub(crate) use content_usage::usage_active_pane_len;
 pub use editor_state::{EditorKind, EditorMode, EditorState, EditorSubmit};
 pub(crate) use helpers::*;
 pub(crate) use types::{
-    retire_session_messages, retire_session_rows, SessionPageSource, SessionPageToken,
-    SessionRowIdentity,
+    model_fetch_filter, retire_session_messages, retire_session_rows, SessionPageSource,
+    SessionPageToken, SessionRowIdentity, MODEL_FETCH_QUERY_MAX_BYTES, MODEL_FETCH_QUERY_MAX_CHARS,
 };
 pub use types::{
     CommonSnippetViewSource, ConfirmAction, ConfirmOverlay, FilterScope, FilterState, Focus,
@@ -53,6 +53,8 @@ pub use types::{
     SkillsDiscoverSource, TextInputState, TextSubmit, TextViewAction, TextViewState, Toast,
     ToastKind, UsageMetric, UsagePane, UsageState,
 };
+#[cfg(test)]
+pub(crate) use types::{McpEnvEditorField, McpEnvEntryEditorState};
 
 pub(crate) fn supports_failover_controls(app_type: &AppType) -> bool {
     app_type.supports_failover()

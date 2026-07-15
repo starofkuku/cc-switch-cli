@@ -1,7 +1,8 @@
-use crate::app_config::{AppType, McpApps};
+use crate::app_config::{AppType, McpApps, McpServer};
 use crate::provider::{ClaudeApiKeyField, CodexChatReasoningConfig};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use super::app::EditorState;
 
@@ -14,13 +15,15 @@ mod provider_state;
 mod provider_state_loading;
 mod provider_templates;
 
+pub(crate) const PROMPT_FORM_SPLIT_MIN_BODY_WIDTH: u16 = 84;
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 pub(crate) use provider_json::strip_provider_internal_fields;
 
-pub(crate) use super::text_edit::TextInput;
+pub(crate) use super::text_edit::{TextEditSession, TextInput};
 pub(crate) use codex_config::parse_codex_config_snippet;
 pub(crate) use provider_json::claude_disable_auto_upgrade_enabled;
 pub(crate) use provider_json::claude_hide_attribution_enabled;
@@ -307,6 +310,18 @@ pub enum UsageQueryField {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderTextField {
+    Main(ProviderAddField),
+    UsageQuery(UsageQueryField),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineFieldError<F> {
+    pub field: F,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexLocalRoutingField {
     /// The "需要本地路由映射" toggle — an independent per-provider gate.
     Enabled,
@@ -441,10 +456,11 @@ pub struct ProviderAddFormState {
     pub page: ProviderFormPage,
     pub template_idx: usize,
     pub field_idx: usize,
-    pub editing: bool,
+    pub text_edit: Option<TextEditSession<ProviderTextField>>,
+    pub field_errors: Vec<InlineFieldError<ProviderAddField>>,
     pub usage_query_touched: bool,
     pub usage_query_field_idx: usize,
-    pub usage_query_editing: bool,
+    pub usage_query_field_errors: Vec<InlineFieldError<UsageQueryField>>,
     pub codex_local_routing_field_idx: usize,
     pub local_proxy_settings_field_idx: usize,
     pub codex_model_catalog_idx: usize,
@@ -543,24 +559,48 @@ pub struct ProviderAddFormState {
     initial_snapshot: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpArgsState {
+    /// Canonical argv remains in `extra.server.args` and has not been copied or
+    /// joined for the inline editor.
+    Imported,
+    /// Canonical argv was created by a template or an explicit inline edit.
+    Materialized(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
+struct McpFormSnapshot {
+    source: Arc<McpServer>,
+    id: String,
+    name: String,
+    server_type: McpTransport,
+    command: String,
+    args_state: McpArgsState,
+    url: String,
+    env_rows: Vec<McpEnvVarRow>,
+    apps: McpApps,
+}
+
 #[derive(Debug, Clone)]
 pub struct McpAddFormState {
     pub mode: FormMode,
     pub focus: FormFocus,
     pub template_idx: usize,
     pub field_idx: usize,
-    pub editing: bool,
-    pub extra: Value,
+    pub text_edit: Option<TextEditSession<McpAddField>>,
+    pub field_errors: Vec<InlineFieldError<McpAddField>>,
+    source: Arc<McpServer>,
     pub id: TextInput,
     pub name: TextInput,
     pub server_type: McpTransport,
     pub command: TextInput,
     pub args: TextInput,
+    args_state: McpArgsState,
     pub url: TextInput,
     pub env_rows: Vec<McpEnvVarRow>,
     pub apps: McpApps,
     pub json_scroll: usize,
-    initial_snapshot: Value,
+    initial_snapshot: Option<McpFormSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -568,7 +608,8 @@ pub struct PromptMetaFormState {
     pub mode: FormMode,
     pub focus: FormFocus,
     pub field_idx: usize,
-    pub editing: bool,
+    pub text_edit: Option<TextEditSession<PromptMetaField>>,
+    pub field_errors: Vec<InlineFieldError<PromptMetaField>>,
     pub id: TextInput,
     pub name: TextInput,
     pub description: TextInput,
@@ -579,19 +620,23 @@ pub struct PromptMetaFormState {
 // This controls whether the main UI should consider itself in "editing mode" and e.g. respond to vim-style navigation.
 impl ProviderAddFormState {
     pub fn is_editing(&self) -> bool {
-        self.editing || self.usage_query_editing
+        self.text_edit.is_some()
+    }
+
+    pub(crate) fn opencode_model_original_id(&self) -> Option<&str> {
+        self.opencode_model_original_id.as_deref()
     }
 }
 
 impl McpAddFormState {
     pub fn is_editing(&self) -> bool {
-        self.editing
+        self.text_edit.is_some()
     }
 }
 
 impl PromptMetaFormState {
     pub fn is_editing(&self) -> bool {
-        self.editing || matches!(self.focus, FormFocus::Content)
+        self.text_edit.is_some() || matches!(self.focus, FormFocus::Content)
     }
 }
 
