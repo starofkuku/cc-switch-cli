@@ -36,6 +36,28 @@ fn provider_copy_id(original_id: &str, existing_ids: &[String]) -> String {
     }
 }
 
+fn split_claude_one_m_marker(value: &str) -> (String, bool) {
+    const MARKER: &str = "[1M]";
+
+    let trimmed_end = value.trim_end();
+    let marker_start = trimmed_end.len().saturating_sub(MARKER.len());
+    let has_marker = trimmed_end
+        .get(marker_start..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(MARKER));
+    if !has_marker {
+        return (value.to_string(), false);
+    }
+
+    (
+        trimmed_end
+            .get(..marker_start)
+            .unwrap_or_default()
+            .trim_end()
+            .to_string(),
+        true,
+    )
+}
+
 impl ProviderAddFormState {
     pub const USAGE_QUERY_GENERAL_PRESET: &'static str = r#"({
   request: {
@@ -159,6 +181,8 @@ impl ProviderAddFormState {
             claude_haiku_model: TextInput::new(""),
             claude_sonnet_model: TextInput::new(""),
             claude_opus_model: TextInput::new(""),
+            claude_sonnet_one_m: false,
+            claude_opus_one_m: false,
             claude_hide_attribution: false,
             claude_hide_attribution_touched: false,
             claude_teammates: false,
@@ -1758,6 +1782,142 @@ impl ProviderAddFormState {
             3 => Some(&mut self.claude_opus_model),
             _ => None,
         }
+    }
+
+    pub fn claude_model_supports_one_m(index: usize) -> bool {
+        matches!(index, 2 | 3)
+    }
+
+    pub fn claude_model_one_m_enabled(&self, index: usize) -> bool {
+        match index {
+            2 => self.claude_sonnet_one_m,
+            3 => self.claude_opus_one_m,
+            _ => false,
+        }
+    }
+
+    fn set_claude_model_one_m_enabled(&mut self, index: usize, enabled: bool) {
+        match index {
+            2 => self.claude_sonnet_one_m = enabled,
+            3 => self.claude_opus_one_m = enabled,
+            _ => {}
+        }
+    }
+
+    pub fn set_claude_model_from_config(&mut self, index: usize, value: &str) {
+        if !Self::claude_model_supports_one_m(index) {
+            if let Some(input) = self.claude_model_input_mut(index) {
+                input.set(value);
+            }
+            return;
+        }
+
+        let (model, one_m) = split_claude_one_m_marker(value);
+        if let Some(input) = self.claude_model_input_mut(index) {
+            input.set(model);
+        }
+        self.set_claude_model_one_m_enabled(index, one_m);
+    }
+
+    pub fn set_claude_model_from_picker(&mut self, index: usize, value: &str) {
+        let preserve_one_m = self.claude_model_one_m_enabled(index);
+        let (model, explicit_one_m) = split_claude_one_m_marker(value);
+        if let Some(input) = self.claude_model_input_mut(index) {
+            input.set(if Self::claude_model_supports_one_m(index) {
+                model
+            } else {
+                value.trim().to_string()
+            });
+        }
+        if Self::claude_model_supports_one_m(index) {
+            self.set_claude_model_one_m_enabled(index, explicit_one_m || preserve_one_m);
+        }
+        self.mark_claude_model_config_touched();
+    }
+
+    pub fn normalize_claude_model_input(&mut self, index: usize) -> bool {
+        if !Self::claude_model_supports_one_m(index) {
+            return false;
+        }
+
+        let Some(raw) = self
+            .claude_model_input(index)
+            .map(|input| input.value.clone())
+        else {
+            return false;
+        };
+        let (model, explicit_one_m) = split_claude_one_m_marker(&raw);
+        let enabled = if model.trim().is_empty() {
+            false
+        } else {
+            explicit_one_m || self.claude_model_one_m_enabled(index)
+        };
+        let changed = model != raw || enabled != self.claude_model_one_m_enabled(index);
+        if changed {
+            if let Some(input) = self.claude_model_input_mut(index) {
+                input.set(model);
+            }
+            self.set_claude_model_one_m_enabled(index, enabled);
+        }
+        changed
+    }
+
+    pub fn toggle_claude_model_one_m(&mut self, index: usize) -> bool {
+        if !Self::claude_model_supports_one_m(index) {
+            return false;
+        }
+
+        let currently_enabled = self.claude_model_one_m_enabled(index);
+        let model_is_blank = self
+            .claude_model_input(index)
+            .is_none_or(|input| input.value.trim().is_empty());
+        if model_is_blank && !currently_enabled {
+            return false;
+        }
+
+        let enabled = !currently_enabled;
+        self.set_claude_model_one_m_enabled(index, enabled);
+        self.mark_claude_model_config_touched();
+        true
+    }
+
+    pub fn claude_model_value_for_config(&self, index: usize) -> String {
+        let Some(input) = self.claude_model_input(index) else {
+            return String::new();
+        };
+        let model = input.value.trim();
+        if model.is_empty() {
+            return String::new();
+        }
+        if Self::claude_model_supports_one_m(index) && self.claude_model_one_m_enabled(index) {
+            format!("{model}[1M]")
+        } else {
+            model.to_string()
+        }
+    }
+
+    pub fn fill_claude_models_from(&mut self, source_index: usize) -> bool {
+        let Some(source) = self.claude_model_input(source_index) else {
+            return false;
+        };
+        if source.value.trim().is_empty() {
+            return false;
+        }
+
+        let (model, _) = split_claude_one_m_marker(&source.value);
+        let one_m = Self::claude_model_supports_one_m(source_index)
+            && self.claude_model_one_m_enabled(source_index);
+        for index in 0..4 {
+            if let Some(input) = self.claude_model_input_mut(index) {
+                input.set(model.clone());
+            }
+            self.set_claude_model_one_m_enabled(
+                index,
+                Self::claude_model_supports_one_m(index) && one_m,
+            );
+        }
+        self.mark_claude_model_config_touched();
+        true
     }
 
     pub fn claude_model_configured_count(&self) -> usize {

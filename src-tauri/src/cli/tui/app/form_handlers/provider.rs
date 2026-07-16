@@ -425,6 +425,7 @@ impl App {
                 if matches!(key.code, KeyCode::Enter) {
                     self.overlay = Overlay::ClaudeModelPicker {
                         selected: 0,
+                        column: ClaudeModelPickerColumn::Model,
                         editing: false,
                     };
                 }

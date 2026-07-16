@@ -406,8 +406,8 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
         ProviderAddField::ClaudeModelConfig => HelpContent::new(
             texts::tui_label_claude_model_config(),
             help_lines(
-                "配置 Claude 的模型分层。不同角色模型会写入对应的运行配置，供客户端按场景选择。",
-                "Configures Claude model tiers. Role-specific models are written into the live config for the client to select by task.",
+                "配置 Claude 的模型分层。在模型列按 Enter 编辑，按 Space 从 API 自动获取。Sonnet 和 Opus 可用 ←→ 移到 1M 列并按 Enter 切换；1M 只向 Claude Code 声明百万上下文能力，不会检测上游是否真正支持。底层继续使用模型 ID 的 [1M] 后缀，以兼容现有配置。次要快捷键 a 可将当前模型填充到全部角色。",
+                "Configures Claude model tiers. In the model column, press Enter to edit or Space to fetch from the API. For Sonnet and Opus, use ←→ to focus the 1M column and Enter to toggle it. 1M only declares million-token context support to Claude Code; it does not detect upstream capability. The existing [1M] model-ID suffix remains the storage format. The secondary a shortcut fills every role from the current model.",
             ),
         ),
         ProviderAddField::ClaudeApiFormat if matches!(app_type, AppType::Codex) => {

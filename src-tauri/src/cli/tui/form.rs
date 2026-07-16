@@ -86,6 +86,12 @@ pub enum ClaudeApiFormat {
     GeminiNative,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaudeModelPickerColumn {
+    Model,
+    OneM,
+}
+
 impl ClaudeApiFormat {
     pub const ALL: [Self; 4] = [
         ClaudeApiFormat::Anthropic,
@@ -488,6 +494,8 @@ pub struct ProviderAddFormState {
     pub claude_haiku_model: TextInput,
     pub claude_sonnet_model: TextInput,
     pub claude_opus_model: TextInput,
+    claude_sonnet_one_m: bool,
+    claude_opus_one_m: bool,
     pub claude_hide_attribution: bool,
     claude_hide_attribution_touched: bool,
     pub claude_teammates: bool,

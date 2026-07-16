@@ -171,6 +171,8 @@ impl ProviderAddFormState {
                     );
                 }
                 if self.claude_model_config_touched {
+                    let sonnet_model = self.claude_model_value_for_config(2);
+                    let opus_model = self.claude_model_value_for_config(3);
                     set_or_remove_trimmed(env_obj, "ANTHROPIC_MODEL", &self.claude_model.value);
                     set_or_remove_trimmed(
                         env_obj,
@@ -182,16 +184,8 @@ impl ProviderAddFormState {
                         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
                         &self.claude_haiku_model.value,
                     );
-                    set_or_remove_trimmed(
-                        env_obj,
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                        &self.claude_sonnet_model.value,
-                    );
-                    set_or_remove_trimmed(
-                        env_obj,
-                        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                        &self.claude_opus_model.value,
-                    );
+                    set_or_remove_trimmed(env_obj, "ANTHROPIC_DEFAULT_SONNET_MODEL", &sonnet_model);
+                    set_or_remove_trimmed(env_obj, "ANTHROPIC_DEFAULT_OPUS_MODEL", &opus_model);
                     env_obj.remove("ANTHROPIC_SMALL_FAST_MODEL");
                 }
                 if self.claude_teammates_touched {

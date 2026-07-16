@@ -59,16 +59,19 @@ pub(crate) fn render_overlay(
                 *selected,
             )
         }
-        Overlay::ClaudeModelPicker { selected, editing } => {
-            super::pickers::render_claude_model_picker_overlay(
-                frame,
-                app,
-                content_area,
-                theme,
-                *selected,
-                *editing,
-            )
-        }
+        Overlay::ClaudeModelPicker {
+            selected,
+            column,
+            editing,
+        } => super::pickers::render_claude_model_picker_overlay(
+            frame,
+            app,
+            content_area,
+            theme,
+            *selected,
+            *column,
+            *editing,
+        ),
         Overlay::ClaudeApiFormatPicker { selected } => {
             super::pickers::render_claude_api_format_picker_overlay(
                 frame,

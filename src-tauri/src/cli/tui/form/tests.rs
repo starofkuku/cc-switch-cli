@@ -1,7 +1,7 @@
 use super::*;
 use crate::cli::commands::provider_input::{build_provider_template_seed, ProviderAddTemplate};
 use crate::provider::Provider;
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn template_index_by_label(app_type: AppType, label: &str) -> usize {
     ProviderAddFormState::new(app_type)
@@ -2164,6 +2164,112 @@ fn provider_add_form_claude_from_provider_backfills_models_with_legacy_fallback(
     assert_eq!(form.claude_haiku_model.value, "model-small-fast");
     assert_eq!(form.claude_sonnet_model.value, "model-sonnet-explicit");
     assert_eq!(form.claude_opus_model.value, "model-main");
+}
+
+#[test]
+fn provider_add_form_claude_one_m_marker_loads_and_saves_canonically() {
+    let provider = Provider::with_id(
+        "p1".to_string(),
+        "Provider One".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4 [1m]  ",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-pro[1M]",
+            }
+        }),
+        None,
+    );
+
+    let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert_eq!(form.claude_sonnet_model.value, "deepseek-v4");
+    assert_eq!(form.claude_opus_model.value, "opus-pro");
+    assert!(form.claude_model_one_m_enabled(2));
+    assert!(form.claude_model_one_m_enabled(3));
+
+    form.mark_claude_model_config_touched();
+    let saved = form.to_provider_json_value();
+    let env = saved["settingsConfig"]["env"]
+        .as_object()
+        .expect("settingsConfig.env should be object");
+    assert_eq!(
+        env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+            .and_then(Value::as_str),
+        Some("deepseek-v4[1M]")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+            .and_then(Value::as_str),
+        Some("opus-pro[1M]")
+    );
+}
+
+#[test]
+fn provider_add_form_claude_one_m_fallback_and_untouched_storage_are_preserved() {
+    let provider = Provider::with_id(
+        "p1".to_string(),
+        "Provider One".to_string(),
+        json!({
+            "env": {
+                "ANTHROPIC_MODEL": "fallback-model [1m]  ",
+                "ANTHROPIC_REASONING_MODEL": "reasoning[1M]",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku[1m]",
+            }
+        }),
+        None,
+    );
+
+    let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert_eq!(form.claude_sonnet_model.value, "fallback-model");
+    assert_eq!(form.claude_opus_model.value, "fallback-model");
+    assert!(form.claude_model_one_m_enabled(2));
+    assert!(form.claude_model_one_m_enabled(3));
+    assert_eq!(form.claude_reasoning_model.value, "reasoning[1M]");
+    assert_eq!(form.claude_haiku_model.value, "haiku[1m]");
+
+    form.name.set("Provider One Updated");
+    let untouched = form.to_provider_json_value();
+    let env = untouched["settingsConfig"]["env"]
+        .as_object()
+        .expect("settingsConfig.env should be object");
+    assert_eq!(
+        env.get("ANTHROPIC_MODEL").and_then(Value::as_str),
+        Some("fallback-model [1m]  ")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_REASONING_MODEL").and_then(Value::as_str),
+        Some("reasoning[1M]")
+    );
+    assert_eq!(
+        env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+            .and_then(Value::as_str),
+        Some("haiku[1m]")
+    );
+    assert!(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL").is_none());
+    assert!(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none());
+}
+
+#[test]
+fn provider_add_form_claude_one_m_toggle_and_fill_all_follow_role_semantics() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    form.claude_sonnet_model.set("model-sonnet");
+
+    assert!(form.toggle_claude_model_one_m(2));
+    assert_eq!(form.claude_model_value_for_config(2), "model-sonnet[1M]");
+    assert!(form.fill_claude_models_from(2));
+    assert_eq!(form.claude_reasoning_model.value, "model-sonnet");
+    assert_eq!(form.claude_haiku_model.value, "model-sonnet");
+    assert!(form.claude_model_one_m_enabled(2));
+    assert!(form.claude_model_one_m_enabled(3));
+
+    form.claude_haiku_model.set("legacy-model[1M]");
+    assert!(form.fill_claude_models_from(1));
+    assert_eq!(form.claude_sonnet_model.value, "legacy-model");
+    assert!(!form.claude_model_one_m_enabled(2));
+    assert!(!form.claude_model_one_m_enabled(3));
+
+    form.claude_opus_model.set("");
+    assert!(!form.toggle_claude_model_one_m(3));
+    assert_eq!(form.claude_model_value_for_config(3), "");
 }
 
 #[test]

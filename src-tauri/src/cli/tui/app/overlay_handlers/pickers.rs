@@ -660,11 +660,16 @@ impl App {
 
     fn handle_claude_model_picker_edit_key(&mut self, key: KeyEvent) -> Action {
         let selected = match &mut self.overlay {
-            Overlay::ClaudeModelPicker { selected, editing } => {
+            Overlay::ClaudeModelPicker {
+                selected,
+                column,
+                editing,
+            } => {
                 *selected = (*selected).min(3);
                 if !*editing {
                     return Action::None;
                 }
+                *column = ClaudeModelPickerColumn::Model;
                 *selected
             }
             _ => return Action::None,
@@ -677,6 +682,9 @@ impl App {
 
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
+                if provider.normalize_claude_model_input(selected) {
+                    provider.mark_claude_model_config_touched();
+                }
                 if let Overlay::ClaudeModelPicker { editing, .. } = &mut self.overlay {
                     *editing = false;
                 }
@@ -694,13 +702,22 @@ impl App {
     }
 
     fn handle_claude_model_picker_select_key(&mut self, key: KeyEvent) -> Action {
-        let selected = match &mut self.overlay {
-            Overlay::ClaudeModelPicker { selected, editing } => {
+        let (selected, column) = match &mut self.overlay {
+            Overlay::ClaudeModelPicker {
+                selected,
+                column,
+                editing,
+            } => {
                 *selected = (*selected).min(3);
                 if *editing {
                     return Action::None;
                 }
-                selected
+                if *column == ClaudeModelPickerColumn::OneM
+                    && !ProviderAddFormState::claude_model_supports_one_m(*selected)
+                {
+                    *column = ClaudeModelPickerColumn::Model;
+                }
+                (*selected, *column)
             }
             _ => return Action::None,
         };
@@ -711,14 +728,60 @@ impl App {
                 Action::None
             }
             KeyCode::Up => {
-                *selected = selected.saturating_sub(1);
+                let next = selected.saturating_sub(1);
+                if let Overlay::ClaudeModelPicker {
+                    selected, column, ..
+                } = &mut self.overlay
+                {
+                    *selected = next;
+                    if *column == ClaudeModelPickerColumn::OneM
+                        && !ProviderAddFormState::claude_model_supports_one_m(next)
+                    {
+                        *column = ClaudeModelPickerColumn::Model;
+                    }
+                }
                 Action::None
             }
             KeyCode::Down => {
-                *selected = (*selected + 1).min(3);
+                let next = (selected + 1).min(3);
+                if let Overlay::ClaudeModelPicker {
+                    selected, column, ..
+                } = &mut self.overlay
+                {
+                    *selected = next;
+                    if *column == ClaudeModelPickerColumn::OneM
+                        && !ProviderAddFormState::claude_model_supports_one_m(next)
+                    {
+                        *column = ClaudeModelPickerColumn::Model;
+                    }
+                }
+                Action::None
+            }
+            KeyCode::Left => {
+                if let Overlay::ClaudeModelPicker { column, .. } = &mut self.overlay {
+                    *column = ClaudeModelPickerColumn::Model;
+                }
+                Action::None
+            }
+            KeyCode::Right => {
+                if ProviderAddFormState::claude_model_supports_one_m(selected) {
+                    if let Overlay::ClaudeModelPicker { column, .. } = &mut self.overlay {
+                        *column = ClaudeModelPickerColumn::OneM;
+                    }
+                }
                 Action::None
             }
             KeyCode::Enter => {
+                if column == ClaudeModelPickerColumn::Model {
+                    if let Overlay::ClaudeModelPicker { editing, .. } = &mut self.overlay {
+                        *editing = true;
+                    }
+                } else if let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() {
+                    provider.toggle_claude_model_one_m(selected);
+                }
+                Action::None
+            }
+            KeyCode::Char(' ') if column == ClaudeModelPickerColumn::Model => {
                 if let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() {
                     let codex_oauth = provider.is_claude_codex_oauth_provider();
                     let codex_oauth_account_id = provider
@@ -734,20 +797,14 @@ impl App {
                         codex_oauth,
                         codex_oauth_account_id,
                         field: ProviderAddField::ClaudeModelConfig,
-                        claude_idx: Some(*selected),
+                        claude_idx: Some(selected),
                     }
                 } else {
                     Action::None
                 }
             }
-            KeyCode::Char(' ') => {
-                if let Overlay::ClaudeModelPicker { editing, .. } = &mut self.overlay {
-                    *editing = true;
-                }
-                Action::None
-            }
             KeyCode::Char('a') => {
-                let source_idx = *selected;
+                let source_idx = selected;
                 let source_empty = self
                     .form
                     .as_ref()
@@ -805,6 +862,7 @@ impl App {
                 if is_claude_model {
                     self.overlay = Overlay::ClaudeModelPicker {
                         selected: restore_idx,
+                        column: ClaudeModelPickerColumn::Model,
                         editing: false,
                     };
                 } else {
@@ -862,6 +920,7 @@ impl App {
                 if field == ProviderAddField::ClaudeModelConfig {
                     self.overlay = Overlay::ClaudeModelPicker {
                         selected: claude_idx.unwrap_or(0),
+                        column: ClaudeModelPickerColumn::Model,
                         editing: false,
                     };
                 } else {
@@ -871,10 +930,7 @@ impl App {
                 if let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() {
                     if field == ProviderAddField::ClaudeModelConfig {
                         if let Some(idx) = claude_idx {
-                            if let Some(input_field) = provider.claude_model_input_mut(idx) {
-                                input_field.set(selected_model);
-                                provider.mark_claude_model_config_touched();
-                            }
+                            provider.set_claude_model_from_picker(idx, &selected_model);
                         }
                     } else if field == ProviderAddField::HermesModels {
                         provider.set_selected_hermes_model_id_from_picker(&selected_model);

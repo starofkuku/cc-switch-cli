@@ -187,7 +187,7 @@ fn populate_claude_form(form: &mut ProviderAddFormState, provider: &Provider) {
             .or(model)
             .or(small_fast)
         {
-            form.claude_sonnet_model.set(sonnet);
+            form.set_claude_model_from_config(2, sonnet);
         }
         if let Some(opus) = env
             .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
@@ -195,7 +195,7 @@ fn populate_claude_form(form: &mut ProviderAddFormState, provider: &Provider) {
             .or(model)
             .or(small_fast)
         {
-            form.claude_opus_model.set(opus);
+            form.set_claude_model_from_config(3, opus);
         }
     }
 }

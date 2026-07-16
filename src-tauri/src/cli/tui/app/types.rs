@@ -3429,6 +3429,7 @@ pub enum Overlay {
     },
     ClaudeModelPicker {
         selected: usize,
+        column: ClaudeModelPickerColumn,
         editing: bool,
     },
     ClaudeApiFormatPicker {

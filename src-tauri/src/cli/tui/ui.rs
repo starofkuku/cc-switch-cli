@@ -25,8 +25,8 @@ use super::{
     },
     data::{McpRow, ProviderRow, UiData},
     form::{
-        CodexPreviewSection, FormFocus, FormState, GeminiAuthType, McpAddField, PromptMetaField,
-        ProviderAddField,
+        ClaudeModelPickerColumn, CodexPreviewSection, FormFocus, FormState, GeminiAuthType,
+        McpAddField, PromptMetaField, ProviderAddField,
     },
     icons,
     route::{NavItem, Route},

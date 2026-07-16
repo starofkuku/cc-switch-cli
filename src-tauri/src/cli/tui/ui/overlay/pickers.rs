@@ -17,6 +17,7 @@ pub(super) fn render_claude_model_picker_overlay(
     content_area: Rect,
     theme: &theme::Theme,
     selected: usize,
+    column: ClaudeModelPickerColumn,
     editing: bool,
 ) {
     // Keep the percentage-based width, but cap the height to the four role rows
@@ -36,12 +37,19 @@ pub(super) fn render_claude_model_picker_overlay(
             ("←→/Home/End", texts::tui_key_move()),
             ("Esc/Enter", texts::tui_key_exit_edit()),
         ]
+    } else if column == ClaudeModelPickerColumn::OneM {
+        vec![
+            ("↑↓", texts::tui_key_select()),
+            ("←→", texts::tui_key_column()),
+            ("Enter", texts::tui_key_toggle()),
+            ("Esc", texts::tui_key_close()),
+        ]
     } else {
         vec![
             ("↑↓", texts::tui_key_select()),
-            ("Space", texts::tui_key_edit()),
-            ("a", texts::tui_key_fill_all()),
-            ("Enter", texts::tui_key_fetch_model()),
+            ("←→", texts::tui_key_column()),
+            ("Enter", texts::tui_key_edit()),
+            ("Space", texts::tui_key_fetch_model()),
             ("Esc", texts::tui_key_close()),
         ]
     };
@@ -71,7 +79,7 @@ pub(super) fn render_claude_model_picker_overlay(
             texts::tui_claude_default_opus_model_label(),
         ];
 
-        let label_col_width = field_label_column_width(
+        let raw_label_col_width = field_label_column_width(
             labels
                 .iter()
                 .copied()
@@ -79,9 +87,38 @@ pub(super) fn render_claude_model_picker_overlay(
             1,
         );
 
+        // Reserve the 1M cell before allocating room to labels and model IDs.
+        // This keeps the checkbox visible even when the terminal is narrow or a
+        // provider returns an unusually long model name.
+        let table_inner_width = body_area.width.saturating_sub(2);
+        let column_spacing = 2u16;
+        let usable_width = table_inner_width.saturating_sub(column_spacing);
+        let one_m_col_width = 6u16.min(usable_width);
+        let role_and_model_width = usable_width.saturating_sub(one_m_col_width);
+        let min_model_width = 4u16.min(role_and_model_width);
+        let label_col_width =
+            raw_label_col_width.min(role_and_model_width.saturating_sub(min_model_width));
+        let model_col_width = role_and_model_width.saturating_sub(label_col_width);
+        let label_text_width = label_col_width.saturating_sub(1);
+        let model_text_width = model_col_width.saturating_sub(1);
+
+        let selected = selected.min(labels.len().saturating_sub(1));
+        let column = if ProviderAddFormState::claude_model_supports_one_m(selected) {
+            column
+        } else {
+            ClaudeModelPickerColumn::Model
+        };
+
         let header = Row::new(vec![
-            Cell::from(cell_pad(texts::tui_header_field())),
-            Cell::from(texts::tui_header_value()),
+            Cell::from(cell_pad(&truncate_to_display_width(
+                texts::tui_header_field(),
+                label_text_width,
+            ))),
+            Cell::from(cell_pad(&truncate_to_display_width(
+                texts::tui_header_value(),
+                model_text_width,
+            ))),
+            Cell::from(cell_pad("1M")),
         ])
         .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
@@ -91,25 +128,58 @@ pub(super) fn render_claude_model_picker_overlay(
                 .map(|input| bounded_trimmed_text_for_display(&input.value))
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| texts::tui_na().to_string());
-            Row::new(vec![Cell::from(cell_pad(label)), Cell::from(value)])
+            let label = truncate_to_display_width(label, label_text_width);
+            let value = truncate_to_display_width(&value, model_text_width);
+            let row_selected = idx == selected;
+            let supports_one_m = ProviderAddFormState::claude_model_supports_one_m(idx);
+            let one_m = if supports_one_m {
+                if provider.claude_model_one_m_enabled(idx) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else {
+                "—"
+            };
+
+            let row_style = claude_model_picker_row_style(theme, row_selected);
+            let model_style = if row_selected && column == ClaudeModelPickerColumn::Model {
+                selection_style(theme)
+            } else {
+                row_style
+            };
+            let one_m_style = if !supports_one_m {
+                Style::default().fg(theme.dim)
+            } else if row_selected && column == ClaudeModelPickerColumn::OneM {
+                selection_style(theme)
+            } else {
+                row_style
+            };
+
+            Row::new(vec![
+                Cell::from(cell_pad(&label)).style(row_style),
+                Cell::from(cell_pad(&value)).style(model_style),
+                Cell::from(cell_pad(one_m)).style(one_m_style),
+            ])
         });
 
         let table = Table::new(
             rows,
-            [Constraint::Length(label_col_width), Constraint::Min(10)],
+            [
+                Constraint::Length(label_col_width),
+                Constraint::Length(model_col_width),
+                Constraint::Length(one_m_col_width),
+            ],
         )
         .header(header)
+        .column_spacing(1)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!(" {} ", texts::tui_form_fields_title())),
-        )
-        .row_highlight_style(selection_style(theme))
-        .highlight_symbol(highlight_symbol(theme));
+        );
 
-        let mut state = TableState::default();
-        state.select(Some(selected.min(labels.len().saturating_sub(1))));
-        frame.render_stateful_widget(table, body_area, &mut state);
+        frame.render_widget(table, body_area);
 
         let hint_block = Block::default()
             .borders(Borders::ALL)
@@ -141,12 +211,30 @@ pub(super) fn render_claude_model_picker_overlay(
                 let y = hint_inner.y;
                 frame.set_cursor_position((x, y));
             }
-        } else {
+        } else if column == ClaudeModelPickerColumn::OneM {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(texts::tui_hint_press(), Style::default().fg(theme.dim)),
                     Span::styled(
                         "Enter",
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        texts::tui_hint_toggle_one_m_declaration(),
+                        Style::default().fg(theme.dim),
+                    ),
+                ]))
+                .alignment(Alignment::Center),
+                hint_inner,
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(texts::tui_hint_press(), Style::default().fg(theme.dim)),
+                    Span::styled(
+                        "Space",
                         Style::default()
                             .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
@@ -165,6 +253,17 @@ pub(super) fn render_claude_model_picker_overlay(
             Paragraph::new(Line::raw(texts::tui_provider_not_found())),
             body_area,
         );
+    }
+}
+
+fn claude_model_picker_row_style(theme: &theme::Theme, selected: bool) -> Style {
+    if !selected {
+        return Style::default();
+    }
+    if theme.no_color {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.accent)
     }
 }
 

@@ -535,6 +535,8 @@ impl ProviderAddFormState {
                     self.claude_haiku_model = defaults.claude_haiku_model;
                     self.claude_sonnet_model = defaults.claude_sonnet_model;
                     self.claude_opus_model = defaults.claude_opus_model;
+                    self.claude_sonnet_one_m = defaults.claude_sonnet_one_m;
+                    self.claude_opus_one_m = defaults.claude_opus_one_m;
                     self.claude_hide_attribution = defaults.claude_hide_attribution;
                     self.claude_teammates = defaults.claude_teammates;
                     self.claude_tool_search = defaults.claude_tool_search;
@@ -598,6 +600,8 @@ impl ProviderAddFormState {
                     self.claude_haiku_model.set("");
                     self.claude_sonnet_model.set("");
                     self.claude_opus_model.set("");
+                    self.claude_sonnet_one_m = false;
+                    self.claude_opus_one_m = false;
                     self.claude_model_config_touched = false;
                     self.codex_oauth_account_id = None;
                     self.codex_fast_mode = false;
@@ -632,6 +636,8 @@ impl ProviderAddFormState {
                     self.claude_haiku_model.set("gpt-5.4-mini");
                     self.claude_sonnet_model.set("gpt-5.4");
                     self.claude_opus_model.set("gpt-5.4");
+                    self.claude_sonnet_one_m = false;
+                    self.claude_opus_one_m = false;
                     self.claude_model_config_touched = true;
                     self.codex_oauth_account_id = None;
                     self.codex_fast_mode = false;

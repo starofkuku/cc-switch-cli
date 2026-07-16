@@ -3470,6 +3470,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_hint_toggle_one_m_declaration() -> &'static str {
+        if is_chinese() {
+            " 切换 1M 声明。"
+        } else {
+            " to toggle the 1M declaration."
+        }
+    }
+
     pub fn tui_model_fetch_popup_title(fetching: bool) -> String {
         if is_chinese() {
             if fetching {
@@ -4241,6 +4249,14 @@ pub mod texts {
             "移动"
         } else {
             "move"
+        }
+    }
+
+    pub fn tui_key_column() -> &'static str {
+        if is_chinese() {
+            "切换列"
+        } else {
+            "switch column"
         }
     }
 
