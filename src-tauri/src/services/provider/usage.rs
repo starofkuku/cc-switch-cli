@@ -417,7 +417,7 @@ impl ProviderService {
                     )
                 })
                 .map(|s| s.to_string()),
-            AppType::OpenClaw => provider
+            AppType::OpenClaw | AppType::Pi => provider
                 .settings_config
                 .get("apiKey")
                 .and_then(|v| v.as_str())
@@ -514,7 +514,7 @@ impl ProviderService {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string()),
-            AppType::OpenClaw => Ok(provider
+            AppType::OpenClaw | AppType::Pi => Ok(provider
                 .settings_config
                 .get("baseUrl")
                 .and_then(|v| v.as_str())

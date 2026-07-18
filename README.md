@@ -9,7 +9,7 @@
 
 <a href="https://trendshift.io/repositories/22544" target="_blank"><img src="https://trendshift.io/api/badge/repositories/22544" alt="SaladDay%2Fcc-switch-cli | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-**TUI + CLI dual-mode manager for Claude Code, Codex, Gemini, OpenCode, Hermes & OpenClaw**
+**TUI + CLI dual-mode manager for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw & Pi**
 
 Use the interactive TUI for daily switching, account, and session work, or the CLI for scripts and repeatable terminal workflows.
 
@@ -175,8 +175,9 @@ cc-switch --app codex mcp sync          # Sync Codex MCP servers
 cc-switch --app gemini prompts list     # List Gemini prompts
 cc-switch --app hermes provider list    # Manage Hermes providers
 cc-switch --app openclaw provider list  # Manage OpenClaw providers
+cc-switch --app pi provider list        # Manage Pi providers
 
-# Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`
+# Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`
 ```
 
 See the "Features" section for full command list.
@@ -302,7 +303,7 @@ copy target\release\cc-switch.exe C:\Windows\System32\
 
 ### 🔌 Provider Management
 
-Manage API configurations for **Claude Code**, **Codex**, **Gemini**, **OpenCode**, **Hermes**, and **OpenClaw**.
+Manage API configurations for **Claude Code**, **Codex**, **Gemini**, **OpenCode**, **Hermes**, **OpenClaw**, and **Pi**.
 
 **Features:** One-click switching, standalone Claude settings export, multi-endpoint support, API key management, remote model discovery, and per-app diagnostics such as speed testing or stream health checks where supported.
 
@@ -358,7 +359,7 @@ cc-switch mcp import --app claude    # Import from live config
 
 Manage system prompt presets for AI coding assistants.
 
-**Cross-app support:** Claude (`CLAUDE.md`), Codex (`AGENTS.md`), Gemini (`GEMINI.md`), OpenCode (`AGENTS.md`), Hermes (`AGENTS.md`), OpenClaw (`AGENTS.md`).
+**Cross-app support:** Claude (`CLAUDE.md`), Codex (`AGENTS.md`), Gemini (`GEMINI.md`), OpenCode (`AGENTS.md`), Hermes (`AGENTS.md`), OpenClaw (`AGENTS.md`), Pi (`AGENTS.md`).
 
 ```bash
 cc-switch prompts list               # List prompt presets
@@ -374,7 +375,7 @@ cc-switch prompts delete <id>        # Delete prompt
 
 ### 🎯 Skills Management
 
-Manage and extend Claude Code/Codex/Gemini/OpenCode/Hermes capabilities with community skills.
+Manage and extend Claude Code/Codex/Gemini/OpenCode/Hermes/Pi capabilities with community skills.
 
 **Features:** SSOT-based skills store, multi-app enable/disable, sync to app directories, unmanaged scan/import, repo discovery, skills.sh marketplace search.
 
@@ -489,7 +490,7 @@ Inspect environment conflicts and whether required local CLIs are installed.
 ```bash
 cc-switch env check                  # Check environment conflicts
 cc-switch env list                   # List relevant environment variables
-cc-switch env tools                  # Check Claude/Codex/Gemini/OpenCode/Hermes/OpenClaw CLIs
+cc-switch env tools                  # Check Claude/Codex/Gemini/OpenCode/Hermes/OpenClaw/Pi CLIs
 ```
 
 ### 🌐 Multi-language Support
@@ -555,6 +556,7 @@ When `CC_SWITCH_CONFIG_DIR` is set, CC-Switch uses that directory as its config 
 - OpenCode: `~/.config/opencode/opencode.json` (providers + MCP + runtime config), `~/.config/opencode/AGENTS.md` (prompts)
 - Hermes: `~/.hermes/config.yaml` (providers + MCP + memory settings), `~/.hermes/AGENTS.md` (prompts), `~/.hermes/skills/` (skills), `~/.hermes/memories/` (memory)
 - OpenClaw: `~/.openclaw/openclaw.json` (providers + env/tools/agents defaults), `~/.openclaw/AGENTS.md` (prompts)
+- Pi: `~/.pi/agent/models.json` (custom providers/models), `~/.pi/agent/settings.json` (default provider/model), `~/.pi/agent/AGENTS.md` (prompts), `~/.pi/agent/skills/` (skills). `PI_CODING_AGENT_DIR` is honored.
 
 ---
 
@@ -565,7 +567,7 @@ When `CC_SWITCH_CONFIG_DIR` is set, CC-Switch uses that directory as its config 
 
 <br>
 
-First, make sure the target CLI has been initialized at least once (i.e. its config directory exists). CC-Switch may skip live sync for uninitialized apps; you will see a warning. Run the target CLI once (e.g. `claude --help`, `codex --help`, `gemini --help`, `opencode --help`, `openclaw --help`) or create `~/.hermes` for Hermes, then switch again.
+First, make sure the target CLI has been initialized at least once (i.e. its config directory exists). CC-Switch may skip live sync for uninitialized apps; you will see a warning. Run the target CLI once (e.g. `claude --help`, `codex --help`, `gemini --help`, `opencode --help`, `openclaw --help`, `pi --help`) or create `~/.hermes` for Hermes, then switch again.
 
 This is usually caused by **environment variable conflicts**. If you have API keys set in system environment variables (like `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), they will override CC-Switch's configuration.
 
@@ -652,6 +654,7 @@ CC-Switch currently supports six AI coding assistants:
 - **OpenCode** (`--app opencode`)
 - **Hermes** (`--app hermes`)
 - **OpenClaw** (`--app openclaw`)
+- **Pi** (`--app pi`)
 
 Use the global `--app` flag to specify which app to manage:
 ```bash

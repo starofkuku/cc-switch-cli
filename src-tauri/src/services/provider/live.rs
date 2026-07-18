@@ -32,6 +32,9 @@ pub(super) enum LiveSnapshot {
     OpenClaw {
         config_source: Option<String>,
     },
+    Pi {
+        models: Option<Value>,
+    },
 }
 
 impl LiveSnapshot {
@@ -107,6 +110,14 @@ impl LiveSnapshot {
                     delete_file(&path)?;
                 }
             }
+            LiveSnapshot::Pi { models } => {
+                let path = crate::pi_config::get_pi_models_path();
+                if let Some(value) = models {
+                    crate::pi_config::write_pi_models(value)?;
+                } else if path.exists() {
+                    delete_file(&path)?;
+                }
+            }
         }
         Ok(())
     }
@@ -173,6 +184,15 @@ pub(super) fn capture_live_snapshot(app_type: &AppType) -> Result<LiveSnapshot, 
         AppType::OpenClaw => {
             let config_source = crate::openclaw_config::read_openclaw_config_source()?;
             Ok(LiveSnapshot::OpenClaw { config_source })
+        }
+        AppType::Pi => {
+            let path = crate::pi_config::get_pi_models_path();
+            let models = if path.exists() {
+                Some(crate::pi_config::read_pi_models()?)
+            } else {
+                None
+            };
+            Ok(LiveSnapshot::Pi { models })
         }
     }
 }
@@ -404,6 +424,46 @@ pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, Ap
         log::info!("Imported OpenClaw provider '{id}' from live config");
     }
 
+    Ok(imported)
+}
+
+pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+    let providers = crate::pi_config::get_providers()?;
+    if providers.is_empty() {
+        return Ok(0);
+    }
+
+    let mut imported = 0usize;
+    let existing_ids = state.db.get_provider_ids("pi")?;
+    for (id, settings_config) in providers {
+        if id.trim().is_empty() || existing_ids.contains(&id) || !settings_config.is_object() {
+            continue;
+        }
+        let display_name = settings_config
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&id)
+            .to_string();
+        let mut provider = Provider::with_id(id.clone(), display_name, settings_config, None);
+        provider.meta = Some(ProviderMeta {
+            live_config_managed: Some(true),
+            ..Default::default()
+        });
+        state.db.save_provider("pi", &provider)?;
+        {
+            let mut config = state.config.write().map_err(AppError::from)?;
+            config.ensure_app(&AppType::Pi);
+            if let Some(manager) = config.get_manager_mut(&AppType::Pi) {
+                manager.providers.insert(id, provider);
+            }
+        }
+        imported += 1;
+    }
+    if imported > 0 {
+        state.save()?;
+    }
     Ok(imported)
 }
 

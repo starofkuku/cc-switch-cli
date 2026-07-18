@@ -13,6 +13,7 @@ mod app_config {
         OpenCode,
         OpenClaw,
         Hermes,
+        Pi,
     }
 
     impl AppType {
@@ -24,6 +25,7 @@ mod app_config {
                 AppType::OpenCode => "opencode",
                 AppType::OpenClaw => "openclaw",
                 AppType::Hermes => "hermes",
+                AppType::Pi => "pi",
             }
         }
     }
@@ -137,6 +139,14 @@ mod error {
     }
 
     impl AppError {
+        pub fn localized(
+            _key: &'static str,
+            _zh: impl Into<String>,
+            en: impl Into<String>,
+        ) -> Self {
+            Self::Config(en.into())
+        }
+
         pub fn io(path: impl AsRef<Path>, source: std::io::Error) -> Self {
             Self::Io {
                 path: path.as_ref().display().to_string(),
@@ -213,6 +223,41 @@ mod services {
                     Some(("Nutstore", "https://dav.nutstore.net/dav/..."))
                 }
                 _ => None,
+            }
+        }
+    }
+}
+
+mod test_support {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    pub struct TestEnvGuard {
+        home: Option<OsString>,
+        config_dir: Option<OsString>,
+    }
+
+    impl TestEnvGuard {
+        pub fn isolated(root: &Path) -> Self {
+            let guard = Self {
+                home: std::env::var_os("HOME"),
+                config_dir: std::env::var_os("CC_SWITCH_CONFIG_DIR"),
+            };
+            std::env::set_var("HOME", root);
+            std::env::set_var("CC_SWITCH_CONFIG_DIR", root.join(".cc-switch"));
+            guard
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            match &self.home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.config_dir {
+                Some(value) => std::env::set_var("CC_SWITCH_CONFIG_DIR", value),
+                None => std::env::remove_var("CC_SWITCH_CONFIG_DIR"),
             }
         }
     }

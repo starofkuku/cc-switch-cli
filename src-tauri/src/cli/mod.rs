@@ -22,8 +22,8 @@ use crate::app_config::AppType;
 #[command(
     name = "cc-switch",
     version,
-    about = "All-in-One Assistant for Claude Code, Codex, Gemini & OpenCode CLI",
-    long_about = "Unified management for Claude Code, Codex, Gemini, and OpenCode CLI provider configurations, MCP servers, skills, prompts, local proxy routes, and environment checks.\n\nRun without arguments to enter interactive mode."
+    about = "All-in-One Assistant for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw & Pi",
+    long_about = "Unified management for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw, and Pi provider configurations, MCP servers, skills, prompts, local proxy routes, and environment checks.\n\nRun without arguments to enter interactive mode."
 )]
 pub struct Cli {
     /// Specify the application type
@@ -211,6 +211,14 @@ mod tests {
             Some(Commands::Use { id }) => assert_eq!(id, "demo"),
             _ => panic!("expected use shortcut command"),
         }
+    }
+
+    #[test]
+    fn parses_pi_app_global() {
+        let cli = Cli::parse_from(["cc-switch", "--app", "pi", "provider", "list"]);
+
+        assert_eq!(cli.app, Some(AppType::Pi));
+        assert!(matches!(cli.command, Some(Commands::Provider(_))));
     }
 
     #[test]

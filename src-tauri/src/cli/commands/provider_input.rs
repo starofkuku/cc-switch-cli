@@ -140,7 +140,7 @@ pub fn common_snippet_has_effective_config(
             .ok()
             .and_then(|value| value.as_object().cloned())
             .is_some_and(|obj| !obj.is_empty()),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
     }
 }
 
@@ -492,7 +492,7 @@ pub fn provider_add_template_choices(app_type: &AppType) -> &'static [ProviderAd
         AppType::Gemini => &PROVIDER_TEMPLATE_CHOICES_GEMINI,
         AppType::OpenCode => &PROVIDER_TEMPLATE_CHOICES_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_CHOICES_HERMES,
-        AppType::OpenClaw => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
+        AppType::OpenClaw | AppType::Pi => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
     }
 }
 
@@ -1053,7 +1053,7 @@ fn build_sponsor_template_settings_config(
                 )
             }
         }
-        AppType::OpenClaw => {
+        AppType::OpenClaw | AppType::Pi => {
             if preset.id == ProviderAddTemplate::Aicodemirror {
                 build_openclaw_settings_config(
                     None,
@@ -3806,7 +3806,9 @@ pub fn prompt_settings_config(
         AppType::Gemini => prompt_gemini_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenCode => prompt_opencode_config(current).map(SettingsConfigPromptResult::new),
         AppType::Hermes => prompt_hermes_config(current).map(SettingsConfigPromptResult::new),
-        AppType::OpenClaw => prompt_openclaw_config(current).map(SettingsConfigPromptResult::new),
+        AppType::OpenClaw | AppType::Pi => {
+            prompt_openclaw_config(current).map(SettingsConfigPromptResult::new)
+        }
     }
 }
 
@@ -4560,7 +4562,7 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
                 println!("  {}: {}", texts::model_label(), models.len());
             }
         }
-        AppType::OpenClaw => {
+        AppType::OpenClaw | AppType::Pi => {
             if let Some(api_key) = provider
                 .settings_config
                 .get("apiKey")

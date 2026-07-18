@@ -370,7 +370,9 @@ fn prompt_and_apply_provider_api_format(
     match app_type {
         AppType::Claude => prompt_and_apply_claude_api_format(app_type, provider),
         AppType::Codex => prompt_and_apply_codex_api_format(app_type, provider),
-        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(()),
+        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            Ok(())
+        }
     }
 }
 
@@ -1155,7 +1157,7 @@ fn build_add_settings_config(
             }
             None => Ok(build_gemini_oauth_settings_config(current)),
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => {
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
             Err(add_additive_requires_config_error(app_type))
         }
     }
@@ -1226,7 +1228,8 @@ fn apply_add_provider_api_format(
             };
             apply_codex_api_format(provider, format);
         }
-        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => {}
+        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+        }
     }
     Ok(())
 }
@@ -1528,6 +1531,10 @@ fn existing_provider_ids_for_duplicate(
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),
             AppType::OpenClaw => crate::openclaw_config::get_providers()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            AppType::Pi => crate::pi_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),

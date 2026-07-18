@@ -284,11 +284,13 @@ fn parse_json_object_snippet(
             format!("Gemini 通用配置片段不是有效的 JSON：{e}"),
             format!("Gemini common config snippet is not valid JSON: {e}"),
         ),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => AppError::localized(
-            "common_config.opencode.invalid_json",
-            format!("OpenCode 通用配置片段不是有效的 JSON：{e}"),
-            format!("OpenCode common config snippet is not valid JSON: {e}"),
-        ),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            AppError::localized(
+                "common_config.opencode.invalid_json",
+                format!("OpenCode 通用配置片段不是有效的 JSON：{e}"),
+                format!("OpenCode common config snippet is not valid JSON: {e}"),
+            )
+        }
         AppType::Codex => AppError::Config(format!("Unexpected JSON common config parse: {e}")),
     })?;
 
@@ -304,11 +306,13 @@ fn parse_json_object_snippet(
                 "Gemini 通用配置片段必须是 JSON 对象",
                 "Gemini common config snippet must be a JSON object",
             ),
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => AppError::localized(
-                "common_config.opencode.not_object",
-                "OpenCode 通用配置片段必须是 JSON 对象",
-                "OpenCode common config snippet must be a JSON object",
-            ),
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+                AppError::localized(
+                    "common_config.opencode.not_object",
+                    "OpenCode 通用配置片段必须是 JSON 对象",
+                    "OpenCode common config snippet must be a JSON object",
+                )
+            }
             AppType::Codex => AppError::Config("Unexpected JSON common config type".into()),
         });
     }
@@ -343,7 +347,8 @@ pub(super) fn validate_common_config_snippet(
         | AppType::Gemini
         | AppType::OpenCode
         | AppType::Hermes
-        | AppType::OpenClaw => {
+        | AppType::OpenClaw
+        | AppType::Pi => {
             parse_json_object_snippet(app_type, snippet, false)?;
         }
         AppType::Codex => {
@@ -399,7 +404,7 @@ pub(super) fn settings_contain_common_config(
             }
             _ => false,
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
     }
 }
 
@@ -464,7 +469,9 @@ pub(super) fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            Ok(settings.clone())
+        }
     }
 }
 
@@ -513,7 +520,9 @@ pub(super) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            Ok(settings.clone())
+        }
     }
 }
 

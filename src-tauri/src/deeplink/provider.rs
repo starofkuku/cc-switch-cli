@@ -142,6 +142,7 @@ fn build_provider_from_request(
         AppType::OpenCode => build_opencode_settings(request),
         AppType::Hermes => build_hermes_settings(request),
         AppType::OpenClaw => build_openclaw_settings(request),
+        AppType::Pi => build_openclaw_settings(request),
     };
 
     let meta = build_provider_meta(request)?;

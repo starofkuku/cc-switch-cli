@@ -21,6 +21,7 @@ mod init_status;
 mod mcp;
 mod openclaw_config;
 mod opencode_config;
+mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;

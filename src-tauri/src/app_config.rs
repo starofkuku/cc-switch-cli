@@ -28,7 +28,7 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw => false,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -40,7 +40,7 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw => {}
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
@@ -94,7 +94,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw => false,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -105,7 +105,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw => {}
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
@@ -239,6 +239,8 @@ pub struct McpRoot {
     pub hermes: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub openclaw: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub pi: McpConfig,
 }
 
 impl Default for McpRoot {
@@ -253,6 +255,7 @@ impl Default for McpRoot {
             opencode: McpConfig::default(),
             hermes: McpConfig::default(),
             openclaw: McpConfig::default(),
+            pi: McpConfig::default(),
         }
     }
 }
@@ -279,6 +282,8 @@ pub struct PromptRoot {
     pub hermes: PromptConfig,
     #[serde(default)]
     pub openclaw: PromptConfig,
+    #[serde(default)]
+    pub pi: PromptConfig,
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -295,6 +300,7 @@ pub enum AppType {
     OpenCode,
     Hermes,
     OpenClaw,
+    Pi,
 }
 
 impl AppType {
@@ -306,13 +312,14 @@ impl AppType {
             AppType::OpenCode => "opencode",
             AppType::Hermes => "hermes",
             AppType::OpenClaw => "openclaw",
+            AppType::Pi => "pi",
         }
     }
 
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi
         )
     }
 
@@ -328,6 +335,7 @@ impl AppType {
             AppType::OpenCode,
             AppType::Hermes,
             AppType::OpenClaw,
+            AppType::Pi,
         ]
         .into_iter()
     }
@@ -351,13 +359,14 @@ impl FromStr for AppType {
             "opencode" => Ok(AppType::OpenCode),
             "hermes" => Ok(AppType::Hermes),
             "openclaw" => Ok(AppType::OpenClaw),
+            "pi" => Ok(AppType::Pi),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(
-                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw。"
+                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi。"
                 ),
                 format!(
-                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw."
+                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi."
                 ),
             )),
         }
@@ -384,6 +393,9 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openclaw: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi: Option<String>,
 }
 
 impl CommonConfigSnippets {
@@ -396,6 +408,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::Hermes => self.hermes.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
+            AppType::Pi => self.pi.as_ref(),
         }
     }
 
@@ -408,6 +421,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode = snippet,
             AppType::Hermes => self.hermes = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
+            AppType::Pi => self.pi = snippet,
         }
     }
 }
@@ -450,6 +464,7 @@ impl Default for MultiAppConfig {
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("hermes".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
+        apps.insert("pi".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -557,6 +572,13 @@ impl MultiAppConfig {
             updated = true;
         }
 
+        if !config.apps.contains_key("pi") {
+            config
+                .apps
+                .insert("pi".to_string(), ProviderManager::default());
+            updated = true;
+        }
+
         // 执行 MCP 迁移（v3.6.x → v3.7.0）
         let migrated = config.migrate_mcp_to_unified()?;
         if migrated {
@@ -623,6 +645,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &self.mcp.opencode,
             AppType::Hermes => &self.mcp.hermes,
             AppType::OpenClaw => &self.mcp.openclaw,
+            AppType::Pi => &self.mcp.pi,
         }
     }
 
@@ -635,6 +658,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &mut self.mcp.opencode,
             AppType::Hermes => &mut self.mcp.hermes,
             AppType::OpenClaw => &mut self.mcp.openclaw,
+            AppType::Pi => &mut self.mcp.pi,
         }
     }
 
@@ -672,6 +696,7 @@ impl MultiAppConfig {
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::Hermes => &self.mcp.hermes.servers,
                 AppType::OpenClaw => continue,
+                AppType::Pi => &self.mcp.pi.servers,
             };
 
             for (id, entry) in old_servers {
@@ -776,6 +801,7 @@ impl MultiAppConfig {
         self.mcp.gemini = McpConfig::default();
         self.mcp.opencode = McpConfig::default();
         self.mcp.hermes = McpConfig::default();
+        self.mcp.pi = McpConfig::default();
 
         Ok(true)
     }

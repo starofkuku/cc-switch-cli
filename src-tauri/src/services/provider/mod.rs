@@ -194,6 +194,9 @@ enum PreparedLiveWrite {
     OpenClaw {
         models: Value,
     },
+    Pi {
+        models: Value,
+    },
 }
 
 #[derive(Clone)]
@@ -205,7 +208,7 @@ enum PreparedCodexAuthWrite {
 
 impl ProviderService {
     pub fn is_provider_key_app(app_type: &AppType) -> bool {
-        matches!(app_type, AppType::OpenClaw | AppType::Hermes)
+        matches!(app_type, AppType::OpenClaw | AppType::Hermes | AppType::Pi)
     }
 
     pub fn is_valid_provider_key(value: &str) -> bool {
@@ -313,6 +316,10 @@ impl ProviderService {
                 .map(|(id, _)| id)
                 .collect(),
             AppType::OpenClaw => crate::openclaw_config::get_providers()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect(),
+            AppType::Pi => crate::pi_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect(),
@@ -606,6 +613,8 @@ impl ProviderService {
                 .map(|providers| providers.contains_key(provider_id)),
             AppType::OpenClaw => Self::valid_openclaw_live_provider_ids()
                 .map(|ids| ids.is_some_and(|ids| ids.contains(provider_id))),
+            AppType::Pi => crate::pi_config::get_providers()
+                .map(|providers| providers.contains_key(provider_id)),
             _ => Ok(false),
         };
 
@@ -1214,6 +1223,25 @@ impl ProviderService {
                 }
                 state.save()?;
             }
+            AppType::Pi => {
+                let providers = crate::pi_config::get_providers()?;
+                let live_after = providers.get(provider_id).cloned().ok_or_else(|| {
+                    AppError::localized(
+                        "pi.live.missing_provider",
+                        format!("Pi live 配置中缺少供应商: {provider_id}"),
+                        format!("Pi live config missing provider: {provider_id}"),
+                    )
+                })?;
+                let mut guard = state.config.write().map_err(AppError::from)?;
+                if let Some(target) = guard
+                    .get_manager_mut(app_type)
+                    .and_then(|manager| manager.providers.get_mut(provider_id))
+                {
+                    target.settings_config = live_after;
+                }
+                drop(guard);
+                state.save()?;
+            }
         }
         Ok(())
     }
@@ -1269,7 +1297,7 @@ impl ProviderService {
                 strict_current_provider_id,
                 old_snippet,
             ),
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(()),
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(()),
         };
 
         match result {
@@ -1391,7 +1419,7 @@ impl ProviderService {
             }
             AppType::Gemini => live_settings.get("env") != provider_settings.get("env"),
             AppType::Claude => live_settings != provider_settings,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -1526,6 +1554,7 @@ impl ProviderService {
             AppType::OpenCode => Self::extract_opencode_common_config(settings_config),
             AppType::Hermes => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
+            AppType::Pi => Self::extract_openclaw_common_config(settings_config),
         }
     }
 
@@ -2229,6 +2258,7 @@ impl ProviderService {
             AppType::OpenCode => unreachable!("additive mode apps are handled earlier"),
             AppType::Hermes => unreachable!("additive mode apps are handled earlier"),
             AppType::OpenClaw => unreachable!("additive mode apps are handled earlier"),
+            AppType::Pi => unreachable!("additive mode apps are handled earlier"),
         };
 
         let mut provider = Provider::with_id(
@@ -2368,6 +2398,17 @@ impl ProviderService {
                 }
                 crate::openclaw_config::read_openclaw_config()
             }
+            AppType::Pi => {
+                let config_path = crate::pi_config::get_pi_models_path();
+                if !config_path.exists() {
+                    return Err(AppError::localized(
+                        "pi.config.missing",
+                        "Pi models.json 配置文件不存在",
+                        "Pi models.json configuration file not found",
+                    ));
+                }
+                crate::pi_config::read_pi_models()
+            }
         }
     }
 
@@ -2441,6 +2482,11 @@ impl ProviderService {
                     crate::openclaw_config::remove_provider(provider_id)?;
                 }
             }
+            AppType::Pi => {
+                if crate::pi_config::get_pi_dir().exists() {
+                    crate::pi_config::remove_provider(provider_id)?;
+                }
+            }
             _ => unreachable!("non-additive apps should not enter remove-from-live branch"),
         }
 
@@ -2489,6 +2535,7 @@ impl ProviderService {
             AppType::OpenCode => Self::import_opencode_providers_from_live(state),
             AppType::OpenClaw => Self::import_openclaw_providers_from_live(state),
             AppType::Hermes => Self::import_hermes_providers_from_live(state),
+            AppType::Pi => live::import_pi_providers_from_live(state),
             _ => Self::import_default_config(state, app_type).map(usize::from),
         }
     }
@@ -2505,10 +2552,20 @@ impl ProviderService {
                 Ok(provider_id.to_string())
             }
             AppType::OpenClaw => Self::set_openclaw_default_model(provider_id, model_id),
+            AppType::Pi => {
+                let model_id = model_id.ok_or_else(|| {
+                    AppError::localized(
+                        "provider.set_default_model.pi_model_required",
+                        "Pi 设置默认供应商时需要通过 --model 指定模型 ID",
+                        "Pi requires --model when setting a default provider",
+                    )
+                })?;
+                crate::pi_config::set_default_model(provider_id, model_id)
+            }
             _ => Err(AppError::localized(
                 "provider.set_default_model.unsupported",
-                "只有 Hermes 和 OpenClaw 支持设置默认供应商/模型",
-                "Only Hermes and OpenClaw support setting a default provider/model",
+                "只有 Hermes、OpenClaw 和 Pi 支持设置默认供应商/模型",
+                "Only Hermes, OpenClaw, and Pi support setting a default provider/model",
             )),
         }
     }
@@ -2764,6 +2821,7 @@ impl ProviderService {
             AppType::OpenCode => unreachable!("additive mode handled above"),
             AppType::Hermes => unreachable!("additive mode handled above"),
             AppType::OpenClaw => unreachable!("additive mode handled above"),
+            AppType::Pi => unreachable!("additive mode handled above"),
         };
 
         Ok(PostCommitAction {
@@ -2978,6 +3036,14 @@ impl ProviderService {
                     .map_err(Self::normalize_openclaw_live_write_error)?;
                 Ok(PreparedLiveWrite::OpenClaw { models })
             }
+            AppType::Pi => {
+                let models = crate::pi_config::prepare_provider_with_base(
+                    &provider.id,
+                    previous_provider.map(|previous| previous.settings_config.clone()),
+                    provider.settings_config.clone(),
+                )?;
+                Ok(PreparedLiveWrite::Pi { models })
+            }
         }
     }
 
@@ -3000,6 +3066,7 @@ impl ProviderService {
                     .map(|_| ())
                     .map_err(Self::normalize_openclaw_live_write_error)
             }
+            PreparedLiveWrite::Pi { models } => crate::pi_config::write_pi_models(models),
         }
     }
 
@@ -3216,6 +3283,9 @@ impl ProviderService {
             AppType::OpenClaw => Err(AppError::Config(
                 "OpenClaw does not support proxy takeover backups".into(),
             )),
+            AppType::Pi => Err(AppError::Config(
+                "Pi does not support proxy takeover backups".into(),
+            )),
         }
     }
 
@@ -3309,6 +3379,64 @@ impl ProviderService {
             AppType::OpenClaw => {
                 let config = Self::parse_openclaw_provider_settings(&provider.settings_config)?;
                 Self::validate_openclaw_provider_models(&provider.id, &config)?;
+            }
+            AppType::Pi => {
+                let settings = provider.settings_config.as_object().ok_or_else(|| {
+                    AppError::localized(
+                        "provider.pi.settings.not_object",
+                        "Pi 供应商配置必须是 JSON 对象",
+                        "Pi provider configuration must be a JSON object",
+                    )
+                })?;
+                if let Some(models_value) = settings.get("models") {
+                    let valid_models = models_value.as_array().is_some_and(|models| {
+                        !models.is_empty()
+                            && models.iter().all(|model| {
+                                model
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|id| !id.trim().is_empty())
+                            })
+                    });
+                    if !valid_models {
+                        return Err(AppError::localized(
+                            "provider.pi.models.invalid",
+                            format!(
+                                "Pi 供应商 {} 的 models 必须包含至少一个有效模型 id",
+                                provider.id
+                            ),
+                            format!(
+                                "Pi provider {} models must contain at least one valid model id",
+                                provider.id
+                            ),
+                        ));
+                    }
+                    if !settings
+                        .get("baseUrl")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| !url.trim().is_empty())
+                    {
+                        return Err(AppError::localized(
+                            "provider.pi.base_url.missing",
+                            format!("Pi 自定义供应商 {} 缺少 baseUrl", provider.id),
+                            format!("Pi custom provider {} is missing baseUrl", provider.id),
+                        ));
+                    }
+                    if !settings
+                        .get("api")
+                        .and_then(Value::as_str)
+                        .is_some_and(|api| !api.trim().is_empty())
+                    {
+                        return Err(AppError::localized(
+                            "provider.pi.api.missing",
+                            format!("Pi 自定义供应商 {} 缺少 api 协议", provider.id),
+                            format!(
+                                "Pi custom provider {} is missing an api protocol",
+                                provider.id
+                            ),
+                        ));
+                    }
+                }
             }
         }
 
@@ -3454,6 +3582,11 @@ impl ProviderService {
                         crate::openclaw_config::remove_provider(provider_id)?;
                     }
                 }
+                AppType::Pi => {
+                    if crate::pi_config::get_pi_dir().exists() {
+                        crate::pi_config::remove_provider(provider_id)?;
+                    }
+                }
                 _ => unreachable!("non-additive apps should not enter additive delete branch"),
             }
 
@@ -3493,6 +3626,9 @@ impl ProviderService {
                 let _ = provider_snapshot;
             }
             AppType::OpenClaw => {
+                let _ = provider_snapshot;
+            }
+            AppType::Pi => {
                 let _ = provider_snapshot;
             }
         }
