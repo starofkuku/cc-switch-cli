@@ -20,48 +20,16 @@ def file_exists(release_dir: Path, filename: str) -> bool:
     ).is_file()
 
 
-def add_mac_platforms(manifest: dict, release_dir: Path, base_url: str):
-    universal = "cc-switch-cli-darwin-universal.tar.gz"
-    x64 = "cc-switch-cli-darwin-x64.tar.gz"
-    arm64 = "cc-switch-cli-darwin-arm64.tar.gz"
-
-    if file_exists(release_dir, x64):
-        manifest["platforms"]["darwin-x86_64"] = asset_entry(release_dir, base_url, x64)
-    elif file_exists(release_dir, universal):
-        manifest["platforms"]["darwin-x86_64"] = asset_entry(
-            release_dir, base_url, universal
-        )
-
-    if file_exists(release_dir, arm64):
-        manifest["platforms"]["darwin-aarch64"] = asset_entry(
-            release_dir, base_url, arm64
-        )
-    elif file_exists(release_dir, universal):
-        manifest["platforms"]["darwin-aarch64"] = asset_entry(
-            release_dir, base_url, universal
-        )
-
-
-def add_linux_platform(
+def add_linux_musl_platform(
     manifest: dict,
     release_dir: Path,
     base_url: str,
     platform_key: str,
     musl_name: str,
-    glibc_name: str,
 ):
     if file_exists(release_dir, musl_name):
-        entry: dict[str, object] = dict(asset_entry(release_dir, base_url, musl_name))
-        if file_exists(release_dir, glibc_name):
-            entry["variants"] = {
-                "glibc": asset_entry(release_dir, base_url, glibc_name),
-            }
-        manifest["platforms"][platform_key] = entry
-        return
-
-    if file_exists(release_dir, glibc_name):
         manifest["platforms"][platform_key] = asset_entry(
-            release_dir, base_url, glibc_name
+            release_dir, base_url, musl_name
         )
 
 
@@ -86,29 +54,21 @@ def main() -> int:
         "platforms": {},
     }
 
-    add_mac_platforms(manifest, release_dir, base_url)
-    add_linux_platform(
+    # This fork only publishes static Linux musl builds.
+    add_linux_musl_platform(
         manifest,
         release_dir,
         base_url,
         "linux-x86_64",
         "cc-switch-cli-linux-x64-musl.tar.gz",
-        "cc-switch-cli-linux-x64.tar.gz",
     )
-    add_linux_platform(
+    add_linux_musl_platform(
         manifest,
         release_dir,
         base_url,
         "linux-aarch64",
         "cc-switch-cli-linux-arm64-musl.tar.gz",
-        "cc-switch-cli-linux-arm64.tar.gz",
     )
-
-    windows = "cc-switch-cli-windows-x64.zip"
-    if file_exists(release_dir, windows):
-        manifest["platforms"]["windows-x86_64"] = asset_entry(
-            release_dir, base_url, windows
-        )
 
     if not manifest["platforms"]:
         print("No signed release assets found to build latest.json", file=sys.stderr)

@@ -7,7 +7,6 @@ INSTALL_DIR="${CC_SWITCH_INSTALL_DIR:-$HOME/.local/bin}"
 TARGET="${INSTALL_DIR}/${BIN_NAME}"
 RELEASES_URL="https://github.com/${REPO}/releases"
 FORCE_OVERWRITE="${CC_SWITCH_FORCE:-0}"
-LINUX_LIBC="${CC_SWITCH_LINUX_LIBC:-auto}"
 VERSION="${1:-latest}"
 [[ "${VERSION}" == "latest" || "${VERSION}" =~ ^v ]] || VERSION="v${VERSION}"
 
@@ -93,81 +92,26 @@ confirm_overwrite_if_needed() {
   esac
 }
 
-linux_libc_mode() {
-  case "${LINUX_LIBC}" in
-    auto|AUTO|"")
-      printf 'auto'
-      ;;
-    musl|MUSL)
-      printf 'musl'
-      ;;
-    glibc|GLIBC|gnu|GNU)
-      printf 'glibc'
-      ;;
-    *)
-      err "Unsupported CC_SWITCH_LINUX_LIBC value: ${LINUX_LIBC}"
-      err "Use one of: auto, musl, glibc"
-      exit 1
-      ;;
-  esac
-}
-
 set_linux_asset_candidates() {
   local arch="$1"
-  local mode
-  mode="$(linux_libc_mode)"
 
+  # This fork only publishes static Linux musl builds.
   case "${arch}" in
     x86_64|amd64)
-      case "${mode}" in
-        auto)
-          ASSET_CANDIDATES=(
-            "cc-switch-cli-linux-x64-musl.tar.gz"
-            "cc-switch-cli-linux-x64.tar.gz"
-          )
-          ;;
-        musl)
-          ASSET_CANDIDATES=("cc-switch-cli-linux-x64-musl.tar.gz")
-          ;;
-        glibc)
-          ASSET_CANDIDATES=("cc-switch-cli-linux-x64.tar.gz")
-          ;;
-      esac
+      ASSET_CANDIDATES=("cc-switch-cli-linux-x64-musl.tar.gz")
       ;;
     aarch64|arm64)
-      case "${mode}" in
-        auto)
-          ASSET_CANDIDATES=(
-            "cc-switch-cli-linux-arm64-musl.tar.gz"
-            "cc-switch-cli-linux-arm64.tar.gz"
-          )
-          ;;
-        musl)
-          ASSET_CANDIDATES=("cc-switch-cli-linux-arm64-musl.tar.gz")
-          ;;
-        glibc)
-          ASSET_CANDIDATES=("cc-switch-cli-linux-arm64.tar.gz")
-          ;;
-      esac
+      ASSET_CANDIDATES=("cc-switch-cli-linux-arm64-musl.tar.gz")
       ;;
     *)
       err "Unsupported Linux architecture: ${arch}"
+      err "This release only provides linux-x64-musl and linux-arm64-musl."
       err "See available assets: ${RELEASES_URL}"
       exit 1
       ;;
   esac
 
-  case "${mode}" in
-    auto)
-      info "Linux defaults to the static musl build and falls back to glibc if needed."
-      ;;
-    musl)
-      info "Using Linux musl build because CC_SWITCH_LINUX_LIBC=${LINUX_LIBC}."
-      ;;
-    glibc)
-      info "Using Linux glibc build because CC_SWITCH_LINUX_LIBC=${LINUX_LIBC}."
-      ;;
-  esac
+  info "Using Linux musl build (only platform published by this fork)."
 }
 
 # ── platform detection ───────────────────────────────────────────────
@@ -179,16 +123,13 @@ detect_asset() {
   ASSET_CANDIDATES=()
 
   case "${os}" in
-    Darwin)
-      # Universal binary works on both Apple Silicon and Intel
-      ASSET_CANDIDATES=("cc-switch-cli-darwin-universal.tar.gz")
-      ;;
     Linux)
       set_linux_asset_candidates "${arch}"
       ;;
-    MINGW*|MSYS*|CYGWIN*|Windows_NT)
-      err "This script does not support Windows."
-      err "Download cc-switch-cli-windows-x64.zip from: ${RELEASES_URL}"
+    Darwin|MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      err "This fork only publishes Linux musl builds."
+      err "Unsupported OS: ${os}"
+      err "See available assets: ${RELEASES_URL}"
       exit 1
       ;;
     *)

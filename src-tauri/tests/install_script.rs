@@ -190,38 +190,38 @@ fn install_script_force_overwrites_and_warns_about_shadowed_path() {
 
 #[test]
 #[serial]
-fn install_script_supports_linux_glibc_override() {
+fn install_script_requests_linux_musl_asset() {
     let harness = Harness::new();
 
-    let output = harness.run(&[("CC_SWITCH_LINUX_LIBC", "glibc")], None);
+    let output = harness.run(&[], None);
     assert!(
         output.status.success(),
-        "glibc override install should succeed"
+        "musl install should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
     let requested_url = fs::read_to_string(harness.logs_dir.join("last-url"))
         .expect("download url should be logged");
     assert!(
-        requested_url.ends_with("/cc-switch-cli-linux-x64.tar.gz"),
-        "expected glibc asset request, got {requested_url}"
+        requested_url.ends_with("/cc-switch-cli-linux-x64-musl.tar.gz"),
+        "expected musl asset request, got {requested_url}"
     );
 }
 
 #[test]
 #[serial]
-fn install_script_falls_back_to_glibc_when_musl_download_fails() {
+fn install_script_fails_when_musl_download_fails() {
     let harness = Harness::new();
 
     let output = harness.run(&[("CC_SWITCH_TEST_FAIL_MUSL", "1")], None);
     assert!(
-        output.status.success(),
-        "glibc fallback install should succeed"
+        !output.status.success(),
+        "install should fail when musl asset is unavailable"
     );
 
-    let requested_url = fs::read_to_string(harness.logs_dir.join("last-url"))
-        .expect("download url should be logged");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        requested_url.ends_with("/cc-switch-cli-linux-x64.tar.gz"),
-        "expected fallback glibc asset request, got {requested_url}"
+        stderr.contains("Unable to download") || stderr.contains("Download failed"),
+        "stderr was: {stderr}"
     );
 }

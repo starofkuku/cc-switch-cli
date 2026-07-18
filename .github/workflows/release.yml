@@ -83,45 +83,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS ARM64
-          - os: macos-14
-            platform: darwin-arm64
-            target: aarch64-apple-darwin
-            binary: cc-switch
-          # macOS x86_64
-          - os: macos-14
-            platform: darwin-x64
-            target: x86_64-apple-darwin
-            binary: cc-switch
-          # Windows x86_64
-          - os: windows-2022
-            platform: windows-x64
-            target: x86_64-pc-windows-msvc
-            binary: cc-switch.exe
-          # Linux x86_64 - MUSL (recommended)
+          # Linux x86_64 - MUSL only
           - os: ubuntu-22.04
             platform: linux-x64-musl
             target: x86_64-unknown-linux-musl
             binary: cc-switch
-            use_cross: true
-          # Linux x86_64 - GLIBC (fallback)
-          - os: ubuntu-22.04
-            platform: linux-x64
-            target: x86_64-unknown-linux-gnu
-            binary: cc-switch
-            use_cross: false
-          # Linux ARM64 - MUSL (recommended)
+          # Linux ARM64 - MUSL only
           - os: ubuntu-22.04
             platform: linux-arm64-musl
             target: aarch64-unknown-linux-musl
             binary: cc-switch
-            use_cross: true
-          # Linux ARM64 - GLIBC (fallback)
-          - os: ubuntu-22.04
-            platform: linux-arm64
-            target: aarch64-unknown-linux-gnu
-            binary: cc-switch
-            use_cross: true
 
     steps:
       - name: Checkout
@@ -140,27 +111,11 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install cross
-        if: matrix.use_cross == true
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Install Linux dependencies (GLIBC x64)
-        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            libssl-dev
-
       - name: Build with cross
-        if: matrix.use_cross == true
         working-directory: src-tauri
         run: cross build --release --target ${{ matrix.target }}
-
-      - name: Build with cargo
-        if: matrix.use_cross != true
-        working-directory: src-tauri
-        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary
         shell: bash
@@ -175,42 +130,10 @@ jobs:
           path: dist/${{ matrix.binary }}
           if-no-files-found: error
 
-  # Create macOS universal binary
-  universal-macos:
-    name: Universal macOS Binary
-    runs-on: macos-14
-    needs: build
-    steps:
-      - name: Download ARM64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: cc-switch-cli-darwin-arm64
-          path: arm64
-
-      - name: Download x64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: cc-switch-cli-darwin-x64
-          path: x64
-
-      - name: Create universal binary
-        run: |
-          mkdir -p universal
-          lipo -create -output universal/cc-switch arm64/cc-switch x64/cc-switch
-          chmod +x universal/cc-switch
-          file universal/cc-switch
-
-      - name: Upload universal artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cc-switch-cli-darwin-universal
-          path: universal/cc-switch
-          if-no-files-found: error
-
   release:
     name: Create Release
     runs-on: ubuntu-22.04
-    needs: [build, universal-macos]
+    needs: [build]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -254,53 +177,12 @@ jobs:
           mkdir -p release-assets
           VERSION="${GITHUB_REF_NAME}"
 
-          # macOS Universal
-          if [ -f "artifacts/cc-switch-cli-darwin-universal/cc-switch" ]; then
-            tar -czf release-assets/cc-switch-cli-${VERSION}-darwin-universal.tar.gz \
-              -C artifacts/cc-switch-cli-darwin-universal cc-switch
-            cp release-assets/cc-switch-cli-${VERSION}-darwin-universal.tar.gz \
-              release-assets/cc-switch-cli-darwin-universal.tar.gz
-          fi
-
-          # macOS ARM64
-          if [ -f "artifacts/cc-switch-cli-darwin-arm64/cc-switch" ]; then
-            tar -czf release-assets/cc-switch-cli-${VERSION}-darwin-arm64.tar.gz \
-              -C artifacts/cc-switch-cli-darwin-arm64 cc-switch
-            cp release-assets/cc-switch-cli-${VERSION}-darwin-arm64.tar.gz \
-              release-assets/cc-switch-cli-darwin-arm64.tar.gz
-          fi
-
-          # macOS x64
-          if [ -f "artifacts/cc-switch-cli-darwin-x64/cc-switch" ]; then
-            tar -czf release-assets/cc-switch-cli-${VERSION}-darwin-x64.tar.gz \
-              -C artifacts/cc-switch-cli-darwin-x64 cc-switch
-            cp release-assets/cc-switch-cli-${VERSION}-darwin-x64.tar.gz \
-              release-assets/cc-switch-cli-darwin-x64.tar.gz
-          fi
-
-          # Windows
-          if [ -f "artifacts/cc-switch-cli-windows-x64/cc-switch.exe" ]; then
-            cd artifacts/cc-switch-cli-windows-x64
-            zip ../../release-assets/cc-switch-cli-${VERSION}-windows-x64.zip cc-switch.exe
-            cd ../..
-            cp release-assets/cc-switch-cli-${VERSION}-windows-x64.zip \
-              release-assets/cc-switch-cli-windows-x64.zip
-          fi
-
           # Linux x64 - MUSL
           if [ -f "artifacts/cc-switch-cli-linux-x64-musl/cc-switch" ]; then
             tar -czf release-assets/cc-switch-cli-${VERSION}-linux-x64-musl.tar.gz \
               -C artifacts/cc-switch-cli-linux-x64-musl cc-switch
             cp release-assets/cc-switch-cli-${VERSION}-linux-x64-musl.tar.gz \
               release-assets/cc-switch-cli-linux-x64-musl.tar.gz
-          fi
-
-          # Linux x64 - GLIBC
-          if [ -f "artifacts/cc-switch-cli-linux-x64/cc-switch" ]; then
-            tar -czf release-assets/cc-switch-cli-${VERSION}-linux-x64.tar.gz \
-              -C artifacts/cc-switch-cli-linux-x64 cc-switch
-            cp release-assets/cc-switch-cli-${VERSION}-linux-x64.tar.gz \
-              release-assets/cc-switch-cli-linux-x64.tar.gz
           fi
 
           # Linux ARM64 - MUSL
@@ -311,12 +193,9 @@ jobs:
               release-assets/cc-switch-cli-linux-arm64-musl.tar.gz
           fi
 
-          # Linux ARM64 - GLIBC
-          if [ -f "artifacts/cc-switch-cli-linux-arm64/cc-switch" ]; then
-            tar -czf release-assets/cc-switch-cli-${VERSION}-linux-arm64.tar.gz \
-              -C artifacts/cc-switch-cli-linux-arm64 cc-switch
-            cp release-assets/cc-switch-cli-${VERSION}-linux-arm64.tar.gz \
-              release-assets/cc-switch-cli-linux-arm64.tar.gz
+          if ! compgen -G "release-assets/cc-switch-cli-*-linux-*-musl.tar.gz" > /dev/null; then
+            echo "No Linux musl release assets were produced" >&2
+            exit 1
           fi
 
           # Include install script
@@ -341,7 +220,7 @@ jobs:
           chmod 600 "${key_file}"
 
           shopt -s nullglob
-          for asset in release-assets/cc-switch-cli-*.tar.gz release-assets/cc-switch-cli-*.zip; do
+          for asset in release-assets/cc-switch-cli-*.tar.gz; do
             minisign -S \
               -s "${key_file}" \
               -m "${asset}" \
@@ -349,7 +228,7 @@ jobs:
               -t "cc-switch-cli ${GITHUB_REF_NAME}"
           done
 
-          for asset in release-assets/cc-switch-cli-*.tar.gz release-assets/cc-switch-cli-*.zip; do
+          for asset in release-assets/cc-switch-cli-*.tar.gz; do
             minisign -Vm "${asset}" \
               -p src-tauri/updater/minisign.pub \
               -x "${asset}.minisig"
@@ -379,9 +258,9 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            Use the assets below for platform packages, checksums, and update metadata.
+            This release ships **Linux musl** builds only (`linux-x64-musl`, `linux-arm64-musl`).
 
-            Install on macOS/Linux:
+            Install:
 
             ```bash
             curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash

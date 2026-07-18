@@ -474,6 +474,8 @@ fn manifest_asset_candidates(
     platform_key: &str,
     preference: LinuxLibcPreference,
 ) -> Result<Vec<ManifestAsset>, AppError> {
+    // This fork only publishes static Linux musl builds.
+    let _ = preference;
     let entry = manifest.platforms.get(platform_key).ok_or_else(|| {
         AppError::Message(format!(
             "Update manifest does not provide platform entry '{platform_key}'."
@@ -486,55 +488,29 @@ fn manifest_asset_candidates(
     };
 
     if !platform_key.starts_with("linux-") {
-        return Ok(vec![primary]);
+        return Err(AppError::Message(format!(
+            "Self-update is only supported for Linux musl builds (got '{platform_key}')."
+        )));
     }
 
-    let musl_variant = entry.variants.get("musl").map(|variant| ManifestAsset {
-        url: variant.url.clone(),
-        signature: variant.signature.clone(),
-    });
-    let glibc_variant = entry.variants.get("glibc").map(|variant| ManifestAsset {
-        url: variant.url.clone(),
-        signature: variant.signature.clone(),
-    });
-
     let mut candidates = Vec::new();
-    match preference {
-        LinuxLibcPreference::Auto => {
-            push_manifest_asset(&mut candidates, primary);
-            if let Some(asset) = glibc_variant {
-                push_manifest_asset(&mut candidates, asset);
-            }
-            if let Some(asset) = musl_variant {
-                push_manifest_asset(&mut candidates, asset);
-            }
-        }
-        LinuxLibcPreference::Musl => {
-            if let Some(asset) = musl_variant {
-                push_manifest_asset(&mut candidates, asset);
-            } else if asset_looks_like_musl(&primary.url) {
-                push_manifest_asset(&mut candidates, primary.clone());
-            } else {
-                return Err(AppError::Message(format!(
-                    "Update manifest does not provide a musl variant for platform '{platform_key}'."
-                )));
-            }
-        }
-        LinuxLibcPreference::Glibc => {
-            if let Some(asset) = glibc_variant {
-                push_manifest_asset(&mut candidates, asset);
-            } else if !asset_looks_like_musl(&primary.url) {
-                push_manifest_asset(&mut candidates, primary.clone());
-            } else {
-                return Err(AppError::Message(format!(
-                    "Update manifest does not provide a glibc variant for platform '{platform_key}'."
-                )));
-            }
-            push_manifest_asset(&mut candidates, primary);
-            if let Some(asset) = musl_variant {
-                push_manifest_asset(&mut candidates, asset);
-            }
-        }
+    if let Some(variant) = entry.variants.get("musl") {
+        push_manifest_asset(
+            &mut candidates,
+            ManifestAsset {
+                url: variant.url.clone(),
+                signature: variant.signature.clone(),
+            },
+        );
+    }
+    if asset_looks_like_musl(&primary.url) {
+        push_manifest_asset(&mut candidates, primary);
+    }
+
+    if candidates.is_empty() {
+        return Err(AppError::Message(format!(
+            "Update manifest does not provide a musl asset for platform '{platform_key}'."
+        )));
     }
 
     Ok(candidates)
@@ -549,43 +525,14 @@ fn release_asset_candidates_for_platform(
     arch: &str,
     preference: LinuxLibcPreference,
 ) -> Result<Vec<String>, AppError> {
+    // This fork only publishes static Linux musl builds.
+    let _ = preference;
     let names = match (os, arch) {
-        ("macos", "x86_64") => vec![
-            "cc-switch-cli-darwin-universal.tar.gz".to_string(),
-            "cc-switch-cli-darwin-x64.tar.gz".to_string(),
-        ],
-        ("macos", "aarch64") => vec![
-            "cc-switch-cli-darwin-universal.tar.gz".to_string(),
-            "cc-switch-cli-darwin-arm64.tar.gz".to_string(),
-        ],
-        ("linux", "x86_64") => match preference {
-            LinuxLibcPreference::Auto => vec![
-                "cc-switch-cli-linux-x64-musl.tar.gz".to_string(),
-                "cc-switch-cli-linux-x64.tar.gz".to_string(),
-            ],
-            LinuxLibcPreference::Musl => vec!["cc-switch-cli-linux-x64-musl.tar.gz".to_string()],
-            LinuxLibcPreference::Glibc => vec![
-                "cc-switch-cli-linux-x64.tar.gz".to_string(),
-                "cc-switch-cli-linux-x64-musl.tar.gz".to_string(),
-            ],
-        },
-        ("linux", "aarch64") => match preference {
-            LinuxLibcPreference::Auto => vec![
-                "cc-switch-cli-linux-arm64-musl.tar.gz".to_string(),
-                "cc-switch-cli-linux-arm64.tar.gz".to_string(),
-            ],
-            LinuxLibcPreference::Musl => {
-                vec!["cc-switch-cli-linux-arm64-musl.tar.gz".to_string()]
-            }
-            LinuxLibcPreference::Glibc => vec![
-                "cc-switch-cli-linux-arm64.tar.gz".to_string(),
-                "cc-switch-cli-linux-arm64-musl.tar.gz".to_string(),
-            ],
-        },
-        ("windows", "x86_64") => vec!["cc-switch-cli-windows-x64.zip".to_string()],
+        ("linux", "x86_64") => vec!["cc-switch-cli-linux-x64-musl.tar.gz".to_string()],
+        ("linux", "aarch64") => vec!["cc-switch-cli-linux-arm64-musl.tar.gz".to_string()],
         _ => {
             return Err(AppError::Message(format!(
-                "Self-update is not supported for platform {os}/{arch}."
+                "Self-update is only supported for Linux musl builds (got {os}/{arch})."
             )))
         }
     };

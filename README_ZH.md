@@ -185,9 +185,9 @@ cc-switch --app openclaw provider list  # 管理 OpenClaw 供应商
 
 ## 📥 安装
 
-### 方法 1：快速安装（macOS / Linux）
+### 方法 1：快速安装（仅 Linux musl）
 
-> Windows 用户请参考下方手动安装。
+本 fork 只发布 **Linux musl** 构建（`linux-x64-musl`、`linux-arm64-musl`）。
 
 ```bash
 curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/install.sh | bash
@@ -196,31 +196,11 @@ curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/
 默认安装到 `~/.local/bin`。设置 `CC_SWITCH_INSTALL_DIR` 可自定义安装目录。
 
 - 如果目标文件已存在，安装脚本会在 TTY 中提示确认；在非交互环境中，只有设置 `CC_SWITCH_FORCE=1` 才会覆盖。
-- Linux 如需 glibc 构建，可设置 `CC_SWITCH_LINUX_LIBC=glibc`。
 
 <details>
 <summary>手动安装</summary>
 
-#### macOS
-
-```bash
-# 下载 Universal Binary（推荐，支持 Apple Silicon + Intel）
-curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-darwin-universal.tar.gz
-
-# 解压
-tar -xzf cc-switch-cli-darwin-universal.tar.gz
-
-# 添加执行权限
-chmod +x cc-switch
-
-# 移动到 PATH
-sudo mv cc-switch /usr/local/bin/
-
-# 如遇 "无法验证开发者" 提示
-xattr -cr /usr/local/bin/cc-switch
-```
-
-#### Linux (x64)
+#### Linux (x64 musl)
 
 ```bash
 # 下载
@@ -236,7 +216,7 @@ chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
 
-#### Linux (ARM64)
+#### Linux (ARM64 musl)
 
 ```bash
 # 适用于树莓派或 ARM 服务器
@@ -246,38 +226,9 @@ chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
 
-#### Windows
-
-```powershell
-# 下载 zip 文件
-# https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-windows-x64.zip
-
-# 解压后将 cc-switch.exe 移动到 PATH 目录，例如：
-move cc-switch.exe C:\Windows\System32\
-
-# 或者直接运行
-.\cc-switch.exe
-```
-
 </details>
 
-### 方法 2：使用 Homebrew 安装
-
-如果你在使用 Homebrew，可以直接通过 Homebrew 安装 cc-switch。
-
-```bash
-brew install cc-switch-cli
-```
-
-更新：
-
-```bash
-brew upgrade cc-switch-cli
-```
-
-请注意，如果你通过 Homebrew 安装了 cc-switch，请避免使用 cc-switch 内置的更新功能，因为这会影响 Homebrew 自身的升级功能。
-
-### 方法 3：从源码构建
+### 方法 2：从源码构建
 
 **前提条件：**
 - Rust 1.85+（[通过 rustup 安装](https://rustup.rs/)）

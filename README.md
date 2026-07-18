@@ -186,9 +186,9 @@ See the "Features" section for full command list.
 
 ## 📥 Installation
 
-### Method 1: Quick Install (macOS / Linux)
+### Method 1: Quick Install (Linux musl only)
 
-> Windows users: see Manual Installation below.
+This fork publishes **Linux musl** builds only (`linux-x64-musl`, `linux-arm64-musl`).
 
 ```bash
 curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/install.sh | bash
@@ -197,31 +197,11 @@ curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/
 This installs `cc-switch` to `~/.local/bin`. Set `CC_SWITCH_INSTALL_DIR` to change the target directory.
 
 - If the target already exists, the installer prompts in TTY and refuses to overwrite in non-interactive shells unless `CC_SWITCH_FORCE=1` is set.
-- On Linux, set `CC_SWITCH_LINUX_LIBC=glibc` if you need the glibc build.
 
 <details>
 <summary>Manual Installation</summary>
 
-#### macOS
-
-```bash
-# Download Universal Binary (recommended, supports Apple Silicon + Intel)
-curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-darwin-universal.tar.gz
-
-# Extract
-tar -xzf cc-switch-cli-darwin-universal.tar.gz
-
-# Add execute permission
-chmod +x cc-switch
-
-# Move to PATH
-sudo mv cc-switch /usr/local/bin/
-
-# If you encounter "cannot be verified" warning
-xattr -cr /usr/local/bin/cc-switch
-```
-
-#### Linux (x64)
+#### Linux (x64 musl)
 
 ```bash
 # Download
@@ -237,7 +217,7 @@ chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
 
-#### Linux (ARM64)
+#### Linux (ARM64 musl)
 
 ```bash
 # For Raspberry Pi or ARM servers
@@ -247,34 +227,9 @@ chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
 
-#### Windows
-
-```powershell
-# Download the zip file
-# https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-windows-x64.zip
-
-# After extracting, move cc-switch.exe to a PATH directory, e.g.:
-move cc-switch.exe C:\Windows\System32\
-
-# Or run directly
-.\cc-switch.exe
-```
-
 </details>
 
-### Method 2: Install via Homebrew
-If you are using Homebrew on your machine, you can use Homebrew to install cc-switch.
-```
-brew install cc-switch-cli
-```
-
-Update:
-```
-brew upgrade cc-switch-cli
-```
-If you installed cc-switch via Homebrew, please use Homebrew to upgrade cc-switch, instead of the built-in update feature, as this breaks Homebrew formulae’s own upgrade functionality.
-
-### Method 3: Build from Source
+### Method 2: Build from Source
 
 **Prerequisites:**
 - Rust 1.85+ ([install via rustup](https://rustup.rs/))

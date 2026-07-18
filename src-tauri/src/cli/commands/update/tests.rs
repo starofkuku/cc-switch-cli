@@ -452,7 +452,7 @@ fn validate_download_size_limit_rejects_oversized_asset() {
 }
 
 #[test]
-fn select_manifest_asset_prefers_linux_glibc_variant_when_overridden() {
+fn select_manifest_asset_uses_musl_even_when_glibc_preference_set() {
     let manifest = UpdateManifest {
         version: "v4.6.3".to_string(),
         _notes: None,
@@ -474,17 +474,17 @@ fn select_manifest_asset_prefers_linux_glibc_variant_when_overridden() {
     };
 
     let asset = select_manifest_asset(&manifest, "linux-x86_64", LinuxLibcPreference::Glibc)
-        .expect("glibc variant should be selected");
+        .expect("musl asset should be selected");
 
     assert_eq!(
         asset.url,
-        "https://example.com/cc-switch-cli-linux-x64.tar.gz"
+        "https://example.com/cc-switch-cli-linux-x64-musl.tar.gz"
     );
-    assert_eq!(asset.signature, "glibc-signature");
+    assert_eq!(asset.signature, "musl-signature");
 }
 
 #[test]
-fn select_manifest_asset_accepts_glibc_primary_entry_without_variant() {
+fn select_manifest_asset_rejects_glibc_only_primary_entry() {
     let manifest = UpdateManifest {
         version: "v4.6.3".to_string(),
         _notes: None,
@@ -499,10 +499,9 @@ fn select_manifest_asset_accepts_glibc_primary_entry_without_variant() {
         )]),
     };
 
-    let asset = select_manifest_asset(&manifest, "linux-x86_64", LinuxLibcPreference::Glibc)
-        .expect("glibc primary entry should be accepted");
-
-    assert_eq!(asset.url, "https://example.com/glibc.tar.gz");
+    let err = select_manifest_asset(&manifest, "linux-x86_64", LinuxLibcPreference::Glibc)
+        .expect_err("glibc-only primary entry should be rejected");
+    assert!(err.to_string().contains("musl"));
 }
 
 #[test]
@@ -541,17 +540,14 @@ fn manifest_linux_asset_candidates_keep_musl_strict_when_forced() {
 }
 
 #[test]
-fn legacy_linux_asset_candidates_follow_glibc_override() {
+fn legacy_linux_asset_candidates_always_use_musl() {
     let candidates =
         release_asset_candidates_for_platform("linux", "x86_64", LinuxLibcPreference::Glibc)
-            .expect("glibc candidates should resolve");
+            .expect("musl candidates should resolve");
 
     assert_eq!(
         candidates,
-        vec![
-            "cc-switch-cli-linux-x64.tar.gz".to_string(),
-            "cc-switch-cli-linux-x64-musl.tar.gz".to_string(),
-        ]
+        vec!["cc-switch-cli-linux-x64-musl.tar.gz".to_string()]
     );
 }
 
