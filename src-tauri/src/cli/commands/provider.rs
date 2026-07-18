@@ -554,12 +554,15 @@ pub enum ProviderCommand {
         /// Provider ID to switch to
         id: String,
     },
-    /// Add a new provider (non-interactive; use the TUI for interactive add)
+    /// Add a new provider.
+    ///
+    /// For Claude/Codex in a TTY without flags, opens an interactive wizard
+    /// (Custom or models.dev catalog). Pass flags for non-interactive add.
     Add {
         /// Provider template to apply before creation
         #[arg(long, value_enum)]
         template: Option<ProviderAddTemplate>,
-        /// Provider display name (required)
+        /// Provider display name (required for non-interactive add)
         #[arg(long)]
         name: Option<String>,
         /// Explicit provider ID (default: generated from the name)
@@ -683,6 +686,16 @@ pub enum ProviderCommand {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Manage the local models.dev provider catalog cache
+    #[command(subcommand)]
+    Catalog(ProviderCatalogCommand),
+}
+
+/// models.dev catalog cache commands
+#[derive(Subcommand, Debug, Clone)]
+pub enum ProviderCatalogCommand {
+    /// Download/refresh https://models.dev/api.json into the local cache
+    Refresh,
 }
 
 pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppError> {
@@ -764,6 +777,11 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
         }
         ProviderCommand::UsageQuery(cmd) => provider_usage_query::execute(cmd, app_type),
         ProviderCommand::Export { id, output } => export_provider(app_type, &id, output),
+        ProviderCommand::Catalog(cmd) => match cmd {
+            ProviderCatalogCommand::Refresh => {
+                crate::cli::commands::provider_add_wizard::refresh_catalog_command()
+            }
+        },
     }
 }
 
@@ -1258,7 +1276,44 @@ fn apply_add_codex_oauth_options(
     Ok(())
 }
 
+fn add_has_noninteractive_input(args: &AddProviderArgs) -> bool {
+    args.name.is_some()
+        || args.template.is_some()
+        || args.base_url.is_some()
+        || args.api_key.is_some()
+        || args.model.is_some()
+        || args.config.is_some()
+        || args.config_file.is_some()
+        || args.id.is_some()
+        || args.account_id.is_some()
+}
+
 fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError> {
+    // Claude/Codex TTY with no flags → interactive Custom / models.dev wizard.
+    if crate::cli::commands::provider_add_wizard::should_run_catalog_wizard(
+        &app_type,
+        add_has_noninteractive_input(&args),
+    ) {
+        let state = AppState::try_new()?;
+        let config = state.config.read().unwrap();
+        let manager = config
+            .get_manager(&app_type)
+            .ok_or_else(|| AppError::Message(texts::app_config_not_found(app_type.as_str())))?;
+        let existing_ids: Vec<String> = manager.providers.keys().cloned().collect();
+        drop(config);
+
+        let (provider, prompt_result) =
+            crate::cli::commands::provider_add_wizard::run_catalog_add_wizard(
+                &app_type,
+                &existing_ids,
+            )?;
+        return crate::cli::commands::provider_add_wizard::finish_wizard_add(
+            app_type,
+            provider,
+            prompt_result,
+        );
+    }
+
     let name = non_empty(args.name.clone()).ok_or_else(add_requires_name_error)?;
 
     // 1. 加载配置和状态

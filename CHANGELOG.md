@@ -7,6 +7,17 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.1] - 2026-07-18
+
+### Added
+
+- **CLI / Provider add**: Interactive Claude and Codex provider add wizard. Choose Custom (manual endpoint) or a models.dev catalog vendor (searchable). Vendor path auto-fills the API endpoint; only API key and a catalog model are required. Custom path can optionally fetch and pick a default model from `/v1/models` (filterable).
+- **CLI / Catalog**: `provider catalog refresh` downloads `https://models.dev/api.json` into `$CC_SWITCH_CONFIG_DIR/cache/models.dev.json` (auto-fetched on first catalog use). Anthropic vendors for Claude and native OpenAI (`@ai-sdk/openai`) vendors for Codex; `api`-less and openai-compatible chat shims are excluded. Selected catalog models store context metadata when present.
+
+### Changed
+
+- **Release / Distribution**: Ship Linux musl builds only (`linux-x64-musl`, `linux-arm64-musl`); install/update paths no longer expect glibc, macOS, or Windows assets.
+
 ## [5.10.0] - 2026-07-18
 
 ### Added
