@@ -7,6 +7,16 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] - 2026-07-18
+
+### Added
+
+- **Apps / Pi**: Add first-class support for the Pi coding agent (`--app pi`), including provider live sync against `~/.pi/agent/models.json` and `settings.json`, prompts (`AGENTS.md`), skills, proxy routing, stream checks, env tool discovery, and TUI/CLI provider forms. Honors `PI_CODING_AGENT_DIR` for non-default installs and sandboxes.
+
+### Changed
+
+- **Release / Distribution**: Point install script, `cc-switch update` package repository metadata, README download URLs, and release workflow asset base URLs at `starofkuku/cc-switch-cli` so installs and self-updates resolve against this repository's GitHub Releases.
+
 ## [5.9.1] - 2026-07-15
 
 ### Added
