@@ -2,8 +2,8 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.9.1-blue.svg)](https://github.com/saladday/cc-switch-cli/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/saladday/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.9.1-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -190,7 +190,7 @@ cc-switch --app openclaw provider list  # 管理 OpenClaw 供应商
 > Windows 用户请参考下方手动安装。
 
 ```bash
-curl -fsSL https://github.com/SaladDay/cc-switch-cli/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/install.sh | bash
 ```
 
 默认安装到 `~/.local/bin`。设置 `CC_SWITCH_INSTALL_DIR` 可自定义安装目录。
@@ -205,7 +205,7 @@ curl -fsSL https://github.com/SaladDay/cc-switch-cli/releases/latest/download/in
 
 ```bash
 # 下载 Universal Binary（推荐，支持 Apple Silicon + Intel）
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-darwin-universal.tar.gz
+curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-darwin-universal.tar.gz
 
 # 解压
 tar -xzf cc-switch-cli-darwin-universal.tar.gz
@@ -224,7 +224,7 @@ xattr -cr /usr/local/bin/cc-switch
 
 ```bash
 # 下载
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-x64-musl.tar.gz
+curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-x64-musl.tar.gz
 
 # 解压
 tar -xzf cc-switch-cli-linux-x64-musl.tar.gz
@@ -240,7 +240,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```bash
 # 适用于树莓派或 ARM 服务器
-curl -LO https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-arm64-musl.tar.gz
+curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-arm64-musl.tar.gz
 tar -xzf cc-switch-cli-linux-arm64-musl.tar.gz
 chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
@@ -250,7 +250,7 @@ sudo mv cc-switch /usr/local/bin/
 
 ```powershell
 # 下载 zip 文件
-# https://github.com/saladday/cc-switch-cli/releases/latest/download/cc-switch-cli-windows-x64.zip
+# https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-windows-x64.zip
 
 # 解压后将 cc-switch.exe 移动到 PATH 目录，例如：
 move cc-switch.exe C:\Windows\System32\
@@ -284,7 +284,7 @@ brew upgrade cc-switch-cli
 
 **构建：**
 ```bash
-git clone https://github.com/saladday/cc-switch-cli.git
+git clone https://github.com/starofkuku/cc-switch-cli.git
 cd cc-switch-cli/src-tauri
 cargo build --release
 
@@ -483,7 +483,7 @@ cc-switch proxy serve --takeover claude           # 前台调试模式；存在 
 > cc-switch proxy serve --takeover claude
 > ```
 >
-> `proxy show` 与 `proxy config` 在所有平台均可用。参见 [#294](https://github.com/SaladDay/cc-switch-cli/issues/294)。
+> `proxy show` 与 `proxy config` 在所有平台均可用。参见 [#294](https://github.com/starofkuku/cc-switch-cli/issues/294)。
 
 ### 🧪 环境与本地工具
 
@@ -668,7 +668,7 @@ cc-switch --app codex provider list
 
 <br>
 
-请在我们的 [GitHub Issues](https://github.com/saladday/cc-switch-cli/issues) 页面提交问题，并包含：
+请在我们的 [GitHub Issues](https://github.com/starofkuku/cc-switch-cli/issues) 页面提交问题，并包含：
 - 问题或功能请求的详细描述
 - 复现步骤（针对 bug）
 - 你的系统信息（操作系统、版本）

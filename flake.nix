@@ -38,7 +38,7 @@
 
             meta = with pkgs.lib; {
               description = "CLI manager for Claude Code, Codex, Gemini, OpenCode, and OpenClaw";
-              homepage = "https://github.com/saladday/cc-switch-cli";
+              homepage = "https://github.com/starofkuku/cc-switch-cli";
               license = licenses.mit;
               mainProgram = "cc-switch";
               platforms = platforms.unix;

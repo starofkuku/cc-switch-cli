@@ -228,11 +228,11 @@ fn parse_checksum_for_asset_supports_spaces_in_filename() {
 
 #[test]
 fn release_page_url_for_github_com() {
-    let url = release_page_url("https://github.com/saladday/cc-switch-cli", "latest")
+    let url = release_page_url("https://github.com/starofkuku/cc-switch-cli", "latest")
         .expect("release page url should be built");
     assert_eq!(
         url.as_str(),
-        "https://github.com/saladday/cc-switch-cli/releases/latest"
+        "https://github.com/starofkuku/cc-switch-cli/releases/latest"
     );
 }
 
@@ -263,17 +263,17 @@ fn release_asset_names_prefer_plain_then_tagged_variant() {
 
 #[test]
 fn release_api_url_for_github_com() {
-    let url = release_api_url("https://github.com/saladday/cc-switch-cli", "latest")
+    let url = release_api_url("https://github.com/starofkuku/cc-switch-cli", "latest")
         .expect("api url should be built");
     assert_eq!(
         url.as_str(),
-        "https://api.github.com/repos/saladday/cc-switch-cli/releases/latest"
+        "https://api.github.com/repos/starofkuku/cc-switch-cli/releases/latest"
     );
 }
 
 #[test]
 fn extract_release_tag_from_url_reads_release_tag_page() {
-    let url = Url::parse("https://github.com/saladday/cc-switch-cli/releases/tag/v4.6.2")
+    let url = Url::parse("https://github.com/starofkuku/cc-switch-cli/releases/tag/v4.6.2")
         .expect("url should parse");
     let tag = extract_release_tag_from_url(&url).expect("tag should be extracted");
     assert_eq!(tag, "v4.6.2");
