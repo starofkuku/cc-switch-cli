@@ -840,7 +840,7 @@ pub(crate) async fn fetch_provider_models_for_tui(
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("build http client failed: {e}"))?;
 

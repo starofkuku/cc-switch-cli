@@ -12,7 +12,7 @@ use crate::provider::{
 use crate::services::ProviderService;
 use clap::ValueEnum;
 use colored::Colorize;
-use inquire::{Confirm, Select, Text};
+use inquire::{Confirm, MultiSelect, Select, Text};
 use serde_json::{json, Map, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3400,19 +3400,8 @@ fn prompt_openclaw_config(current: Option<&Value>) -> Result<Value, AppError> {
         .prompt()
         .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
-    let models_json = if defaults.models_json == "[]" {
-        Text::new(texts::openclaw_models_json_label())
-            .with_placeholder(r#"[{"id":"gpt-4.1","name":"GPT 4.1"}]"#)
-            .with_help_message(texts::openclaw_models_json_help())
-            .prompt()
-    } else {
-        Text::new(texts::openclaw_models_json_label())
-            .with_initial_value(&defaults.models_json)
-            .with_help_message(texts::openclaw_models_json_help())
-            .prompt()
-    }
-    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
-    let models_value = parse_openclaw_models_json(&models_json, current.is_none())?;
+    let models_value =
+        prompt_openclaw_models_json(&api_key, &base_url, &defaults.models_json, current.is_none())?;
 
     build_openclaw_settings_config_with_optional_models(
         current,
@@ -3422,6 +3411,137 @@ fn prompt_openclaw_config(current: Option<&Value>) -> Result<Value, AppError> {
         user_agent_enabled,
         models_value,
     )
+}
+
+/// Prompt for OpenClaw/Pi models:
+/// 1) optional multi-select from `/v1/models` enriched via models.dev
+/// 2) always allow final JSON edit (manual fix when catalog cannot align)
+fn prompt_openclaw_models_json(
+    api_key: &str,
+    base_url: &str,
+    defaults_models_json: &str,
+    require_non_empty: bool,
+) -> Result<Option<Value>, AppError> {
+    let mut working_json = defaults_models_json.to_string();
+    if working_json.trim().is_empty() {
+        working_json = "[]".to_string();
+    }
+
+    let can_fetch = !base_url.trim().is_empty() && !api_key.trim().is_empty();
+    if can_fetch {
+        let fetch = Confirm::new("Fetch models from /v1/models and merge into Models JSON?")
+            .with_default(true)
+            .with_help_message(
+                "Matched ids are enriched from models.dev; unmatched ids keep {\"id\":...} for manual edit",
+            )
+            .prompt()
+            .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+        if fetch {
+            println!("{}", info("Fetching models…"));
+            match fetch_models_from_v1(base_url, api_key) {
+                Ok(remote) if !remote.is_empty() => {
+                    let selected = MultiSelect::new(
+                        "Select models to merge (type to filter, Space toggle, Enter confirm)",
+                        remote,
+                    )
+                    .with_page_size(15)
+                    .prompt()
+                    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+                    if !selected.is_empty() {
+                        let catalog = crate::services::models_dev::ModelsDevCatalog::load_or_fetch()
+                            .ok();
+                        if catalog.is_none() {
+                            println!(
+                                "{}",
+                                info(
+                                    "models.dev catalog unavailable; writing id-only entries for manual edit."
+                                )
+                            );
+                        }
+
+                        let mut existing: Vec<Value> =
+                            serde_json::from_str(&working_json).unwrap_or_else(|_| Vec::new());
+                        if !existing.iter().all(|v| v.is_object()) {
+                            existing = Vec::new();
+                        }
+
+                        let mut enriched = 0usize;
+                        let mut bare = 0usize;
+                        for id in selected {
+                            let id = id.trim();
+                            if id.is_empty() {
+                                continue;
+                            }
+                            // Replace same id if already present.
+                            existing.retain(|entry| {
+                                entry
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(|existing_id| existing_id != id)
+                                    .unwrap_or(true)
+                            });
+                            let (entry, ok) =
+                                crate::services::models_dev::openclaw_model_entry_from_upstream(
+                                    id,
+                                    catalog.as_ref(),
+                                );
+                            if ok {
+                                enriched += 1;
+                            } else {
+                                bare += 1;
+                            }
+                            existing.push(entry);
+                        }
+
+                        working_json = serde_json::to_string_pretty(&existing).unwrap_or_else(
+                            |_| "[]".to_string(),
+                        );
+                        println!(
+                            "{}",
+                            info(&format!(
+                                "Merged models: {enriched} enriched from models.dev, {bare} id-only (edit JSON if needed)."
+                            ))
+                        );
+                    }
+                }
+                Ok(_) => {
+                    println!(
+                        "{}",
+                        info("No models returned from /v1/models; edit Models JSON manually.")
+                    );
+                }
+                Err(err) => {
+                    println!(
+                        "{}",
+                        info(&format!(
+                            "Fetch failed ({err}); edit Models JSON manually."
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    let models_json = if working_json.trim() == "[]" {
+        Text::new(texts::openclaw_models_json_label())
+            .with_placeholder(r#"[{"id":"gpt-4.1","name":"GPT 4.1"}]"#)
+            .with_help_message(
+                "JSON array. Unmatched /v1/models ids are {\"id\":...}; fill fields manually if needed.",
+            )
+            .prompt()
+    } else {
+        Text::new(texts::openclaw_models_json_label())
+            .with_initial_value(&working_json)
+            .with_help_message(
+                "Review/edit Models JSON. Enriched from models.dev when ids matched; otherwise id-only.",
+            )
+            .prompt()
+    }
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    parse_openclaw_models_json(&models_json, require_non_empty)
 }
 
 fn build_openclaw_settings_config(
@@ -3835,15 +3955,21 @@ fn prompt_model_field(
         .and_then(|e| e.get(env_key))
         .and_then(|m| m.as_str());
 
+    prompt_model_text(field_name, placeholder, existing_value)
+}
+
+fn prompt_model_text(
+    field_name: &str,
+    placeholder: &str,
+    existing_value: Option<&str>,
+) -> Result<Option<String>, AppError> {
     let input = if let Some(existing) = existing_value {
-        // 编辑模式 - 有现有值：预填充
         Text::new(&format!("{}：", field_name))
             .with_initial_value(existing)
             .with_help_message(texts::model_default_help())
             .prompt()
             .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
     } else {
-        // 新增模式或编辑模式无现有值：占位符
         Text::new(&format!("{}：", field_name))
             .with_placeholder(placeholder)
             .with_help_message(texts::model_default_help())
@@ -3852,19 +3978,126 @@ fn prompt_model_field(
     };
 
     let trimmed = input.trim();
-
     if trimmed.is_empty() {
-        if existing_value.is_some() {
-            // 编辑模式下清空 → 移除配置
-            Ok(None)
-        } else {
-            // 新增模式或原本无值 → 不写入
-            Ok(None)
-        }
+        Ok(None)
     } else {
-        // 有输入值
         Ok(Some(trimmed.to_string()))
     }
+}
+
+/// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint (and candidates).
+pub(crate) fn fetch_models_from_v1(
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, AppError> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| AppError::Message(format!("Failed to create async runtime: {e}")))?;
+    runtime.block_on(ProviderService::fetch_provider_models(
+        base_url,
+        Some(api_key),
+    ))
+}
+
+struct ModelPickItem {
+    label: String,
+    value: Option<String>,
+}
+
+impl std::fmt::Display for ModelPickItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label)
+    }
+}
+
+/// Ask whether to fetch `/v1/models` and pick a model (filterable), or type manually.
+///
+/// When `remote_models` is `Some`, it is reused (filled on first successful fetch).
+/// Returns `None` only when the user clears the value (empty text / clear choice).
+pub(crate) fn prompt_model_with_optional_v1_fetch(
+    field_name: &str,
+    placeholder: &str,
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    remote_models: &mut Option<Vec<String>>,
+) -> Result<Option<String>, AppError> {
+    let base_url = base_url.trim();
+    let api_key = api_key.trim();
+    let can_fetch = !base_url.is_empty() && !api_key.is_empty();
+
+    if can_fetch && remote_models.is_none() {
+        let fetch = Confirm::new(&format!(
+            "Fetch models from /v1/models for {field_name}?"
+        ))
+        .with_default(true)
+        .with_help_message("Uses the Base URL and API key you just entered")
+        .prompt()
+        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+        if fetch {
+            println!("{}", info("Fetching models…"));
+            match fetch_models_from_v1(base_url, api_key) {
+                Ok(models) if !models.is_empty() => {
+                    *remote_models = Some(models);
+                }
+                Ok(_) => {
+                    println!(
+                        "{}",
+                        info("No models returned; type a model id manually.")
+                    );
+                    *remote_models = Some(Vec::new());
+                }
+                Err(err) => {
+                    println!(
+                        "{}",
+                        info(&format!(
+                            "Fetch failed ({err}); type a model id manually."
+                        ))
+                    );
+                    *remote_models = Some(Vec::new());
+                }
+            }
+        } else {
+            *remote_models = Some(Vec::new());
+        }
+    }
+
+    let models = remote_models.as_deref().unwrap_or(&[]);
+    if models.is_empty() {
+        return prompt_model_text(field_name, placeholder, existing);
+    }
+
+    let mut items = Vec::with_capacity(models.len() + 3);
+    if let Some(cur) = existing.filter(|s| !s.is_empty()) {
+        items.push(ModelPickItem {
+            label: format!("Keep current: {cur}"),
+            value: Some(cur.to_string()),
+        });
+    }
+    items.push(ModelPickItem {
+        label: "Type model id manually…".to_string(),
+        value: None,
+    });
+    for id in models {
+        items.push(ModelPickItem {
+            label: id.clone(),
+            value: Some(id.clone()),
+        });
+    }
+
+    let picked = Select::new(
+        &format!("{field_name} (type to filter)"),
+        items,
+    )
+    .with_page_size(15)
+    .prompt()
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    if picked.label.starts_with("Type model id") {
+        return prompt_model_text(field_name, placeholder, existing);
+    }
+
+    Ok(picked.value)
 }
 
 fn claude_api_key_field_label(field: ClaudeApiKeyField) -> &'static str {
@@ -3967,15 +4200,27 @@ fn prompt_claude_config(
 
     // 询问是否配置模型
     let config_models = Confirm::new(texts::configure_model_names_prompt())
-        .with_default(false)
-        .with_help_message(texts::api_key_help())
+        .with_default(true)
+        .with_help_message("Optional; can fetch from /v1/models after Base URL + API key")
         .prompt()
         .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
     let mut model_fields = Vec::new();
     if config_models {
+        let mut remote_models: Option<Vec<String>> = None;
         for field in claude_model_prompt_fields() {
-            let value = prompt_model_field(field.label, field.env_key, field.placeholder, current)?;
+            let existing = current
+                .and_then(|v| v.get("env"))
+                .and_then(|e| e.get(field.env_key))
+                .and_then(|m| m.as_str());
+            let value = prompt_model_with_optional_v1_fetch(
+                field.label,
+                field.placeholder,
+                existing,
+                &base_url,
+                &api_key,
+                &mut remote_models,
+            )?;
             model_fields.push((field.env_key, value));
         }
     }
@@ -4174,20 +4419,17 @@ fn prompt_codex_config(current: Option<&Value>, provider_name: &str) -> Result<V
         ));
     }
 
-    // 3. Model
-    let model = if let Some(current) = current_model.as_deref() {
-        Text::new(&format!("{}:", texts::model_label()))
-            .with_initial_value(current)
-            .with_help_message("Model name (e.g., gpt-5.4, o3)")
-            .prompt()
-            .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
-    } else {
-        Text::new(&format!("{}:", texts::model_label()))
-            .with_placeholder("gpt-5.4")
-            .with_help_message("Model name")
-            .prompt()
-            .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
-    };
+    // 3. Model (optional /v1/models pick)
+    let mut remote_models: Option<Vec<String>> = None;
+    let model = prompt_model_with_optional_v1_fetch(
+        texts::model_label(),
+        "gpt-5.4",
+        current_model.as_deref(),
+        &base_url,
+        &api_key,
+        &mut remote_models,
+    )?
+    .unwrap_or_default();
 
     Ok(build_codex_settings_config_from_prompt(
         current,
@@ -4273,24 +4515,21 @@ fn prompt_gemini_config(current: Option<&Value>) -> Result<Value, AppError> {
                 .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
         };
 
-        let model = if let Some(current_model) = current
+        let mut remote_models: Option<Vec<String>> = None;
+        let existing_model = current
             .and_then(|v| v.get("env"))
             .and_then(|e| e.get("GEMINI_MODEL"))
             .and_then(|u| u.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Text::new(&format!("{}:", texts::model_label()))
-                .with_initial_value(current_model)
-                .with_help_message(texts::model_default_help())
-                .prompt()
-                .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
-        } else {
-            Text::new(&format!("{}:", texts::model_label()))
-                .with_placeholder("gemini-3-pro-preview")
-                .with_help_message(texts::model_default_help())
-                .prompt()
-                .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?
-        };
+            .filter(|s| !s.is_empty());
+        let model = prompt_model_with_optional_v1_fetch(
+            texts::model_label(),
+            "gemini-3-pro-preview",
+            existing_model,
+            &base_url,
+            &api_key,
+            &mut remote_models,
+        )?
+        .unwrap_or_default();
 
         Ok(build_gemini_api_key_settings_config(
             current, &api_key, &base_url, &model,

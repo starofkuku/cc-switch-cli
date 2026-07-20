@@ -37,7 +37,7 @@ impl ProviderService {
         let candidate_urls = build_provider_model_candidate_urls(base_url);
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| AppError::Message(e.to_string()))?;
 

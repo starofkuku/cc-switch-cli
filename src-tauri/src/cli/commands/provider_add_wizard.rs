@@ -6,14 +6,14 @@
 
 use std::io::IsTerminal;
 
-use inquire::{Confirm, Select, Text};
+use inquire::{Select, Text};
 use serde_json::Value;
 
 use crate::app_config::AppType;
 use crate::cli::commands::provider_input::{
     build_claude_settings_config_from_prompt, build_codex_settings_config_from_prompt,
     current_timestamp, display_provider_summary, generate_provider_id_for_app,
-    SettingsConfigPromptResult,
+    prompt_model_with_optional_v1_fetch, SettingsConfigPromptResult,
 };
 use crate::cli::i18n::texts;
 use crate::cli::ui::{info, success, warning};
@@ -26,12 +26,16 @@ use crate::services::models_dev::{
 use crate::services::ProviderService;
 
 const CLAUDE_API_FORMAT_ANTHROPIC: &str = "anthropic";
+const CODEX_API_FORMAT_CHAT: &str = "openai_chat";
 const CODEX_API_FORMAT_RESPONSES: &str = "openai_responses";
 
 #[derive(Debug, Clone)]
 enum SourceChoice {
     Custom,
-    Vendor { provider_id: String },
+    Vendor {
+        provider_id: String,
+        protocol: ModelsDevProtocolPool,
+    },
 }
 
 struct SourceItem {
@@ -56,34 +60,45 @@ impl std::fmt::Display for ModelItem {
     }
 }
 
-struct RemoteModelItem {
-    id: String,
-}
-
-impl std::fmt::Display for RemoteModelItem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
-
 pub(crate) fn supports_catalog_wizard(app_type: &AppType) -> bool {
     matches!(app_type, AppType::Claude | AppType::Codex)
 }
 
-pub(crate) fn should_run_catalog_wizard(app_type: &AppType, has_noninteractive_input: bool) -> bool {
+pub(crate) fn should_run_catalog_wizard(
+    app_type: &AppType,
+    has_noninteractive_input: bool,
+) -> bool {
     supports_catalog_wizard(app_type)
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && !has_noninteractive_input
 }
 
-fn protocol_pool(app_type: &AppType) -> Result<ModelsDevProtocolPool, AppError> {
+fn protocol_pools(app_type: &AppType) -> Result<Vec<ModelsDevProtocolPool>, AppError> {
     match app_type {
-        AppType::Claude => Ok(ModelsDevProtocolPool::Anthropic),
-        AppType::Codex => Ok(ModelsDevProtocolPool::OpenAiResponses),
+        AppType::Claude => Ok(vec![ModelsDevProtocolPool::Anthropic]),
+        AppType::Codex => Ok(vec![
+            ModelsDevProtocolPool::OpenAiResponses,
+            ModelsDevProtocolPool::OpenAiChat,
+        ]),
         _ => Err(AppError::Message(
             "models.dev catalog add is only available for Claude and Codex".into(),
         )),
+    }
+}
+
+fn protocol_label(protocol: ModelsDevProtocolPool) -> &'static str {
+    match protocol {
+        ModelsDevProtocolPool::Anthropic => "Anthropic",
+        ModelsDevProtocolPool::OpenAiResponses => "Responses / direct",
+        ModelsDevProtocolPool::OpenAiChat => "Chat / proxy required",
+    }
+}
+
+fn default_protocol(app_type: &AppType) -> ModelsDevProtocolPool {
+    match app_type {
+        AppType::Codex => ModelsDevProtocolPool::OpenAiResponses,
+        _ => ModelsDevProtocolPool::Anthropic,
     }
 }
 
@@ -91,10 +106,7 @@ fn inquire_err(e: impl std::fmt::Display) -> AppError {
     AppError::Message(texts::input_failed_error(&e.to_string()))
 }
 
-fn select_filterable<T: std::fmt::Display>(
-    prompt: &str,
-    options: Vec<T>,
-) -> Result<T, AppError> {
+fn select_filterable<T: std::fmt::Display>(prompt: &str, options: Vec<T>) -> Result<T, AppError> {
     if options.is_empty() {
         return Err(AppError::Message(
             "No options available for selection.".into(),
@@ -143,23 +155,36 @@ pub(crate) fn run_catalog_add_wizard(
         info("Interactive provider add (Custom or models.dev catalog)")
     );
 
-    let pool = protocol_pool(app_type)?;
+    let pools = protocol_pools(app_type)?;
     println!("{}", info("Loading models.dev catalog…"));
     let catalog = ModelsDevCatalog::load_or_fetch()?;
-    let vendors = catalog.providers_for_pool(pool);
+    let vendors: Vec<(ModelsDevProtocolPool, &ModelsDevProvider)> = pools
+        .into_iter()
+        .flat_map(|protocol| {
+            catalog
+                .providers_for_pool(protocol)
+                .into_iter()
+                .map(move |vendor| (protocol, vendor))
+        })
+        .collect();
 
     let mut items = Vec::with_capacity(vendors.len() + 1);
     items.push(SourceItem {
         label: "Custom provider (manual endpoint)".to_string(),
         choice: SourceChoice::Custom,
     });
-    for vendor in &vendors {
+    for (protocol, vendor) in &vendors {
         let name = vendor.name.as_deref().unwrap_or(vendor.id.as_str());
         let api = vendor.api.as_deref().unwrap_or("");
         items.push(SourceItem {
-            label: format!("{name}  [{id}]  {api}", id = vendor.id),
+            label: format!(
+                "{name}  [{id}]  [{protocol}]  {api}",
+                id = vendor.id,
+                protocol = protocol_label(*protocol)
+            ),
             choice: SourceChoice::Vendor {
                 provider_id: vendor.id.clone(),
+                protocol: *protocol,
             },
         });
     }
@@ -167,12 +192,15 @@ pub(crate) fn run_catalog_add_wizard(
     let selected = select_filterable("Select provider source (type to filter)", items)?;
     match selected.choice {
         SourceChoice::Custom => run_custom_path(app_type, existing_ids),
-        SourceChoice::Vendor { provider_id } => {
+        SourceChoice::Vendor {
+            provider_id,
+            protocol,
+        } => {
             let vendor = catalog
                 .providers
                 .get(&provider_id)
                 .ok_or_else(|| AppError::Message(format!("Vendor '{provider_id}' not found")))?;
-            run_vendor_path(app_type, existing_ids, vendor)
+            run_vendor_path(app_type, existing_ids, vendor, protocol)
         }
     }
 }
@@ -206,7 +234,7 @@ fn run_custom_path(
         in_failover_queue: false,
     };
     apply_wizard_meta(app_type, &mut provider, prompt_result.as_ref());
-    apply_wizard_api_format(app_type, &mut provider)?;
+    apply_wizard_api_format(app_type, &mut provider, default_protocol(app_type))?;
 
     Ok((provider, prompt_result))
 }
@@ -216,64 +244,25 @@ fn resolve_custom_model(
     base_url: &str,
     api_key: &str,
 ) -> Result<Option<String>, AppError> {
-    let fetch = Confirm::new("Fetch models from /v1/models and pick a default model?")
-        .with_default(true)
-        .prompt()
-        .map_err(inquire_err)?;
-
-    if !fetch {
-        let model = Text::new("Default model (optional, Enter to skip)")
-            .prompt()
-            .map_err(inquire_err)?;
-        return Ok(non_empty(Some(model)));
-    }
-
-    println!("{}", info("Fetching models…"));
-    let models = fetch_remote_models(app_type, base_url, api_key)?;
-    if models.is_empty() {
-        println!(
-            "{}",
-            warning("No models returned. You can type a model id manually.")
-        );
-        let model = Text::new("Default model (optional)")
-            .prompt()
-            .map_err(inquire_err)?;
-        return Ok(non_empty(Some(model)));
-    }
-
-    let items: Vec<RemoteModelItem> = models
-        .into_iter()
-        .map(|id| RemoteModelItem { id })
-        .collect();
-    let picked = select_filterable("Select default model (type to filter)", items)?;
-    Ok(Some(picked.id))
-}
-
-fn fetch_remote_models(
-    app_type: &AppType,
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<String>, AppError> {
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| AppError::Message(format!("Failed to create async runtime: {e}")))?;
-
-    // Claude Anthropic path still works with dual headers in fetch_provider_models.
     let _ = app_type;
-    runtime.block_on(ProviderService::fetch_provider_models(
+    let mut remote_models: Option<Vec<String>> = None;
+    prompt_model_with_optional_v1_fetch(
+        "Default model",
+        "gpt-5.4",
+        None,
         base_url,
-        Some(api_key),
-    ))
+        api_key,
+        &mut remote_models,
+    )
 }
 
 fn run_vendor_path(
     app_type: &AppType,
     existing_ids: &[String],
     vendor: &ModelsDevProvider,
+    protocol: ModelsDevProtocolPool,
 ) -> Result<(Provider, Option<SettingsConfigPromptResult>), AppError> {
-    let default_name = vendor
-        .name
-        .clone()
-        .unwrap_or_else(|| vendor.id.clone());
+    let default_name = vendor.name.clone().unwrap_or_else(|| vendor.id.clone());
     let name = prompt_optional_text("Provider name", &default_name)?;
     let id = generate_provider_id_for_app(app_type, &name, existing_ids);
     let base_url = vendor
@@ -285,6 +274,17 @@ fn run_vendor_path(
         .to_string();
 
     println!("{}", info(&format!("Endpoint: {base_url}")));
+    if matches!(
+        (app_type, protocol),
+        (AppType::Codex, ModelsDevProtocolPool::OpenAiChat)
+    ) {
+        println!(
+            "{}",
+            warning(
+                "This provider uses Chat Completions. Enable the CC-Switch proxy when using it with Codex."
+            )
+        );
+    }
     let api_key = prompt_required_text("API key")?;
 
     let models = model_list(vendor);
@@ -322,8 +322,13 @@ fn run_vendor_path(
         println!("{}", info(&format!("Catalog context window: {ctx}")));
     }
 
-    let (settings_config, prompt_result) =
-        build_settings_for_fields(app_type, &name, &base_url, &api_key, Some(model_id.as_str()))?;
+    let (settings_config, prompt_result) = build_settings_for_fields(
+        app_type,
+        &name,
+        &base_url,
+        &api_key,
+        Some(model_id.as_str()),
+    )?;
 
     // Attach context metadata for Hermes/Pi-style consumers (non-breaking extra key).
     let settings_config = attach_catalog_model_meta(settings_config, &picked.model);
@@ -343,7 +348,7 @@ fn run_vendor_path(
         in_failover_queue: false,
     };
     apply_wizard_meta(app_type, &mut provider, prompt_result.as_ref());
-    apply_wizard_api_format(app_type, &mut provider)?;
+    apply_wizard_api_format(app_type, &mut provider, protocol)?;
 
     Ok((provider, prompt_result))
 }
@@ -405,17 +410,6 @@ fn build_settings_for_fields(
     }
 }
 
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|s| {
-        let t = s.trim();
-        if t.is_empty() {
-            None
-        } else {
-            Some(t.to_string())
-        }
-    })
-}
-
 fn apply_wizard_meta(
     app_type: &AppType,
     provider: &mut Provider,
@@ -442,7 +436,11 @@ fn apply_wizard_meta(
     }
 }
 
-fn apply_wizard_api_format(app_type: &AppType, provider: &mut Provider) -> Result<(), AppError> {
+fn apply_wizard_api_format(
+    app_type: &AppType,
+    provider: &mut Provider,
+    protocol: ModelsDevProtocolPool,
+) -> Result<(), AppError> {
     match app_type {
         AppType::Claude => {
             // Native Anthropic: leave api_format unset (same as apply_claude_api_format).
@@ -456,11 +454,15 @@ fn apply_wizard_api_format(app_type: &AppType, provider: &mut Provider) -> Resul
             }
         }
         AppType::Codex => {
-            // Mark Responses routing for UI; TOML wire_api already set by builder.
+            // Codex TOML stays on Responses; CC-Switch proxy routing uses this metadata.
+            let api_format = match protocol {
+                ModelsDevProtocolPool::OpenAiChat => CODEX_API_FORMAT_CHAT,
+                _ => CODEX_API_FORMAT_RESPONSES,
+            };
             provider
                 .meta
                 .get_or_insert_with(ProviderMeta::default)
-                .api_format = Some(CODEX_API_FORMAT_RESPONSES.to_string());
+                .api_format = Some(api_format.to_string());
             if let Some(obj) = provider.settings_config.as_object_mut() {
                 obj.remove("api_format");
                 obj.remove("apiFormat");
@@ -470,6 +472,60 @@ fn apply_wizard_api_format(app_type: &AppType, provider: &mut Provider) -> Resul
     }
     let _ = CLAUDE_API_FORMAT_ANTHROPIC;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn codex_provider() -> Provider {
+        Provider::with_id(
+            "catalog".to_string(),
+            "Catalog".to_string(),
+            json!({
+                "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nbase_url = \"https://example.com/v1\"\nwire_api = \"responses\"\n"
+            }),
+            None,
+        )
+    }
+
+    #[test]
+    fn codex_chat_catalog_provider_keeps_responses_wire_api() {
+        let mut provider = codex_provider();
+
+        apply_wizard_api_format(
+            &AppType::Codex,
+            &mut provider,
+            ModelsDevProtocolPool::OpenAiChat,
+        )
+        .expect("apply chat format");
+
+        assert_eq!(
+            provider.meta.and_then(|meta| meta.api_format),
+            Some(CODEX_API_FORMAT_CHAT.to_string())
+        );
+        assert!(provider.settings_config["config"]
+            .as_str()
+            .is_some_and(|config| config.contains("wire_api = \"responses\"")));
+    }
+
+    #[test]
+    fn codex_responses_catalog_provider_marks_responses_format() {
+        let mut provider = codex_provider();
+
+        apply_wizard_api_format(
+            &AppType::Codex,
+            &mut provider,
+            ModelsDevProtocolPool::OpenAiResponses,
+        )
+        .expect("apply responses format");
+
+        assert_eq!(
+            provider.meta.and_then(|meta| meta.api_format),
+            Some(CODEX_API_FORMAT_RESPONSES.to_string())
+        );
+    }
 }
 
 pub(crate) fn finish_wizard_add(

@@ -7,6 +7,18 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.2] - 2026-07-20
+
+### Added
+
+- **CLI / Provider edit**: When configuring models for Claude, Codex, and Gemini, optionally fetch `/v1/models` and pick a model (filterable list, keep current, or type manually).
+- **CLI / Pi & OpenClaw models**: Optionally multi-select models from `/v1/models`, enrich matched ids from the local models.dev catalog (`name`, `reasoning`, `input`, `contextWindow`, …), leave unmatched as `{"id":…}` for manual JSON edit, then always allow final Models JSON review.
+- **CLI / Codex catalog**: Include OpenAI-compatible Chat vendors (`@ai-sdk/openai-compatible`) as a separate pool marked for proxy use, alongside native Responses vendors.
+
+### Changed
+
+- **Model fetch timeout**: Increase HTTP timeout for `/v1/models` requests from 5s to 30s (CLI and TUI paths).
+
 ## [5.10.1] - 2026-07-18
 
 ### Added
