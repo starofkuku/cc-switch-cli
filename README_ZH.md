@@ -163,6 +163,7 @@ cc-switch provider stream-check <id> # 检查供应商流式健康
 cc-switch start <claude|codex> <id> --dry-run # 预览启动配置
 cc-switch auth list                  # 查看托管的 ChatGPT/Codex OAuth 账号
 cc-switch sessions list --all        # 查看历史会话
+cc-switch --app grok sessions export # 交互导出一条 Grok 会话为 JSON
 cc-switch sessions sync-usage --all  # 导入本地会话 token / cost 用量
 cc-switch config webdav show         # 查看 WebDAV 同步设置
 cc-switch env tools                  # 检查本地 CLI 工具
@@ -175,8 +176,10 @@ cc-switch --app codex mcp sync          # 同步 Codex MCP 服务器
 cc-switch --app gemini prompts list     # 列出 Gemini 提示词
 cc-switch --app hermes provider list    # 管理 Hermes 供应商
 cc-switch --app openclaw provider list  # 管理 OpenClaw 供应商
+cc-switch --app pi provider list        # 管理 Pi 供应商
+cc-switch --app grok provider list      # 管理 Grok 自定义模型
 
-# 支持的应用：`claude`（默认）、`codex`、`gemini`、`opencode`、`hermes`、`openclaw`
+# 支持的应用：`claude`（默认）、`codex`、`gemini`、`opencode`、`hermes`、`openclaw`、`pi`、`grok`
 ```
 
 完整命令列表请参考「功能特性」章节。
@@ -354,17 +357,34 @@ cc-switch skills repos disable <repo> # 禁用仓库但保留当前分支
 
 ### 🕘 历史会话与用量统计
 
-查看历史会话，一键 resume，删除旧会话，并将本地会话日志导入 token / cost 统计，方便管理用量。
+查看历史会话，一键 resume，删除旧会话，导出会话便于分享，并将本地会话日志导入 token / cost 统计。
 
-**功能：** 跨应用扫描会话、消息预览、一键恢复、删除确认、JSON 输出，以及 Claude、Codex、Gemini、OpenCode 的用量同步。
+**功能：** 跨应用扫描会话（Claude、Codex、Gemini、OpenCode、OpenClaw、Hermes、Grok、Pi）、消息预览、交互导出、一键恢复、删除确认、JSON 输出，以及 Claude、Codex、Gemini、OpenCode 的用量同步。
 
 ```bash
 cc-switch sessions list --all        # 列出支持应用的历史会话
+cc-switch --app grok sessions list   # 只列出某个应用的会话
 cc-switch sessions show <id>         # 查看会话信息和消息
 cc-switch sessions resume <id>       # 恢复会话
 cc-switch sessions delete <id>       # 删除会话
 cc-switch sessions sync-usage --all  # 同步本地日志到用量统计
+
+# 导出一条会话为可分享 JSON（必须指定 --app，无默认应用）
+cc-switch --app grok sessions export
+cc-switch --app claude sessions export -o ./share.json
 ```
+
+**`sessions export` 说明：**
+
+- 必须带全局 `--app`（`claude` / `codex` / `gemini` / `opencode` / `openclaw` / `hermes` / `grok` / `pi`）
+- 交互选择 **一条** 会话（按最近活跃倒序）。列表优先显示会话命名；没有命名时显示最后一条用户消息的前 10 个字
+- 选择界面快捷键：
+  - `↑` / `↓`（或 `j` / `k`）：移动选择；预览展开时滚动对话
+  - `Enter`：导出当前选中会话
+  - `Ctrl+E`：展开 / 收起 user+assistant 对话预览（用户消息为绿色）
+  - `Esc`：收起预览；若已收起则取消
+- 默认输出：`./ccswitch-<app>-<id8位>-<YYYYMMDD>.json`（可用 `-o` / `--output` 覆盖）
+- 导出格式（`ccswitch-session` v1）：`app`、`sessionId`、可选 `title` / `projectDir` / `sourcePath`、时间戳，以及 `messages[{role,content,ts}]`（仅 user/assistant 文本）
 
 ### ⚙️ 配置管理
 
@@ -509,6 +529,18 @@ cc-switch update --version vX.Y.Z    # 更新到指定版本
 - OpenCode: `~/.config/opencode/opencode.json`（供应商 + MCP + 运行时配置）, `~/.config/opencode/AGENTS.md`（提示词）
 - Hermes: `~/.hermes/config.yaml`（供应商 + MCP + 记忆设置）, `~/.hermes/AGENTS.md`（提示词）, `~/.hermes/skills/`（技能）, `~/.hermes/memories/`（记忆）
 - OpenClaw: `~/.openclaw/openclaw.json`（供应商 + Env/Tools/Agents Defaults）, `~/.openclaw/AGENTS.md`（提示词）
+- Pi: `~/.pi/agent/models.json`（自定义供应商/模型）, `~/.pi/agent/settings.json`（默认供应商/模型）, `~/.pi/agent/AGENTS.md`（提示词）, `~/.pi/agent/skills/`（技能）。支持 `PI_CODING_AGENT_DIR`
+- Grok: `~/.grok/config.toml`（自定义 `[model.*]` 端点 + `[models].default`），会话在 `~/.grok/sessions/`。支持 `GROK_HOME`
+
+**Grok 供应商示例：**
+
+```bash
+# 管理写入 config.toml 的自定义 Grok 模型
+cc-switch --app grok provider list
+cc-switch --app grok provider add          # 交互填写 model / base_url / api_key / api_backend
+cc-switch --app grok use <id>              # 写入 [model.<id>] 并设置 models.default
+cc-switch --app grok provider delete <id>  # 若 <id> 是当前 default 会拒绝删除
+```
 
 ---
 
@@ -599,17 +631,21 @@ cc-switch
 
 <br>
 
-CC-Switch 目前支持六个 AI 编程助手：
+CC-Switch 目前支持这些 AI 编程助手：
 - **Claude Code** (`--app claude`，默认)
 - **Codex** (`--app codex`)
 - **Gemini** (`--app gemini`)
 - **OpenCode** (`--app opencode`)
 - **Hermes** (`--app hermes`)
 - **OpenClaw** (`--app openclaw`)
+- **Pi** (`--app pi`)
+- **Grok Build** (`--app grok`)
 
 使用全局 `--app` 参数指定要管理的应用：
 ```bash
 cc-switch --app codex provider list
+cc-switch --app grok provider list
+cc-switch --app grok sessions export
 ```
 
 </details>

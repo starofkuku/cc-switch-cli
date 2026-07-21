@@ -9,7 +9,7 @@
 
 <a href="https://trendshift.io/repositories/22544" target="_blank"><img src="https://trendshift.io/api/badge/repositories/22544" alt="SaladDay%2Fcc-switch-cli | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-**TUI + CLI dual-mode manager for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw & Pi**
+**TUI + CLI dual-mode manager for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw, Pi & Grok**
 
 Use the interactive TUI for daily switching, account, and session work, or the CLI for scripts and repeatable terminal workflows.
 
@@ -163,6 +163,7 @@ cc-switch provider stream-check <id> # Check provider stream health
 cc-switch start <claude|codex> <id> --dry-run # Preview launch
 cc-switch auth list                  # List managed ChatGPT/Codex OAuth accounts
 cc-switch sessions list --all        # Review saved assistant sessions
+cc-switch --app grok sessions export # Interactively export one Grok session to JSON
 cc-switch sessions sync-usage --all  # Import local session token/cost usage
 cc-switch config webdav show         # Inspect WebDAV sync settings
 cc-switch env tools                  # Check local CLI tools
@@ -176,8 +177,9 @@ cc-switch --app gemini prompts list     # List Gemini prompts
 cc-switch --app hermes provider list    # Manage Hermes providers
 cc-switch --app openclaw provider list  # Manage OpenClaw providers
 cc-switch --app pi provider list        # Manage Pi providers
+cc-switch --app grok provider list      # Manage Grok custom models
 
-# Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`
+# Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`, `grok`
 ```
 
 See the "Features" section for full command list.
@@ -356,17 +358,34 @@ cc-switch skills repos disable <repo> # Disable repo without changing branch
 
 ### 🕘 Session History & Usage Statistics
 
-Review saved assistant sessions, resume a session with one command, delete old records, and import local session logs into token/cost statistics.
+Review saved assistant sessions, resume a session with one command, delete old records, export a session for sharing, and import local session logs into token/cost statistics.
 
-**Features:** cross-app session scanning, message preview, one-command resume, safe delete confirmation, JSON output, and usage sync for Claude, Codex, Gemini, and OpenCode.
+**Features:** cross-app session scanning (Claude, Codex, Gemini, OpenCode, OpenClaw, Hermes, Grok, Pi), message preview, interactive export, one-command resume, safe delete confirmation, JSON output, and usage sync for Claude, Codex, Gemini, and OpenCode.
 
 ```bash
 cc-switch sessions list --all        # List saved sessions across supported apps
+cc-switch --app grok sessions list   # List sessions for one app only
 cc-switch sessions show <id>         # Show session metadata and messages
 cc-switch sessions resume <id>       # Resume a saved session
 cc-switch sessions delete <id>       # Delete a saved session
 cc-switch sessions sync-usage --all  # Sync local logs into usage statistics
+
+# Export one session to a shareable JSON file (requires --app; no default app)
+cc-switch --app grok sessions export
+cc-switch --app claude sessions export -o ./share.json
 ```
+
+**`sessions export` notes:**
+
+- Must pass global `--app` (`claude` / `codex` / `gemini` / `opencode` / `openclaw` / `hermes` / `grok` / `pi`).
+- Interactively pick **one** session (sorted newest first). The list shows the session name when available; otherwise the last user message (first 10 characters).
+- Keys while selecting:
+  - `↑` / `↓` (or `j` / `k`): move selection; when preview is open, scroll the transcript
+  - `Enter`: export the highlighted session
+  - `Ctrl+E`: expand / collapse user+assistant conversation preview (user lines in green)
+  - `Esc`: collapse preview, or cancel if already collapsed
+- Default output: `./ccswitch-<app>-<id8>-<YYYYMMDD>.json` (override with `-o` / `--output`)
+- Exported file shape (`ccswitch-session` v1): `app`, `sessionId`, optional `title` / `projectDir` / `sourcePath`, timestamps, and `messages[{role,content,ts}]` (user/assistant text only)
 
 ### ⚙️ Configuration Management
 
@@ -512,6 +531,17 @@ When `CC_SWITCH_CONFIG_DIR` is set, CC-Switch uses that directory as its config 
 - Hermes: `~/.hermes/config.yaml` (providers + MCP + memory settings), `~/.hermes/AGENTS.md` (prompts), `~/.hermes/skills/` (skills), `~/.hermes/memories/` (memory)
 - OpenClaw: `~/.openclaw/openclaw.json` (providers + env/tools/agents defaults), `~/.openclaw/AGENTS.md` (prompts)
 - Pi: `~/.pi/agent/models.json` (custom providers/models), `~/.pi/agent/settings.json` (default provider/model), `~/.pi/agent/AGENTS.md` (prompts), `~/.pi/agent/skills/` (skills). `PI_CODING_AGENT_DIR` is honored.
+- Grok: `~/.grok/config.toml` (custom `[model.*]` endpoints + `[models].default`), sessions under `~/.grok/sessions/`. `GROK_HOME` is honored.
+
+**Grok provider examples:**
+
+```bash
+# List / switch custom Grok models written into config.toml
+cc-switch --app grok provider list
+cc-switch --app grok provider add          # interactive: model, base_url, api_key, api_backend
+cc-switch --app grok use <id>              # upsert [model.<id>] and set models.default
+cc-switch --app grok provider delete <id>  # refused if <id> is the current default
+```
 
 ---
 
@@ -602,7 +632,7 @@ cc-switch
 
 <br>
 
-CC-Switch currently supports six AI coding assistants:
+CC-Switch currently supports these AI coding assistants:
 - **Claude Code** (`--app claude`, default)
 - **Codex** (`--app codex`)
 - **Gemini** (`--app gemini`)
@@ -610,10 +640,13 @@ CC-Switch currently supports six AI coding assistants:
 - **Hermes** (`--app hermes`)
 - **OpenClaw** (`--app openclaw`)
 - **Pi** (`--app pi`)
+- **Grok Build** (`--app grok`)
 
 Use the global `--app` flag to specify which app to manage:
 ```bash
 cc-switch --app codex provider list
+cc-switch --app grok provider list
+cc-switch --app grok sessions export
 ```
 
 </details>
