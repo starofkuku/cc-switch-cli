@@ -115,8 +115,11 @@ pub enum SessionsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Interactively export one session to a JSON file (requires --app)
+    /// Export one session to a JSON file (requires --app)
     Export {
+        /// Session id or unique id prefix (skips interactive picker when set)
+        #[arg(long = "id")]
+        id: Option<String>,
         /// Output path (default: ./ccswitch-<app>-<id>-<date>.json)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
@@ -178,7 +181,7 @@ pub fn execute(cmd: SessionsCommand, app: Option<AppType>) -> Result<(), AppErro
             all,
             json,
         } => sync_usage(app, provider, all, json),
-        SessionsCommand::Export { output } => export_session(app, output),
+        SessionsCommand::Export { id, output } => export_session(app, id, output),
     }
 }
 
@@ -220,7 +223,11 @@ struct ExportChoice {
     messages_truncated: bool,
 }
 
-fn export_session(app: Option<AppType>, output: Option<PathBuf>) -> Result<(), AppError> {
+fn export_session(
+    app: Option<AppType>,
+    id: Option<String>,
+    output: Option<PathBuf>,
+) -> Result<(), AppError> {
     let app = app.ok_or_else(|| {
         AppError::InvalidInput(
             "sessions export requires --app (e.g. --app claude). There is no default app."
@@ -247,33 +254,72 @@ fn export_session(app: Option<AppType>, output: Option<PathBuf>) -> Result<(), A
     }
     session_manager::sort_by_recent(&mut sessions);
 
-    let mut choices = Vec::with_capacity(sessions.len());
-    for session in sessions {
-        let batch = session
-            .source_path
-            .as_deref()
-            .and_then(|path| session_manager::load_messages(provider_id, path).ok());
-        let messages_truncated = batch.as_ref().map(|b| b.truncated).unwrap_or(false);
-        let messages: Vec<SessionMessage> = batch
-            .map(|b| b.messages)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|m| m.role == "user" || m.role == "assistant")
-            .filter(|m| !m.content.trim().is_empty())
-            .collect();
-        let label = format_export_choice_label(&session, &messages);
-        choices.push(ExportChoice {
-            session,
-            label,
-            messages,
-            messages_truncated,
-        });
-    }
+    let selected = if let Some(selector) = id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        // Non-interactive: resolve by exact id or unique prefix, then load once.
+        let session = resolve_session_from_list(&sessions, selector)?;
+        load_export_choice(provider_id, session, true)?
+    } else {
+        // Interactive: load messages for labels/preview, then pick one.
+        let mut choices = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            // Soft-load so one unreadable session does not block the whole picker.
+            choices.push(load_export_choice(provider_id, session, false)?);
+        }
+        let selected_index = prompt_export_session_picker(&choices)?;
+        choices.into_iter().nth(selected_index).ok_or_else(|| {
+            AppError::Message("Invalid session selection.".to_string())
+        })?
+    };
 
-    let selected_index = prompt_export_session_picker(&choices)?;
-    let selected = &choices[selected_index];
-    let messages_truncated = selected.messages_truncated;
+    write_export_document(provider_id, &selected, output)
+}
 
+fn load_export_choice(
+    provider_id: &str,
+    session: SessionMeta,
+    strict: bool,
+) -> Result<ExportChoice, AppError> {
+    let batch = match session.source_path.as_deref() {
+        Some(path) => match session_manager::load_messages(provider_id, path) {
+            Ok(batch) => Some(batch),
+            Err(err) if strict => {
+                return Err(AppError::Message(format!(
+                    "Failed to load messages for session '{}': {err}",
+                    session.session_id
+                )));
+            }
+            Err(_) => None,
+        },
+        None if strict => {
+            return Err(AppError::Message(format!(
+                "Session '{}' has no source path; cannot export.",
+                session.session_id
+            )));
+        }
+        None => None,
+    };
+    let messages_truncated = batch.as_ref().map(|b| b.truncated).unwrap_or(false);
+    let messages: Vec<SessionMessage> = batch
+        .map(|b| b.messages)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .filter(|m| !m.content.trim().is_empty())
+        .collect();
+    let label = format_export_choice_label(&session, &messages);
+    Ok(ExportChoice {
+        session,
+        label,
+        messages,
+        messages_truncated,
+    })
+}
+
+fn write_export_document(
+    provider_id: &str,
+    selected: &ExportChoice,
+    output: Option<PathBuf>,
+) -> Result<(), AppError> {
     let export_messages: Vec<SessionExportMessage> = selected
         .messages
         .iter()
@@ -322,12 +368,13 @@ fn export_session(app: Option<AppType>, output: Option<PathBuf>) -> Result<(), A
     println!(
         "{}",
         success(&format!(
-            "Exported {} message(s) to {}",
+            "Exported {} message(s) from {} to {}",
             doc.messages.len(),
+            selected.session.session_id,
             out_path.display()
         ))
     );
-    if messages_truncated {
+    if selected.messages_truncated {
         println!(
             "{}",
             warning(
@@ -336,6 +383,17 @@ fn export_session(app: Option<AppType>, output: Option<PathBuf>) -> Result<(), A
         );
     }
     Ok(())
+}
+
+fn resolve_session_from_list(
+    sessions: &[SessionMeta],
+    selector: &str,
+) -> Result<SessionMeta, AppError> {
+    let mut resolver = SessionSelectorResolver::new(selector)?;
+    for session in sessions {
+        resolver.push(session.clone());
+    }
+    resolver.finish()
 }
 
 fn supports_session_export(provider_id: &str) -> bool {

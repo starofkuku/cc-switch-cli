@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.3-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.4-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -372,20 +372,11 @@ cc-switch sessions sync-usage --all  # Sync local logs into usage statistics
 
 # Export one session to a shareable JSON file (requires --app; no default app)
 cc-switch --app grok sessions export
+cc-switch --app grok sessions export --id 019f8253-b95c-7891-aee3-3af7e28cb122
 cc-switch --app claude sessions export -o ./share.json
 ```
 
-**`sessions export` notes:**
-
-- Must pass global `--app` (`claude` / `codex` / `gemini` / `opencode` / `openclaw` / `hermes` / `grok` / `pi`).
-- Interactively pick **one** session (sorted newest first). The list shows the session name when available; otherwise the last user message (first 10 characters).
-- Keys while selecting:
-  - `↑` / `↓` (or `j` / `k`): move selection; when preview is open, scroll the transcript
-  - `Enter`: export the highlighted session
-  - `Ctrl+E`: expand / collapse user+assistant conversation preview (user lines in green)
-  - `Esc`: collapse preview, or cancel if already collapsed
-- Default output: `./ccswitch-<app>-<id8>-<YYYYMMDD>.json` (override with `-o` / `--output`)
-- Exported file shape (`ccswitch-session` v1): `app`, `sessionId`, optional `title` / `projectDir` / `sourcePath`, timestamps, and `messages[{role,content,ts}]` (user/assistant text only)
+Full usage (interactive picker keys, `--id` matching, JSON shape, per-app session paths): see [docs/sessions-export.md](docs/sessions-export.md).
 
 ### ⚙️ Configuration Management
 

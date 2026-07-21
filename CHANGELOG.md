@@ -7,6 +7,13 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.4] - 2026-07-21
+
+### Added
+
+- **CLI / Sessions export `--id`**: Export a session non-interactively with `sessions export --id <sessionId|prefix>` (still requires `--app`). Exact match first, then unique prefix; ambiguous prefixes error with candidates.
+- **Docs / Sessions export**: Document interactive and `--id` export usage in [docs/sessions-export.md](docs/sessions-export.md).
+
 ## [5.10.3] - 2026-07-21
 
 ### Added

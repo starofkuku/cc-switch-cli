@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.3-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.4-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -371,20 +371,11 @@ cc-switch sessions sync-usage --all  # 同步本地日志到用量统计
 
 # 导出一条会话为可分享 JSON（必须指定 --app，无默认应用）
 cc-switch --app grok sessions export
+cc-switch --app grok sessions export --id 019f8253-b95c-7891-aee3-3af7e28cb122
 cc-switch --app claude sessions export -o ./share.json
 ```
 
-**`sessions export` 说明：**
-
-- 必须带全局 `--app`（`claude` / `codex` / `gemini` / `opencode` / `openclaw` / `hermes` / `grok` / `pi`）
-- 交互选择 **一条** 会话（按最近活跃倒序）。列表优先显示会话命名；没有命名时显示最后一条用户消息的前 10 个字
-- 选择界面快捷键：
-  - `↑` / `↓`（或 `j` / `k`）：移动选择；预览展开时滚动对话
-  - `Enter`：导出当前选中会话
-  - `Ctrl+E`：展开 / 收起 user+assistant 对话预览（用户消息为绿色）
-  - `Esc`：收起预览；若已收起则取消
-- 默认输出：`./ccswitch-<app>-<id8位>-<YYYYMMDD>.json`（可用 `-o` / `--output` 覆盖）
-- 导出格式（`ccswitch-session` v1）：`app`、`sessionId`、可选 `title` / `projectDir` / `sourcePath`、时间戳，以及 `messages[{role,content,ts}]`（仅 user/assistant 文本）
+完整用法（交互快捷键、`--id` 匹配规则、JSON 结构、各 app 会话路径）见 [docs/sessions-export.md](docs/sessions-export.md)。
 
 ### ⚙️ 配置管理
 
