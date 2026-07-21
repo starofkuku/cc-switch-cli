@@ -256,12 +256,45 @@ fn export_session(
 
     let selected = if let Some(selector) = id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         // Non-interactive: resolve by exact id or unique prefix, then load once.
+        // --id skips workdir grouping (search across all sessions of this app).
         let session = resolve_session_from_list(&sessions, selector)?;
         load_export_choice(provider_id, session, true)?
     } else {
-        // Interactive: load messages for labels/preview, then pick one.
-        let mut choices = Vec::with_capacity(sessions.len());
-        for session in sessions {
+        // Interactive: workdir first, then sessions under that workdir.
+        let with_dir: Vec<SessionMeta> = sessions
+            .into_iter()
+            .filter(|s| {
+                s.project_dir
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|d| !d.is_empty())
+            })
+            .collect();
+        if with_dir.is_empty() {
+            println!(
+                "{}",
+                info(&format!(
+                    "No sessions with a work directory found for {provider_id}."
+                ))
+            );
+            return Ok(());
+        }
+
+        let groups = group_sessions_by_workdir(with_dir);
+        let group_index = prompt_export_workdir_picker(&groups)?;
+        let group_sessions = groups
+            .into_iter()
+            .nth(group_index)
+            .map(|g| g.sessions)
+            .unwrap_or_default();
+        if group_sessions.is_empty() {
+            return Err(AppError::Message(
+                "Selected work directory has no sessions.".into(),
+            ));
+        }
+
+        let mut choices = Vec::with_capacity(group_sessions.len());
+        for session in group_sessions {
             // Soft-load so one unreadable session does not block the whole picker.
             choices.push(load_export_choice(provider_id, session, false)?);
         }
@@ -272,6 +305,240 @@ fn export_session(
     };
 
     write_export_document(provider_id, &selected, output)
+}
+
+struct WorkdirGroup {
+    /// Normalized full path used for matching.
+    key: String,
+    /// Last path component for display.
+    display: String,
+    sessions: Vec<SessionMeta>,
+    last_active: i64,
+}
+
+fn group_sessions_by_workdir(sessions: Vec<SessionMeta>) -> Vec<WorkdirGroup> {
+    use std::collections::BTreeMap;
+
+    let mut map: BTreeMap<String, WorkdirGroup> = BTreeMap::new();
+    for session in sessions {
+        let raw = session
+            .project_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .unwrap_or("")
+            .to_string();
+        if raw.is_empty() {
+            continue;
+        }
+        let key = normalize_workdir_key(&raw);
+        let ts = session.last_active_at.or(session.created_at).unwrap_or(0);
+        let entry = map.entry(key.clone()).or_insert_with(|| WorkdirGroup {
+            key: key.clone(),
+            display: path_basename(&raw),
+            sessions: Vec::new(),
+            last_active: ts,
+        });
+        entry.last_active = entry.last_active.max(ts);
+        entry.sessions.push(session);
+    }
+
+    let mut groups: Vec<WorkdirGroup> = map.into_values().collect();
+    for group in &mut groups {
+        session_manager::sort_by_recent(&mut group.sessions);
+    }
+    groups.sort_by(|a, b| b.last_active.cmp(&a.last_active).then_with(|| a.display.cmp(&b.display)));
+    groups
+}
+
+fn normalize_workdir_key(path: &str) -> String {
+    let trimmed = path.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let p = std::path::Path::new(trimmed);
+    if let Ok(canon) = p.canonicalize() {
+        return canon.to_string_lossy().trim_end_matches('/').to_string();
+    }
+    // Best-effort normalize when the path no longer exists on disk.
+    let mut s = trimmed.replace('\\', "/");
+    while s.ends_with('/') && s.len() > 1 {
+        s.pop();
+    }
+    s
+}
+
+fn current_workdir_key() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|p| normalize_workdir_key(&p.to_string_lossy()))
+        .filter(|s| !s.is_empty())
+}
+
+/// Pick a work directory. Prefers the group matching the process cwd when possible.
+fn prompt_export_workdir_picker(groups: &[WorkdirGroup]) -> Result<usize, AppError> {
+    if groups.is_empty() {
+        return Err(AppError::Message(
+            "No work directories available to export.".into(),
+        ));
+    }
+
+    let cwd_key = current_workdir_key();
+    let initial = cwd_key
+        .as_ref()
+        .and_then(|cwd| groups.iter().position(|g| &g.key == cwd))
+        .unwrap_or(0);
+
+    struct RawModeGuard;
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            let mut stdout = io::stdout();
+            let _ = disable_raw_mode();
+            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        }
+    }
+
+    enable_raw_mode().map_err(|e| AppError::Message(format!("failed to enable raw mode: {e}")))?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, Hide)
+        .map_err(|e| AppError::Message(format!("failed to enter alternate screen: {e}")))?;
+    let _guard = RawModeGuard;
+
+    let mut selected = initial;
+    let mut list_scroll = 0usize;
+
+    loop {
+        let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let term_cols = term_cols as usize;
+        let term_rows = term_rows.max(8) as usize;
+        let list_height = term_rows.saturating_sub(4).max(3);
+
+        if selected < list_scroll {
+            list_scroll = selected;
+        } else if selected >= list_scroll + list_height {
+            list_scroll = selected + 1 - list_height;
+        }
+
+        draw_export_workdir_picker(
+            &mut stdout,
+            groups,
+            selected,
+            list_scroll,
+            list_height,
+            term_cols,
+            cwd_key.as_deref(),
+        )?;
+
+        if !event::poll(Duration::from_millis(250))
+            .map_err(|e| AppError::Message(format!("failed to poll keyboard events: {e}")))?
+        {
+            continue;
+        }
+        let Event::Key(key) = event::read()
+            .map_err(|e| AppError::Message(format!("failed to read keyboard event: {e}")))?
+        else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c') if ctrl => {
+                return Err(AppError::Message("Session selection cancelled.".into()));
+            }
+            KeyCode::Esc => {
+                return Err(AppError::Message("Session selection cancelled.".into()));
+            }
+            KeyCode::Enter => return Ok(selected),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if selected > 0 {
+                    selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if selected + 1 < groups.len() {
+                    selected += 1;
+                }
+            }
+            KeyCode::PageUp => selected = selected.saturating_sub(10),
+            KeyCode::PageDown => {
+                selected = (selected + 10).min(groups.len().saturating_sub(1));
+            }
+            KeyCode::Home => selected = 0,
+            KeyCode::End => selected = groups.len().saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+fn draw_export_workdir_picker(
+    stdout: &mut io::Stdout,
+    groups: &[WorkdirGroup],
+    selected: usize,
+    list_scroll: usize,
+    list_height: usize,
+    term_cols: usize,
+    cwd_key: Option<&str>,
+) -> Result<(), AppError> {
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))
+        .map_err(|e| AppError::Message(format!("terminal draw failed: {e}")))?;
+
+    let mut row: u16 = 0;
+    write_line(
+        stdout,
+        row,
+        term_cols,
+        "Select a work directory",
+        CtColor::Cyan,
+        true,
+    )?;
+    row += 1;
+    write_line(
+        stdout,
+        row,
+        term_cols,
+        "↑/↓ move  Enter open  Esc cancel",
+        CtColor::DarkGrey,
+        false,
+    )?;
+    row += 1;
+
+    let end = (list_scroll + list_height).min(groups.len());
+    for (visible_i, index) in (list_scroll..end).enumerate() {
+        let group = &groups[index];
+        let marker = if index == selected { ">" } else { " " };
+        let current_mark = if cwd_key.is_some_and(|c| c == group.key) {
+            "  (current)"
+        } else {
+            ""
+        };
+        let line = format!(
+            "{marker} {:>3}. {}  ({} sessions){}",
+            index + 1,
+            group.display,
+            group.sessions.len(),
+            current_mark
+        );
+        let is_sel = index == selected;
+        write_line(
+            stdout,
+            row + visible_i as u16,
+            term_cols,
+            &line,
+            if is_sel {
+                CtColor::Yellow
+            } else {
+                CtColor::Reset
+            },
+            is_sel,
+        )?;
+    }
+
+    stdout
+        .flush()
+        .map_err(|e| AppError::Message(format!("terminal flush failed: {e}")))?;
+    Ok(())
 }
 
 fn load_export_choice(

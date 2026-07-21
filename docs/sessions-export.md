@@ -11,18 +11,27 @@ Supported apps: `claude`, `codex`, `gemini`, `opencode`, `openclaw`, `hermes`, `
 
 ## Commands
 
-### Interactive export (picker)
+### Interactive export (two-step picker)
 
 ```bash
 cc-switch --app grok sessions export
 cc-switch --app claude sessions export -o ./share.json
 ```
 
-1. Scans sessions for the given app (newest first).
-2. Opens a terminal picker.
-3. After you press `Enter`, writes JSON to disk.
+1. Scans sessions for the given app.
+2. **Step 1 — work directory**: groups sessions by `projectDir` / cwd (sessions without a workdir are hidden). Shows only the **last path component** (e.g. `cc-switch-cli`). If the process cwd matches a group, that row is pre-selected and marked `(current)`.
+3. **Step 2 — session**: lists sessions under the chosen workdir (newest first).
+4. After you press `Enter` on a session, writes JSON to disk.
 
-**Picker keys**
+**Workdir picker keys**
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | Move selection |
+| `Enter` | Open this workdir’s sessions |
+| `Esc` | Cancel |
+
+**Session picker keys**
 
 | Key | Action |
 |-----|--------|
@@ -32,7 +41,7 @@ cc-switch --app claude sessions export -o ./share.json
 | `Esc` | Collapse preview, or cancel if already collapsed |
 | `PageUp` / `PageDown` | Jump in the list or preview |
 
-List labels:
+Session list labels:
 
 - Prefer a **session name/title** when the agent provides one.
 - Otherwise show the **last user message** (first 10 characters).
@@ -57,7 +66,7 @@ Resolution rules:
 3. Zero matches → error `Session '…' was not found.`
 4. Multiple prefix matches → error listing candidates (ambiguous).
 
-`--id` skips the interactive picker. You still must pass `--app`.
+`--id` skips the interactive pickers (both workdir and session). You still must pass `--app`. Matching runs across **all** sessions of that app (not limited to the current workdir).
 
 ## Output path
 
