@@ -143,6 +143,7 @@ fn build_provider_from_request(
         AppType::Hermes => build_hermes_settings(request),
         AppType::OpenClaw => build_openclaw_settings(request),
         AppType::Pi => build_openclaw_settings(request),
+        AppType::Grok => build_grok_settings(request),
     };
 
     let meta = build_provider_meta(request)?;
@@ -381,6 +382,35 @@ fn build_hermes_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
         settings.insert("model".to_string(), json!(model));
     }
 
+    Value::Object(settings)
+}
+
+fn build_grok_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+    let endpoint = get_primary_endpoint(request);
+    let mut settings = serde_json::Map::new();
+    settings.insert(
+        "name".to_string(),
+        json!(request.name.clone().unwrap_or_else(|| "custom".to_string())),
+    );
+    if !endpoint.is_empty() {
+        settings.insert(
+            "base_url".to_string(),
+            json!(endpoint.trim_end_matches('/')),
+        );
+    }
+    if let Some(api_key) = &request.api_key {
+        settings.insert("api_key".to_string(), json!(api_key));
+    }
+    if let Some(model) = request
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        settings.insert("model".to_string(), json!(model));
+    } else {
+        settings.insert("model".to_string(), json!("grok-4.5"));
+    }
+    settings.insert("api_backend".to_string(), json!("chat_completions"));
     Value::Object(settings)
 }
 

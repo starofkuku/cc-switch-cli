@@ -26,6 +26,8 @@ pub(crate) fn should_sync_live(app_type: &AppType) -> bool {
         AppType::OpenClaw => get_openclaw_dir().exists(),
         // Pi is initialized when its global agent directory exists.
         AppType::Pi => crate::pi_config::get_pi_dir().exists(),
+        // Grok is initialized when ~/.grok (or GROK_HOME) exists.
+        AppType::Grok => crate::grok_config::get_grok_dir().exists(),
     }
 }
 

@@ -29,6 +29,7 @@ pub fn ensure_test_home() -> &'static Path {
     std::env::set_var("CC_SWITCH_CONFIG_DIR", home.join(".cc-switch"));
     std::env::set_var("CLAUDE_CONFIG_DIR", home.join(".claude"));
     std::env::set_var("CODEX_HOME", home.join(".codex"));
+    std::env::set_var("GROK_HOME", home.join(".grok"));
     home.as_path()
 }
 
@@ -42,6 +43,7 @@ pub fn reset_test_fs() {
         ".cc-switch",
         ".gemini",
         ".openclaw",
+        ".grok",
         ".config",
         ".runtime",
         ".state",

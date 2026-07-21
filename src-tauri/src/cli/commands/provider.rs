@@ -370,9 +370,12 @@ fn prompt_and_apply_provider_api_format(
     match app_type {
         AppType::Claude => prompt_and_apply_claude_api_format(app_type, provider),
         AppType::Codex => prompt_and_apply_codex_api_format(app_type, provider),
-        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
-            Ok(())
-        }
+        AppType::Gemini
+        | AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok => Ok(()),
     }
 }
 
@@ -556,8 +559,9 @@ pub enum ProviderCommand {
     },
     /// Add a new provider.
     ///
-    /// For Claude/Codex in a TTY without flags, opens an interactive wizard
-    /// (Custom or models.dev catalog). Pass flags for non-interactive add.
+    /// In a TTY without flags: optionally clone from another app's provider,
+    /// then (Claude/Codex) Custom or models.dev catalog wizard.
+    /// Pass flags for non-interactive add.
     Add {
         /// Provider template to apply before creation
         #[arg(long, value_enum)]
@@ -1175,7 +1179,7 @@ fn build_add_settings_config(
             }
             None => Ok(build_gemini_oauth_settings_config(current)),
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
             Err(add_additive_requires_config_error(app_type))
         }
     }
@@ -1246,8 +1250,12 @@ fn apply_add_provider_api_format(
             };
             apply_codex_api_format(provider, format);
         }
-        AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
-        }
+        AppType::Gemini
+        | AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok => {}
     }
     Ok(())
 }
@@ -1289,11 +1297,10 @@ fn add_has_noninteractive_input(args: &AddProviderArgs) -> bool {
 }
 
 fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError> {
-    // Claude/Codex TTY with no flags → interactive Custom / models.dev wizard.
-    if crate::cli::commands::provider_add_wizard::should_run_catalog_wizard(
-        &app_type,
-        add_has_noninteractive_input(&args),
-    ) {
+    let noninteractive = add_has_noninteractive_input(&args);
+
+    // TTY without flags: offer clone-from-other-app first, then catalog wizard (Claude/Codex).
+    if crate::cli::commands::provider_clone::should_offer_clone(noninteractive) {
         let state = AppState::try_new()?;
         let config = state.config.read().unwrap();
         let manager = config
@@ -1302,16 +1309,35 @@ fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError
         let existing_ids: Vec<String> = manager.providers.keys().cloned().collect();
         drop(config);
 
-        let (provider, prompt_result) =
-            crate::cli::commands::provider_add_wizard::run_catalog_add_wizard(
-                &app_type,
-                &existing_ids,
-            )?;
-        return crate::cli::commands::provider_add_wizard::finish_wizard_add(
-            app_type,
-            provider,
-            prompt_result,
-        );
+        if let Some(provider) =
+            crate::cli::commands::provider_clone::maybe_clone_provider(&app_type, &existing_ids)?
+        {
+            display_provider_summary(&provider, &app_type);
+            let provider_id = provider.id.clone();
+            ProviderService::add(&state, app_type, provider)?;
+            println!(
+                "\n{}",
+                success(&texts::entity_added_success(
+                    texts::entity_provider(),
+                    &provider_id
+                ))
+            );
+            return Ok(());
+        }
+
+        // Declined clone → Claude/Codex catalog/custom wizard.
+        if crate::cli::commands::provider_add_wizard::supports_catalog_wizard(&app_type) {
+            let (provider, prompt_result) =
+                crate::cli::commands::provider_add_wizard::run_catalog_add_wizard(
+                    &app_type,
+                    &existing_ids,
+                )?;
+            return crate::cli::commands::provider_add_wizard::finish_wizard_add(
+                app_type,
+                provider,
+                prompt_result,
+            );
+        }
     }
 
     let name = non_empty(args.name.clone()).ok_or_else(add_requires_name_error)?;
@@ -1590,6 +1616,10 @@ fn existing_provider_ids_for_duplicate(
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),
             AppType::Pi => crate::pi_config::get_providers()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            AppType::Grok => crate::grok_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),

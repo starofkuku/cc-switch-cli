@@ -7,6 +7,19 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.3] - 2026-07-21
+
+### Added
+
+- **Apps / Grok**: Add first-class support for Grok Build (`--app grok`), managing custom `[model.*]` endpoints in `$GROK_HOME/config.toml` (default `~/.grok/config.toml`) with additive provider switch/import and rejection when deleting the current default model.
+- **CLI / Sessions export**: `sessions export` interactively exports one session to a `ccswitch-session` JSON file (requires `--app`). Default output path can be overridden with `-o`.
+- **Sessions / Grok & Pi**: Scan and load Grok (`~/.grok/sessions/...`) and Pi (`~/.pi/agent/sessions/...`) conversation history for list/show/export.
+- **CLI / Session preview**: In the export picker, press **Ctrl+E** to expand the selected session's user/assistant transcript; **Esc** or **Ctrl+E** collapses it. User lines render in green for contrast.
+
+### Fixed
+
+- **Sessions / Grok**: Parse `chat_history.jsonl` speaker from `type` as well as `role`, so Grok Build transcripts are no longer empty in preview/export.
+
 ## [5.10.2] - 2026-07-20
 
 ### Added

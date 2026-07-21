@@ -197,6 +197,9 @@ enum PreparedLiveWrite {
     Pi {
         models: Value,
     },
+    Grok {
+        document: String,
+    },
 }
 
 #[derive(Clone)]
@@ -208,7 +211,10 @@ enum PreparedCodexAuthWrite {
 
 impl ProviderService {
     pub fn is_provider_key_app(app_type: &AppType) -> bool {
-        matches!(app_type, AppType::OpenClaw | AppType::Hermes | AppType::Pi)
+        matches!(
+            app_type,
+            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Grok
+        )
     }
 
     pub fn is_valid_provider_key(value: &str) -> bool {
@@ -320,6 +326,10 @@ impl ProviderService {
                 .map(|(id, _)| id)
                 .collect(),
             AppType::Pi => crate::pi_config::get_providers()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect(),
+            AppType::Grok => crate::grok_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect(),
@@ -615,6 +625,8 @@ impl ProviderService {
                 .map(|ids| ids.is_some_and(|ids| ids.contains(provider_id))),
             AppType::Pi => crate::pi_config::get_providers()
                 .map(|providers| providers.contains_key(provider_id)),
+            AppType::Grok => crate::grok_config::get_providers()
+                .map(|providers| providers.contains_key(provider_id)),
             _ => Ok(false),
         };
 
@@ -825,13 +837,19 @@ impl ProviderService {
         match &prepared.effect {
             PreparedPostCommitEffect::Live(live) => {
                 Self::apply_prepared_live_snapshot(live)?;
-                if prepared.action.activate_provider
-                    && matches!(prepared.action.app_type, AppType::Hermes)
-                {
-                    crate::hermes_config::set_current_provider(
-                        &prepared.action.provider.id,
-                        &prepared.action.provider.settings_config,
-                    )?;
+                if prepared.action.activate_provider {
+                    match prepared.action.app_type {
+                        AppType::Hermes => {
+                            crate::hermes_config::set_current_provider(
+                                &prepared.action.provider.id,
+                                &prepared.action.provider.settings_config,
+                            )?;
+                        }
+                        AppType::Grok => {
+                            // Default model is already set in prepare_switch_document.
+                        }
+                        _ => {}
+                    }
                 }
             }
             PreparedPostCommitEffect::ProxyLiveBackup {
@@ -1242,6 +1260,25 @@ impl ProviderService {
                 drop(guard);
                 state.save()?;
             }
+            AppType::Grok => {
+                let providers = crate::grok_config::get_providers()?;
+                let live_after = providers.get(provider_id).cloned().ok_or_else(|| {
+                    AppError::localized(
+                        "grok.live.missing_provider",
+                        format!("Grok live 配置中缺少供应商: {provider_id}"),
+                        format!("Grok live config missing provider: {provider_id}"),
+                    )
+                })?;
+                let mut guard = state.config.write().map_err(AppError::from)?;
+                if let Some(target) = guard
+                    .get_manager_mut(app_type)
+                    .and_then(|manager| manager.providers.get_mut(provider_id))
+                {
+                    target.settings_config = live_after;
+                }
+                drop(guard);
+                state.save()?;
+            }
         }
         Ok(())
     }
@@ -1297,7 +1334,11 @@ impl ProviderService {
                 strict_current_provider_id,
                 old_snippet,
             ),
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(()),
+            AppType::OpenCode
+            | AppType::Hermes
+            | AppType::OpenClaw
+            | AppType::Pi
+            | AppType::Grok => Ok(()),
         };
 
         match result {
@@ -1419,7 +1460,11 @@ impl ProviderService {
             }
             AppType::Gemini => live_settings.get("env") != provider_settings.get("env"),
             AppType::Claude => live_settings != provider_settings,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
+            AppType::OpenCode
+            | AppType::Hermes
+            | AppType::OpenClaw
+            | AppType::Pi
+            | AppType::Grok => false,
         }
     }
 
@@ -1555,6 +1600,7 @@ impl ProviderService {
             AppType::Hermes => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Pi => Self::extract_openclaw_common_config(settings_config),
+            AppType::Grok => Ok(String::new()),
         }
     }
 
@@ -1935,6 +1981,9 @@ impl ProviderService {
             return crate::hermes_config::get_current_provider_id()
                 .map(|opt| opt.unwrap_or_default());
         }
+        if matches!(app_type, AppType::Grok) {
+            return crate::grok_config::get_default_model().map(|opt| opt.unwrap_or_default());
+        }
         if app_type.is_additive_mode() {
             return Ok(String::new());
         }
@@ -2259,6 +2308,7 @@ impl ProviderService {
             AppType::Hermes => unreachable!("additive mode apps are handled earlier"),
             AppType::OpenClaw => unreachable!("additive mode apps are handled earlier"),
             AppType::Pi => unreachable!("additive mode apps are handled earlier"),
+            AppType::Grok => unreachable!("additive mode apps are handled earlier"),
         };
 
         let mut provider = Provider::with_id(
@@ -2409,6 +2459,22 @@ impl ProviderService {
                 }
                 crate::pi_config::read_pi_models()
             }
+            AppType::Grok => {
+                let path = crate::grok_config::get_grok_config_path();
+                if !path.exists() {
+                    return Err(AppError::localized(
+                        "grok.config.missing",
+                        "Grok config.toml 配置文件不存在",
+                        "Grok config.toml configuration file not found",
+                    ));
+                }
+                let providers = crate::grok_config::get_providers()?;
+                let default = crate::grok_config::get_default_model()?;
+                Ok(json!({
+                    "default": default,
+                    "models": providers,
+                }))
+            }
         }
     }
 
@@ -2487,6 +2553,11 @@ impl ProviderService {
                     crate::pi_config::remove_provider(provider_id)?;
                 }
             }
+            AppType::Grok => {
+                if crate::grok_config::get_grok_dir().exists() {
+                    crate::grok_config::remove_model(provider_id)?;
+                }
+            }
             _ => unreachable!("non-additive apps should not enter remove-from-live branch"),
         }
 
@@ -2536,6 +2607,7 @@ impl ProviderService {
             AppType::OpenClaw => Self::import_openclaw_providers_from_live(state),
             AppType::Hermes => Self::import_hermes_providers_from_live(state),
             AppType::Pi => live::import_pi_providers_from_live(state),
+            AppType::Grok => live::import_grok_providers_from_live(state),
             _ => Self::import_default_config(state, app_type).map(usize::from),
         }
     }
@@ -2562,10 +2634,14 @@ impl ProviderService {
                 })?;
                 crate::pi_config::set_default_model(provider_id, model_id)
             }
+            AppType::Grok => {
+                Self::switch(state, AppType::Grok, provider_id)?;
+                Ok(provider_id.to_string())
+            }
             _ => Err(AppError::localized(
                 "provider.set_default_model.unsupported",
-                "只有 Hermes、OpenClaw 和 Pi 支持设置默认供应商/模型",
-                "Only Hermes, OpenClaw, and Pi support setting a default provider/model",
+                "只有 Hermes、OpenClaw、Pi 和 Grok 支持设置默认供应商/模型",
+                "Only Hermes, OpenClaw, Pi, and Grok support setting a default provider/model",
             )),
         }
     }
@@ -2655,6 +2731,15 @@ impl ProviderService {
                     "provider.remove_from_config.openclaw_default",
                     "不能从配置中移除被当前默认模型引用的 OpenClaw 供应商",
                     "Cannot remove the OpenClaw provider referenced by the current default model from config",
+                ))
+            }
+            AppType::Grok
+                if crate::grok_config::get_default_model()?.as_deref() == Some(provider_id) =>
+            {
+                Err(AppError::localized(
+                    "provider.remove_from_config.grok_current",
+                    "无法删除当前正在使用的供应商，请先切换到其他供应商后再删除",
+                    "Cannot delete the current provider; switch to another provider first",
                 ))
             }
             _ => Ok(()),
@@ -2795,7 +2880,7 @@ impl ProviderService {
                 previous_common_config_snippet: None,
                 takeover_active: false,
                 sync_proxy_live: false,
-                activate_provider: matches!(app_type, AppType::Hermes),
+                activate_provider: matches!(app_type, AppType::Hermes | AppType::Grok),
             });
         }
 
@@ -2822,6 +2907,7 @@ impl ProviderService {
             AppType::Hermes => unreachable!("additive mode handled above"),
             AppType::OpenClaw => unreachable!("additive mode handled above"),
             AppType::Pi => unreachable!("additive mode handled above"),
+            AppType::Grok => unreachable!("additive mode handled above"),
         };
 
         Ok(PostCommitAction {
@@ -3044,6 +3130,13 @@ impl ProviderService {
                 )?;
                 Ok(PreparedLiveWrite::Pi { models })
             }
+            AppType::Grok => {
+                let document = crate::grok_config::prepare_switch_document(
+                    &provider.id,
+                    &provider.settings_config,
+                )?;
+                Ok(PreparedLiveWrite::Grok { document })
+            }
         }
     }
 
@@ -3067,6 +3160,9 @@ impl ProviderService {
                     .map_err(Self::normalize_openclaw_live_write_error)
             }
             PreparedLiveWrite::Pi { models } => crate::pi_config::write_pi_models(models),
+            PreparedLiveWrite::Grok { document } => {
+                crate::grok_config::write_prepared_document(document)
+            }
         }
     }
 
@@ -3286,6 +3382,9 @@ impl ProviderService {
             AppType::Pi => Err(AppError::Config(
                 "Pi does not support proxy takeover backups".into(),
             )),
+            AppType::Grok => Err(AppError::Config(
+                "Grok does not support proxy takeover backups".into(),
+            )),
         }
     }
 
@@ -3438,6 +3537,9 @@ impl ProviderService {
                     }
                 }
             }
+            AppType::Grok => {
+                crate::grok_config::validate_settings(&provider.settings_config)?;
+            }
         }
 
         // 🔧 验证并清理 UsageScript 配置（所有应用类型通用）
@@ -3566,6 +3668,7 @@ impl ProviderService {
         };
 
         if app_type.is_additive_mode() {
+            Self::guard_additive_default_provider_removal(&app_type, provider_id)?;
             match app_type {
                 AppType::OpenCode => {
                     if crate::opencode_config::get_opencode_dir().exists() {
@@ -3585,6 +3688,11 @@ impl ProviderService {
                 AppType::Pi => {
                     if crate::pi_config::get_pi_dir().exists() {
                         crate::pi_config::remove_provider(provider_id)?;
+                    }
+                }
+                AppType::Grok => {
+                    if crate::grok_config::get_grok_dir().exists() {
+                        crate::grok_config::remove_model(provider_id)?;
                     }
                 }
                 _ => unreachable!("non-additive apps should not enter additive delete branch"),
@@ -3631,6 +3739,9 @@ impl ProviderService {
             AppType::Pi => {
                 let _ = provider_snapshot;
             }
+            AppType::Grok => {
+                let _ = provider_snapshot;
+            }
         }
 
         {
@@ -3670,6 +3781,10 @@ impl ProviderService {
 
     pub fn import_opencode_providers_from_live(state: &AppState) -> Result<usize, AppError> {
         live::import_opencode_providers_from_live(state)
+    }
+
+    pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+        live::import_grok_providers_from_live(state)
     }
 }
 

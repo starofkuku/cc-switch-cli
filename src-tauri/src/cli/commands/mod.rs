@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod prompts;
 pub mod provider;
 pub(crate) mod provider_add_wizard;
+pub(crate) mod provider_clone;
 pub mod provider_input;
 mod provider_inspect;
 pub mod provider_usage_query;

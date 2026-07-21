@@ -28,7 +28,7 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw | AppType::Pi => false,
+            AppType::OpenClaw | AppType::Pi | AppType::Grok => false,
         }
     }
 
@@ -40,7 +40,7 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw | AppType::Pi => {}
+            AppType::OpenClaw | AppType::Pi | AppType::Grok => {}
         }
     }
 
@@ -94,7 +94,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw | AppType::Pi => false,
+            AppType::OpenClaw | AppType::Pi | AppType::Grok => false,
         }
     }
 
@@ -105,7 +105,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw | AppType::Pi => {}
+            AppType::OpenClaw | AppType::Pi | AppType::Grok => {}
         }
     }
 
@@ -241,6 +241,8 @@ pub struct McpRoot {
     pub openclaw: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub pi: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub grok: McpConfig,
 }
 
 impl Default for McpRoot {
@@ -256,6 +258,7 @@ impl Default for McpRoot {
             hermes: McpConfig::default(),
             openclaw: McpConfig::default(),
             pi: McpConfig::default(),
+            grok: McpConfig::default(),
         }
     }
 }
@@ -284,6 +287,8 @@ pub struct PromptRoot {
     pub openclaw: PromptConfig,
     #[serde(default)]
     pub pi: PromptConfig,
+    #[serde(default)]
+    pub grok: PromptConfig,
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -301,6 +306,7 @@ pub enum AppType {
     Hermes,
     OpenClaw,
     Pi,
+    Grok,
 }
 
 impl AppType {
@@ -313,13 +319,14 @@ impl AppType {
             AppType::Hermes => "hermes",
             AppType::OpenClaw => "openclaw",
             AppType::Pi => "pi",
+            AppType::Grok => "grok",
         }
     }
 
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok
         )
     }
 
@@ -336,6 +343,7 @@ impl AppType {
             AppType::Hermes,
             AppType::OpenClaw,
             AppType::Pi,
+            AppType::Grok,
         ]
         .into_iter()
     }
@@ -360,13 +368,14 @@ impl FromStr for AppType {
             "hermes" => Ok(AppType::Hermes),
             "openclaw" => Ok(AppType::OpenClaw),
             "pi" => Ok(AppType::Pi),
+            "grok" => Ok(AppType::Grok),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(
-                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi。"
+                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi, grok。"
                 ),
                 format!(
-                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi."
+                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi, grok."
                 ),
             )),
         }
@@ -396,6 +405,9 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grok: Option<String>,
 }
 
 impl CommonConfigSnippets {
@@ -409,6 +421,7 @@ impl CommonConfigSnippets {
             AppType::Hermes => self.hermes.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Pi => self.pi.as_ref(),
+            AppType::Grok => self.grok.as_ref(),
         }
     }
 
@@ -422,6 +435,7 @@ impl CommonConfigSnippets {
             AppType::Hermes => self.hermes = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Pi => self.pi = snippet,
+            AppType::Grok => self.grok = snippet,
         }
     }
 }
@@ -465,6 +479,7 @@ impl Default for MultiAppConfig {
         apps.insert("hermes".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("pi".to_string(), ProviderManager::default());
+        apps.insert("grok".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -579,6 +594,13 @@ impl MultiAppConfig {
             updated = true;
         }
 
+        if !config.apps.contains_key("grok") {
+            config
+                .apps
+                .insert("grok".to_string(), ProviderManager::default());
+            updated = true;
+        }
+
         // 执行 MCP 迁移（v3.6.x → v3.7.0）
         let migrated = config.migrate_mcp_to_unified()?;
         if migrated {
@@ -646,6 +668,7 @@ impl MultiAppConfig {
             AppType::Hermes => &self.mcp.hermes,
             AppType::OpenClaw => &self.mcp.openclaw,
             AppType::Pi => &self.mcp.pi,
+            AppType::Grok => &self.mcp.grok,
         }
     }
 
@@ -659,6 +682,7 @@ impl MultiAppConfig {
             AppType::Hermes => &mut self.mcp.hermes,
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::Pi => &mut self.mcp.pi,
+            AppType::Grok => &mut self.mcp.grok,
         }
     }
 
@@ -695,7 +719,7 @@ impl MultiAppConfig {
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::Hermes => &self.mcp.hermes.servers,
-                AppType::OpenClaw => continue,
+                AppType::OpenClaw | AppType::Grok => continue,
                 AppType::Pi => &self.mcp.pi.servers,
             };
 

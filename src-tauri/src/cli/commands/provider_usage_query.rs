@@ -661,7 +661,7 @@ fn provider_comment_credentials<'a>(
                 .or_else(|| settings.get("auth_token"))
                 .and_then(|value| value.as_str()),
         ),
-        AppType::OpenClaw | AppType::Pi => (
+        AppType::OpenClaw | AppType::Pi | AppType::Grok => (
             settings
                 .get("baseUrl")
                 .and_then(|value| value.as_str())

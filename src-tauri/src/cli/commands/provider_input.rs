@@ -140,7 +140,9 @@ pub fn common_snippet_has_effective_config(
             .ok()
             .and_then(|value| value.as_object().cloned())
             .is_some_and(|obj| !obj.is_empty()),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+            false
+        }
     }
 }
 
@@ -492,7 +494,7 @@ pub fn provider_add_template_choices(app_type: &AppType) -> &'static [ProviderAd
         AppType::Gemini => &PROVIDER_TEMPLATE_CHOICES_GEMINI,
         AppType::OpenCode => &PROVIDER_TEMPLATE_CHOICES_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_CHOICES_HERMES,
-        AppType::OpenClaw | AppType::Pi => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
+        AppType::OpenClaw | AppType::Pi | AppType::Grok => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
     }
 }
 
@@ -1053,7 +1055,7 @@ fn build_sponsor_template_settings_config(
                 )
             }
         }
-        AppType::OpenClaw | AppType::Pi => {
+        AppType::OpenClaw | AppType::Pi | AppType::Grok => {
             if preset.id == ProviderAddTemplate::Aicodemirror {
                 build_openclaw_settings_config(
                     None,
@@ -3400,8 +3402,12 @@ fn prompt_openclaw_config(current: Option<&Value>) -> Result<Value, AppError> {
         .prompt()
         .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
-    let models_value =
-        prompt_openclaw_models_json(&api_key, &base_url, &defaults.models_json, current.is_none())?;
+    let models_value = prompt_openclaw_models_json(
+        &api_key,
+        &base_url,
+        &defaults.models_json,
+        current.is_none(),
+    )?;
 
     build_openclaw_settings_config_with_optional_models(
         current,
@@ -3450,8 +3456,8 @@ fn prompt_openclaw_models_json(
                     .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
                     if !selected.is_empty() {
-                        let catalog = crate::services::models_dev::ModelsDevCatalog::load_or_fetch()
-                            .ok();
+                        let catalog =
+                            crate::services::models_dev::ModelsDevCatalog::load_or_fetch().ok();
                         if catalog.is_none() {
                             println!(
                                 "{}",
@@ -3495,9 +3501,8 @@ fn prompt_openclaw_models_json(
                             existing.push(entry);
                         }
 
-                        working_json = serde_json::to_string_pretty(&existing).unwrap_or_else(
-                            |_| "[]".to_string(),
-                        );
+                        working_json = serde_json::to_string_pretty(&existing)
+                            .unwrap_or_else(|_| "[]".to_string());
                         println!(
                             "{}",
                             info(&format!(
@@ -3515,9 +3520,7 @@ fn prompt_openclaw_models_json(
                 Err(err) => {
                     println!(
                         "{}",
-                        info(&format!(
-                            "Fetch failed ({err}); edit Models JSON manually."
-                        ))
+                        info(&format!("Fetch failed ({err}); edit Models JSON manually."))
                     );
                 }
             }
@@ -3926,10 +3929,126 @@ pub fn prompt_settings_config(
         AppType::Gemini => prompt_gemini_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenCode => prompt_opencode_config(current).map(SettingsConfigPromptResult::new),
         AppType::Hermes => prompt_hermes_config(current).map(SettingsConfigPromptResult::new),
+        AppType::Grok => prompt_grok_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenClaw | AppType::Pi => {
             prompt_openclaw_config(current).map(SettingsConfigPromptResult::new)
         }
     }
+}
+
+fn prompt_grok_config(current: Option<&Value>) -> Result<Value, AppError> {
+    println!("\n{}", "Grok".bright_cyan().bold());
+
+    let existing_model = current
+        .and_then(|v| v.get("model"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_base_url = current
+        .and_then(|v| v.get("base_url"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_api_key = current
+        .and_then(|v| v.get("api_key"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_name = current
+        .and_then(|v| v.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_backend = current
+        .and_then(|v| v.get("api_backend"))
+        .and_then(Value::as_str)
+        .unwrap_or("chat_completions");
+
+    let backends = vec![
+        "chat_completions".to_string(),
+        "responses".to_string(),
+        "messages".to_string(),
+    ];
+    let backend_index = backends
+        .iter()
+        .position(|candidate| candidate == existing_backend)
+        .unwrap_or(0);
+
+    let model = if existing_model.is_empty() {
+        Text::new(texts::model_label())
+            .with_placeholder("grok-4.5")
+            .prompt()
+    } else {
+        Text::new(texts::model_label())
+            .with_initial_value(existing_model)
+            .prompt()
+    }
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    let base_url = if existing_base_url.is_empty() {
+        Text::new(texts::base_url_display_label())
+            .with_placeholder("https://api.x.ai/v1")
+            .prompt()
+    } else {
+        Text::new(texts::base_url_display_label())
+            .with_initial_value(existing_base_url)
+            .prompt()
+    }
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    let api_key = if existing_api_key.is_empty() {
+        Text::new(texts::api_key_label())
+            .with_placeholder("xai-...")
+            .with_help_message(texts::api_key_help())
+            .prompt()
+    } else {
+        Text::new(texts::api_key_label())
+            .with_initial_value(existing_api_key)
+            .with_help_message(texts::api_key_help())
+            .prompt()
+    }
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    let api_backend = Select::new("API backend", backends)
+        .with_starting_cursor(backend_index)
+        .prompt()
+        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    let name = if existing_name.is_empty() {
+        Text::new(texts::name_display_label())
+            .with_placeholder(&model)
+            .prompt()
+    } else {
+        Text::new(texts::name_display_label())
+            .with_initial_value(existing_name)
+            .prompt()
+    }
+    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    build_grok_settings_config(&model, &base_url, &api_key, &api_backend, &name)
+}
+
+fn build_grok_settings_config(
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+    api_backend: &str,
+    name: &str,
+) -> Result<Value, AppError> {
+    let mut settings = json!({
+        "model": model.trim(),
+        "base_url": base_url.trim().trim_end_matches('/'),
+    });
+    let obj = settings
+        .as_object_mut()
+        .expect("settings object just created");
+    if !api_key.trim().is_empty() {
+        obj.insert("api_key".to_string(), json!(api_key.trim()));
+    }
+    if !api_backend.trim().is_empty() {
+        obj.insert("api_backend".to_string(), json!(api_backend.trim()));
+    }
+    if !name.trim().is_empty() {
+        obj.insert("name".to_string(), json!(name.trim()));
+    }
+    crate::grok_config::validate_settings(&settings)?;
+    Ok(settings)
 }
 
 /// 提示用户输入单个模型字段
@@ -3986,10 +4105,7 @@ fn prompt_model_text(
 }
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint (and candidates).
-pub(crate) fn fetch_models_from_v1(
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<String>, AppError> {
+pub(crate) fn fetch_models_from_v1(base_url: &str, api_key: &str) -> Result<Vec<String>, AppError> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| AppError::Message(format!("Failed to create async runtime: {e}")))?;
     runtime.block_on(ProviderService::fetch_provider_models(
@@ -4026,13 +4142,11 @@ pub(crate) fn prompt_model_with_optional_v1_fetch(
     let can_fetch = !base_url.is_empty() && !api_key.is_empty();
 
     if can_fetch && remote_models.is_none() {
-        let fetch = Confirm::new(&format!(
-            "Fetch models from /v1/models for {field_name}?"
-        ))
-        .with_default(true)
-        .with_help_message("Uses the Base URL and API key you just entered")
-        .prompt()
-        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+        let fetch = Confirm::new(&format!("Fetch models from /v1/models for {field_name}?"))
+            .with_default(true)
+            .with_help_message("Uses the Base URL and API key you just entered")
+            .prompt()
+            .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
         if fetch {
             println!("{}", info("Fetching models…"));
@@ -4041,18 +4155,13 @@ pub(crate) fn prompt_model_with_optional_v1_fetch(
                     *remote_models = Some(models);
                 }
                 Ok(_) => {
-                    println!(
-                        "{}",
-                        info("No models returned; type a model id manually.")
-                    );
+                    println!("{}", info("No models returned; type a model id manually."));
                     *remote_models = Some(Vec::new());
                 }
                 Err(err) => {
                     println!(
                         "{}",
-                        info(&format!(
-                            "Fetch failed ({err}); type a model id manually."
-                        ))
+                        info(&format!("Fetch failed ({err}); type a model id manually."))
                     );
                     *remote_models = Some(Vec::new());
                 }
@@ -4085,13 +4194,10 @@ pub(crate) fn prompt_model_with_optional_v1_fetch(
         });
     }
 
-    let picked = Select::new(
-        &format!("{field_name} (type to filter)"),
-        items,
-    )
-    .with_page_size(15)
-    .prompt()
-    .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+    let picked = Select::new(&format!("{field_name} (type to filter)"), items)
+        .with_page_size(15)
+        .prompt()
+        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
 
     if picked.label.starts_with("Type model id") {
         return prompt_model_text(field_name, placeholder, existing);
@@ -4799,6 +4905,40 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
                 .and_then(|v| v.as_array())
             {
                 println!("  {}: {}", texts::model_label(), models.len());
+            }
+        }
+        AppType::Grok => {
+            if let Some(api_key) = provider
+                .settings_config
+                .get("api_key")
+                .and_then(|v| v.as_str())
+            {
+                println!(
+                    "  {}: {}",
+                    texts::api_key_display_label(),
+                    mask_api_key(api_key)
+                );
+            }
+            if let Some(base_url) = provider
+                .settings_config
+                .get("base_url")
+                .and_then(|v| v.as_str())
+            {
+                println!("  {}: {}", texts::base_url_display_label(), base_url);
+            }
+            if let Some(model) = provider
+                .settings_config
+                .get("model")
+                .and_then(|v| v.as_str())
+            {
+                println!("  {}: {}", texts::model_label(), model);
+            }
+            if let Some(backend) = provider
+                .settings_config
+                .get("api_backend")
+                .and_then(|v| v.as_str())
+            {
+                println!("  API backend: {backend}");
             }
         }
         AppType::OpenClaw | AppType::Pi => {

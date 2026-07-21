@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
-use providers::{claude, codex, gemini, hermes, openclaw, opencode};
+use providers::{claude, codex, gemini, grok, hermes, openclaw, opencode, pi};
 use scan_cache_store::ScanCacheStore;
 
 /// Session metadata as rendered on the Sessions page.
@@ -196,13 +196,15 @@ pub struct DeleteSessionOutcome {
 
 #[allow(dead_code)]
 pub fn scan_sessions() -> Vec<SessionMeta> {
-    let (r1, r2, r3, r4, r5, r6) = std::thread::scope(|s| {
+    let (r1, r2, r3, r4, r5, r6, r7, r8) = std::thread::scope(|s| {
         let h1 = s.spawn(codex::scan_sessions);
         let h2 = s.spawn(claude::scan_sessions);
         let h3 = s.spawn(opencode::scan_sessions);
         let h4 = s.spawn(openclaw::scan_sessions);
         let h5 = s.spawn(gemini::scan_sessions);
         let h6 = s.spawn(hermes::scan_sessions);
+        let h7 = s.spawn(grok::scan_sessions);
+        let h8 = s.spawn(pi::scan_sessions);
         (
             h1.join().unwrap_or_default(),
             h2.join().unwrap_or_default(),
@@ -210,6 +212,8 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
             h4.join().unwrap_or_default(),
             h5.join().unwrap_or_default(),
             h6.join().unwrap_or_default(),
+            h7.join().unwrap_or_default(),
+            h8.join().unwrap_or_default(),
         )
     });
 
@@ -220,6 +224,8 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
     sessions.extend(r4);
     sessions.extend(r5);
     sessions.extend(r6);
+    sessions.extend(r7);
+    sessions.extend(r8);
 
     sort_by_recent(&mut sessions);
     sessions
@@ -243,6 +249,8 @@ pub(crate) fn scan_sessions_unordered_for_provider(provider_id: &str) -> Vec<Ses
         "openclaw" => openclaw::scan_sessions(),
         "gemini" => gemini::scan_sessions(),
         "hermes" => hermes::scan_sessions(),
+        "grok" => grok::scan_sessions(),
+        "pi" => pi::scan_sessions(),
         _ => Vec::new(),
     }
 }
@@ -261,8 +269,8 @@ pub(crate) fn sort_by_recent(sessions: &mut [SessionMeta]) {
 /// SQLite-only sources (opencode.db / hermes state.db) are queried inside their
 /// provider module and are intentionally not covered by the file cache.
 /// pub(crate)：TUI worker 逐 provider 扫描并渐进回传时复用同一顺序。
-pub(crate) const CACHED_PROVIDERS: [&str; 6] = [
-    "codex", "claude", "opencode", "openclaw", "gemini", "hermes",
+pub(crate) const CACHED_PROVIDERS: [&str; 8] = [
+    "codex", "claude", "opencode", "openclaw", "gemini", "hermes", "grok", "pi",
 ];
 
 /// One logical Sessions page plus a look-ahead row. The stale first paint is
@@ -302,6 +310,8 @@ pub(crate) fn scan_sessions_progressive_for_provider(
         "openclaw" => openclaw::scan_sessions_progressive(store, force, on_session),
         "gemini" => gemini::scan_sessions_progressive(store, force, on_session),
         "hermes" => hermes::scan_sessions_progressive(store, force, on_session),
+        "grok" => grok::scan_sessions_progressive(store, force, on_session),
+        "pi" => pi::scan_sessions_progressive(store, force, on_session),
         _ => Vec::new(),
     }
 }
@@ -334,6 +344,10 @@ pub(crate) fn scan_sessions_progressive_for_provider_cancellable(
         "hermes" => {
             hermes::scan_sessions_progressive_cancellable(store, force, on_session, is_cancelled)
         }
+        "grok" => {
+            grok::scan_sessions_progressive_cancellable(store, force, on_session, is_cancelled)
+        }
+        "pi" => pi::scan_sessions_progressive_cancellable(store, force, on_session, is_cancelled),
         _ => Some(Vec::new()),
     }
 }
@@ -368,6 +382,10 @@ pub(crate) fn stream_sessions_for_provider_cancellable(
         "gemini" => gemini::stream_sessions_cancellable(store, force, on_session, is_cancelled)
             .map(|stats| (stats, None)),
         "hermes" => hermes::stream_sessions_cancellable(store, force, on_session, is_cancelled)
+            .map(|stats| (stats, None)),
+        "grok" => grok::stream_sessions_cancellable(store, force, on_session, is_cancelled)
+            .map(|stats| (stats, None)),
+        "pi" => pi::stream_sessions_cancellable(store, force, on_session, is_cancelled)
             .map(|stats| (stats, None)),
         _ => Ok((cache::StreamScanStats::default(), None)),
     }
@@ -458,6 +476,8 @@ fn provider_scan_cached(
         "openclaw" => openclaw::scan_sessions_cached(store, force),
         "gemini" => gemini::scan_sessions_cached(store, force),
         "hermes" => hermes::scan_sessions_cached(store, force),
+        "grok" => grok::scan_sessions_cached(store, force),
+        "pi" => pi::scan_sessions_cached(store, force),
         _ => Vec::new(),
     }
 }
@@ -588,6 +608,12 @@ fn search_provider_cancellable(
             gemini::search_session_cancellable(meta, needle, is_cancelled)
         }),
         "hermes" => hermes::search_sessions_cancellable(metas, needle, is_cancelled),
+        "grok" => search_file_provider(metas, is_cancelled, |meta| {
+            grok::search_session_cancellable(meta, needle, is_cancelled)
+        }),
+        "pi" => search_file_provider(metas, is_cancelled, |meta| {
+            pi::search_session_cancellable(meta, needle, is_cancelled)
+        }),
         _ => Some(Vec::new()),
     }
 }
@@ -641,6 +667,8 @@ pub(crate) fn load_messages_cancellable(
         "openclaw" => openclaw::load_messages_cancellable(path, is_cancelled),
         "gemini" => gemini::load_messages_cancellable(path, is_cancelled),
         "hermes" => hermes::load_messages_cancellable(path, is_cancelled),
+        "grok" => grok::load_messages_cancellable(path, is_cancelled),
+        "pi" => pi::load_messages_cancellable(path, is_cancelled),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -728,6 +756,8 @@ fn delete_session_with_root(
         "openclaw" => openclaw::delete_session(&validated_root, &validated_source, session_id),
         "gemini" => gemini::delete_session(&validated_root, &validated_source, session_id),
         "hermes" => hermes::delete_session(&validated_root, &validated_source, session_id),
+        "grok" => grok::delete_session(&validated_root, &validated_source, session_id),
+        "pi" => pi::delete_session(&validated_root, &validated_source, session_id),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -740,6 +770,8 @@ fn provider_root(provider_id: &str) -> Result<PathBuf, String> {
         "openclaw" => crate::openclaw_config::get_openclaw_dir().join("agents"),
         "gemini" => crate::gemini_config::get_gemini_dir().join("tmp"),
         "hermes" => crate::hermes_config::get_hermes_dir().join("sessions"),
+        "grok" => crate::grok_config::get_grok_dir().join("sessions"),
+        "pi" => crate::pi_config::get_pi_dir().join("sessions"),
         _ => return Err(format!("Unsupported provider: {provider_id}")),
     };
 

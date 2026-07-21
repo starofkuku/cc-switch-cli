@@ -21,7 +21,7 @@ impl StreamCheckService {
             }
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
-            AppType::Pi => Self::extract_openclaw_base_url(provider),
+            AppType::Pi | AppType::Grok => Self::extract_openclaw_base_url(provider),
             AppType::Claude | AppType::Codex | AppType::Gemini => get_adapter(app_type)
                 .extract_base_url(provider)
                 .map(|url| url.trim().trim_end_matches('/').to_string())

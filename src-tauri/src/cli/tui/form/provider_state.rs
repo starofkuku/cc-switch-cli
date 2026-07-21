@@ -337,7 +337,11 @@ impl ProviderAddFormState {
                 .ok()
                 .and_then(|value| value.as_object().cloned())
                 .is_some_and(|obj| !obj.is_empty()),
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
+            AppType::OpenCode
+            | AppType::Hermes
+            | AppType::OpenClaw
+            | AppType::Pi
+            | AppType::Grok => false,
         }
     }
 
@@ -395,7 +399,7 @@ impl ProviderAddFormState {
 
         if matches!(
             self.app_type,
-            AppType::Hermes | AppType::OpenClaw | AppType::Pi
+            AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok
         ) && self.copy_source_id.is_none()
         {
             fields.insert(0, ProviderAddField::Id);
@@ -462,7 +466,7 @@ impl ProviderAddFormState {
                 fields.push(ProviderAddField::HermesAdvancedDivider);
                 fields.push(ProviderAddField::HermesRateLimitDelay);
             }
-            AppType::OpenClaw | AppType::Pi => {
+            AppType::OpenClaw | AppType::Pi | AppType::Grok => {
                 fields.push(ProviderAddField::OpenClawApiProtocol);
                 fields.push(ProviderAddField::OpenCodeApiKey);
                 fields.push(ProviderAddField::OpenCodeBaseUrl);
@@ -1016,7 +1020,8 @@ impl ProviderAddFormState {
             | AppType::OpenCode
             | AppType::Hermes
             | AppType::OpenClaw
-            | AppType::Pi => false,
+            | AppType::Pi
+            | AppType::Grok => false,
         }
     }
 
@@ -1719,7 +1724,7 @@ impl ProviderAddFormState {
             AppType::Codex => self.codex_base_url.value.clone(),
             AppType::Gemini => self.gemini_base_url.value.clone(),
             AppType::Hermes => self.hermes_base_url.value.clone(),
-            AppType::OpenCode | AppType::OpenClaw | AppType::Pi => {
+            AppType::OpenCode | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
                 self.opencode_base_url.value.clone()
             }
         }
@@ -1738,7 +1743,7 @@ impl ProviderAddFormState {
             AppType::Codex => (&self.codex_api_key.value, &self.codex_base_url.value),
             AppType::Gemini => (&self.gemini_api_key.value, &self.gemini_base_url.value),
             AppType::Hermes => (&self.hermes_api_key.value, &self.hermes_base_url.value),
-            AppType::OpenCode | AppType::OpenClaw | AppType::Pi => {
+            AppType::OpenCode | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
                 (&self.opencode_api_key.value, &self.opencode_base_url.value)
             }
         };

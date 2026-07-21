@@ -1,11 +1,22 @@
-use chrono::{Local, TimeZone};
+use chrono::{Local, TimeZone, Utc};
 use clap::Subcommand;
+use colored::Colorize;
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::style::{Print, ResetColor, SetForegroundColor, Color as CtColor};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::{execute, queue};
 use serde::ser::SerializeSeq;
 use serde::Serialize;
 use serde::Serializer as _;
-use std::io::Write;
+use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
+use std::time::Duration;
 
 use crate::app_config::AppType;
 use crate::cli::ui::{create_table, info, success, to_json, warning};
@@ -104,6 +115,12 @@ pub enum SessionsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Interactively export one session to a JSON file (requires --app)
+    Export {
+        /// Output path (default: ./ccswitch-<app>-<id>-<date>.json)
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Serialize)]
@@ -161,6 +178,588 @@ pub fn execute(cmd: SessionsCommand, app: Option<AppType>) -> Result<(), AppErro
             all,
             json,
         } => sync_usage(app, provider, all, json),
+        SessionsCommand::Export { output } => export_session(app, output),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionExportDocument {
+    format: &'static str,
+    version: u32,
+    exported_at: String,
+    app: String,
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_active_at: Option<i64>,
+    messages: Vec<SessionExportMessage>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionExportMessage {
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ts: Option<i64>,
+}
+
+struct ExportChoice {
+    session: SessionMeta,
+    label: String,
+    /// user/assistant messages already loaded for list labels and Ctrl+E preview.
+    messages: Vec<SessionMessage>,
+    messages_truncated: bool,
+}
+
+fn export_session(app: Option<AppType>, output: Option<PathBuf>) -> Result<(), AppError> {
+    let app = app.ok_or_else(|| {
+        AppError::InvalidInput(
+            "sessions export requires --app (e.g. --app claude). There is no default app."
+                .to_string(),
+        )
+    })?;
+    let provider_id = app.as_str();
+
+    if !supports_session_export(provider_id) {
+        return Err(AppError::InvalidInput(format!(
+            "Session export is not supported for app '{provider_id}'. Allowed: {}",
+            export_supported_apps_hint()
+        )));
+    }
+
+    println!(
+        "{}",
+        format!("Scanning {provider_id} sessions…").bright_cyan()
+    );
+    let mut sessions = session_manager::scan_sessions_for_provider(provider_id);
+    if sessions.is_empty() {
+        println!("{}", info(&format!("No sessions found for {provider_id}.")));
+        return Ok(());
+    }
+    session_manager::sort_by_recent(&mut sessions);
+
+    let mut choices = Vec::with_capacity(sessions.len());
+    for session in sessions {
+        let batch = session
+            .source_path
+            .as_deref()
+            .and_then(|path| session_manager::load_messages(provider_id, path).ok());
+        let messages_truncated = batch.as_ref().map(|b| b.truncated).unwrap_or(false);
+        let messages: Vec<SessionMessage> = batch
+            .map(|b| b.messages)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.role == "user" || m.role == "assistant")
+            .filter(|m| !m.content.trim().is_empty())
+            .collect();
+        let label = format_export_choice_label(&session, &messages);
+        choices.push(ExportChoice {
+            session,
+            label,
+            messages,
+            messages_truncated,
+        });
+    }
+
+    let selected_index = prompt_export_session_picker(&choices)?;
+    let selected = &choices[selected_index];
+    let messages_truncated = selected.messages_truncated;
+
+    let export_messages: Vec<SessionExportMessage> = selected
+        .messages
+        .iter()
+        .map(|m| SessionExportMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+            ts: m.ts,
+        })
+        .collect();
+
+    let doc = SessionExportDocument {
+        format: "ccswitch-session",
+        version: 1,
+        exported_at: Utc::now().to_rfc3339(),
+        app: provider_id.to_string(),
+        session_id: selected.session.session_id.clone(),
+        title: selected.session.title.clone(),
+        project_dir: selected.session.project_dir.clone(),
+        source_path: selected.session.source_path.clone(),
+        created_at: selected.session.created_at,
+        last_active_at: selected.session.last_active_at,
+        messages: export_messages,
+    };
+
+    let out_path = match output {
+        Some(path) => path,
+        None => default_export_path(provider_id, &selected.session.session_id),
+    };
+
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|source| AppError::IoContext {
+                context: format!("failed to create export directory {}", parent.display()),
+                source,
+            })?;
+        }
+    }
+
+    let json =
+        serde_json::to_string_pretty(&doc).map_err(|source| AppError::JsonSerialize { source })?;
+    fs::write(&out_path, format!("{json}\n")).map_err(|source| AppError::IoContext {
+        context: format!("failed to write export file {}", out_path.display()),
+        source,
+    })?;
+
+    println!(
+        "{}",
+        success(&format!(
+            "Exported {} message(s) to {}",
+            doc.messages.len(),
+            out_path.display()
+        ))
+    );
+    if messages_truncated {
+        println!(
+            "{}",
+            warning(
+                "Source message stream was truncated by the session reader; export may be incomplete."
+            )
+        );
+    }
+    Ok(())
+}
+
+fn supports_session_export(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        "claude" | "codex" | "gemini" | "opencode" | "openclaw" | "hermes" | "grok" | "pi"
+    )
+}
+
+fn export_supported_apps_hint() -> &'static str {
+    "claude, codex, gemini, opencode, openclaw, hermes, grok, pi"
+}
+
+fn default_export_path(app: &str, session_id: &str) -> PathBuf {
+    let date = Local::now().format("%Y%m%d");
+    let short_id: String = session_id.chars().take(8).collect();
+    PathBuf::from(format!("ccswitch-{app}-{short_id}-{date}.json"))
+}
+
+/// Picker label: prefer a real session name; otherwise last user message (10 chars).
+fn format_export_choice_label(session: &SessionMeta, messages: &[SessionMessage]) -> String {
+    let first_user = messages
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.trim());
+    let last_user = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.trim());
+
+    if let Some(title) = session
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        let looks_like_first_user = first_user.is_some_and(|fu| {
+            let fu = fu.trim();
+            if fu.is_empty() {
+                return false;
+            }
+            fu.starts_with(title)
+                || title.starts_with(&truncate_export_label_chars(fu, title.chars().count()))
+        });
+        // Grok/Pi only store explicit names in `title`. Other apps may put the
+        // first user message there; prefer last-user preview in that case.
+        if matches!(session.provider_id.as_str(), "grok" | "pi") || !looks_like_first_user {
+            return collapse_whitespace(title);
+        }
+    }
+
+    if let Some(text) = last_user.filter(|t| !t.is_empty()) {
+        return collapse_whitespace(&truncate_export_label_chars(text, 10));
+    }
+
+    format!("({})", short_session_id(&session.session_id))
+}
+
+fn truncate_export_label_chars(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Interactive session picker with Ctrl+E conversation preview.
+///
+/// Keys:
+/// - ↑/↓ or j/k: move selection (or scroll preview when expanded)
+/// - Enter: confirm
+/// - Ctrl+E: expand/collapse conversation for the highlighted session
+/// - Esc: collapse if expanded, otherwise cancel
+fn prompt_export_session_picker(choices: &[ExportChoice]) -> Result<usize, AppError> {
+    if choices.is_empty() {
+        return Err(AppError::Message("No sessions available to export.".into()));
+    }
+
+    struct RawModeGuard;
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            let mut stdout = io::stdout();
+            let _ = disable_raw_mode();
+            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        }
+    }
+
+    enable_raw_mode().map_err(|e| AppError::Message(format!("failed to enable raw mode: {e}")))?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, Hide)
+        .map_err(|e| AppError::Message(format!("failed to enter alternate screen: {e}")))?;
+    let _guard = RawModeGuard;
+
+    let mut selected: usize = 0;
+    let mut list_scroll: usize = 0;
+    let mut expanded = false;
+    let mut preview_scroll: usize = 0;
+
+    loop {
+        let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let term_cols = term_cols as usize;
+        let term_rows = term_rows.max(8) as usize;
+
+        draw_export_picker(
+            &mut stdout,
+            choices,
+            selected,
+            list_scroll,
+            expanded,
+            preview_scroll,
+            term_cols,
+            term_rows,
+        )?;
+
+        if !event::poll(Duration::from_millis(250)).map_err(|e| {
+            AppError::Message(format!("failed to poll keyboard events: {e}"))
+        })? {
+            continue;
+        }
+        let Event::Key(key) = event::read()
+            .map_err(|e| AppError::Message(format!("failed to read keyboard event: {e}")))?
+        else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Char('c') if ctrl => {
+                return Err(AppError::Message("Session selection cancelled.".into()));
+            }
+            KeyCode::Char('e') if ctrl => {
+                expanded = !expanded;
+                preview_scroll = 0;
+            }
+            KeyCode::Esc => {
+                if expanded {
+                    expanded = false;
+                    preview_scroll = 0;
+                } else {
+                    return Err(AppError::Message("Session selection cancelled.".into()));
+                }
+            }
+            KeyCode::Enter => {
+                return Ok(selected);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if expanded {
+                    preview_scroll = preview_scroll.saturating_sub(1);
+                } else if selected > 0 {
+                    selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if expanded {
+                    preview_scroll = preview_scroll.saturating_add(1);
+                } else if selected + 1 < choices.len() {
+                    selected += 1;
+                }
+            }
+            KeyCode::PageUp => {
+                if expanded {
+                    preview_scroll = preview_scroll.saturating_sub(10);
+                } else {
+                    selected = selected.saturating_sub(10);
+                }
+            }
+            KeyCode::PageDown => {
+                if expanded {
+                    preview_scroll = preview_scroll.saturating_add(10);
+                } else {
+                    selected = (selected + 10).min(choices.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Home => {
+                if expanded {
+                    preview_scroll = 0;
+                } else {
+                    selected = 0;
+                }
+            }
+            KeyCode::End => {
+                if !expanded {
+                    selected = choices.len().saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+
+        // Keep selected row visible in the list viewport.
+        let list_height = export_list_viewport_height(term_rows, expanded);
+        if selected < list_scroll {
+            list_scroll = selected;
+        } else if selected >= list_scroll + list_height {
+            list_scroll = selected + 1 - list_height;
+        }
+    }
+}
+
+fn export_list_viewport_height(term_rows: usize, expanded: bool) -> usize {
+    // header(1) + help(1) + blank(1) + optional preview header/footer
+    if expanded {
+        // reserve ~half for preview
+        ((term_rows.saturating_sub(6)) / 2).max(3)
+    } else {
+        term_rows.saturating_sub(4).max(3)
+    }
+}
+
+fn draw_export_picker(
+    stdout: &mut io::Stdout,
+    choices: &[ExportChoice],
+    selected: usize,
+    list_scroll: usize,
+    expanded: bool,
+    preview_scroll: usize,
+    term_cols: usize,
+    term_rows: usize,
+) -> Result<(), AppError> {
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))
+        .map_err(|e| AppError::Message(format!("terminal draw failed: {e}")))?;
+
+    let mut row: u16 = 0;
+    write_line(
+        stdout,
+        row,
+        term_cols,
+        "Select a session to export",
+        CtColor::Cyan,
+        true,
+    )?;
+    row += 1;
+    write_line(
+        stdout,
+        row,
+        term_cols,
+        "↑/↓ move  Enter export  Ctrl+E preview  Esc cancel",
+        CtColor::DarkGrey,
+        false,
+    )?;
+    row += 1;
+
+    let list_height = export_list_viewport_height(term_rows, expanded);
+    let end = (list_scroll + list_height).min(choices.len());
+    for (visible_i, index) in (list_scroll..end).enumerate() {
+        let choice = &choices[index];
+        let time =
+            format_session_time(choice.session.last_active_at.or(choice.session.created_at));
+        let marker = if index == selected { ">" } else { " " };
+        let line = format!(
+            "{marker} {:>3}. [{}] {}  ({})",
+            index + 1,
+            time,
+            choice.label,
+            short_session_id(&choice.session.session_id)
+        );
+        let is_sel = index == selected;
+        write_line(
+            stdout,
+            row + visible_i as u16,
+            term_cols,
+            &line,
+            if is_sel {
+                CtColor::Yellow
+            } else {
+                CtColor::Reset
+            },
+            is_sel,
+        )?;
+    }
+    row += list_height as u16;
+
+    if expanded {
+        let choice = &choices[selected];
+        row = row.saturating_add(1);
+        let header = format!(
+            "── Conversation: {} ({}) ──  Ctrl+E / Esc collapse",
+            choice.label,
+            short_session_id(&choice.session.session_id)
+        );
+        write_line(stdout, row, term_cols, &header, CtColor::Green, true)?;
+        row += 1;
+
+        let preview_lines = build_conversation_preview_lines(&choice.messages, term_cols);
+        let preview_height = term_rows
+            .saturating_sub(row as usize)
+            .saturating_sub(1)
+            .max(3);
+        let max_scroll = preview_lines.len().saturating_sub(preview_height);
+        let scroll = preview_scroll.min(max_scroll);
+        let preview_end = (scroll + preview_height).min(preview_lines.len());
+
+        for (i, line) in preview_lines[scroll..preview_end].iter().enumerate() {
+            let color = if line.starts_with("[user]") {
+                CtColor::Green
+            } else if line.starts_with("[assistant]") {
+                CtColor::Magenta
+            } else {
+                CtColor::Reset
+            };
+            write_line(stdout, row + i as u16, term_cols, line, color, false)?;
+        }
+        row += preview_height as u16;
+
+        let status = if preview_lines.is_empty() {
+            "No user/assistant messages in this session.".to_string()
+        } else {
+            format!(
+                "lines {}-{} / {}{}",
+                scroll + 1,
+                preview_end,
+                preview_lines.len(),
+                if choice.messages_truncated {
+                    "  (source truncated)"
+                } else {
+                    ""
+                }
+            )
+        };
+        write_line(stdout, row, term_cols, &status, CtColor::DarkGrey, false)?;
+    }
+
+    stdout
+        .flush()
+        .map_err(|e| AppError::Message(format!("terminal flush failed: {e}")))?;
+    Ok(())
+}
+
+fn write_line(
+    stdout: &mut io::Stdout,
+    row: u16,
+    term_cols: usize,
+    text: &str,
+    color: CtColor,
+    bold_like: bool,
+) -> Result<(), AppError> {
+    let clipped = clip_display_width(text, term_cols.saturating_sub(1));
+    let padded = format!("{:<width$}", clipped, width = term_cols.saturating_sub(1));
+    let _ = bold_like;
+    queue!(
+        stdout,
+        MoveTo(0, row),
+        SetForegroundColor(color),
+        Print(padded),
+        ResetColor
+    )
+    .map_err(|e| AppError::Message(format!("terminal write failed: {e}")))?;
+    Ok(())
+}
+
+fn clip_display_width(text: &str, max_cols: usize) -> String {
+    if max_cols == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let w = if ch.is_ascii() { 1 } else { 2 };
+        if width + w > max_cols {
+            break;
+        }
+        out.push(ch);
+        width += w;
+    }
+    out
+}
+
+fn build_conversation_preview_lines(messages: &[SessionMessage], term_cols: usize) -> Vec<String> {
+    let wrap_width = term_cols.saturating_sub(2).max(20);
+    let mut lines = Vec::new();
+    for msg in messages {
+        let role = match msg.role.as_str() {
+            "user" => "[user]",
+            "assistant" => "[assistant]",
+            other => other,
+        };
+        let body = collapse_whitespace(&msg.content);
+        let header = format!("{role} ");
+        let mut remaining = body.as_str();
+        // First line with role prefix.
+        let first_budget = wrap_width.saturating_sub(header.chars().count()).max(8);
+        let (first, rest) = split_at_chars(remaining, first_budget);
+        lines.push(format!("{header}{first}"));
+        remaining = rest;
+        while !remaining.is_empty() {
+            let (chunk, rest) = split_at_chars(remaining, wrap_width);
+            lines.push(format!("  {chunk}"));
+            remaining = rest;
+        }
+        lines.push(String::new());
+    }
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn split_at_chars(text: &str, max_chars: usize) -> (&str, &str) {
+    if max_chars == 0 || text.is_empty() {
+        return ("", text);
+    }
+    let mut end = text.len();
+    for (i, (idx, _)) in text.char_indices().enumerate() {
+        if i >= max_chars {
+            end = idx;
+            break;
+        }
+    }
+    if end >= text.len() {
+        (text, "")
+    } else {
+        (&text[..end], &text[end..])
     }
 }
 
@@ -768,7 +1367,9 @@ fn parse_scoped_selector(selector: &str) -> Option<(String, String)> {
 
 fn parse_session_provider(value: &str) -> Result<AppType, String> {
     app_type_from_provider_id(value).ok_or_else(|| {
-        format!("unsupported provider '{value}'. Allowed: claude, codex, gemini, opencode, openclaw, hermes")
+        format!(
+            "unsupported provider '{value}'. Allowed: claude, codex, gemini, opencode, openclaw, hermes, grok, pi"
+        )
     })
 }
 

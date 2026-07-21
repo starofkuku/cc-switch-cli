@@ -831,7 +831,7 @@ fn model_fetch_target(
             custom_user_agent,
             strategy: ProviderModelFetchStrategy::Bearer,
         }),
-        AppType::OpenClaw | AppType::Pi => Ok(ModelFetchTarget {
+        AppType::OpenClaw | AppType::Pi | AppType::Grok => Ok(ModelFetchTarget {
             base_url,
             auth_value: Some(
                 provider
@@ -881,9 +881,12 @@ fn default_one_off_model_fetch_strategy(app_type: &AppType) -> ProviderModelFetc
     match app_type {
         AppType::Claude => ProviderModelFetchStrategy::Anthropic,
         AppType::Gemini => ProviderModelFetchStrategy::GoogleApiKey,
-        AppType::Codex | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
-            ProviderModelFetchStrategy::Bearer
-        }
+        AppType::Codex
+        | AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok => ProviderModelFetchStrategy::Bearer,
     }
 }
 
