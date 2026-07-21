@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.5-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.6-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -155,6 +155,7 @@ Use the full-screen interface to switch providers, manage accounts, review sessi
 
 **Command-Line Mode**
 ```bash
+cc-switch apps list                  # List supported apps (csv)
 cc-switch provider list              # List providers
 cc-switch provider switch <id>       # Switch provider
 cc-switch use <id>                   # Switch provider (shortcut)

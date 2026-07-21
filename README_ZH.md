@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.5-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.6-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -155,6 +155,7 @@ cc-switch
 
 **命令行模式**
 ```bash
+cc-switch apps list                  # 列出支持的应用（逗号分隔）
 cc-switch provider list              # 列出供应商
 cc-switch provider switch <id>       # 切换供应商
 cc-switch use <id>                   # 切换供应商（快捷命令）

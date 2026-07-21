@@ -53,6 +53,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
     match cli.command {
         // Default to interactive mode if no command is provided
         None | Some(Commands::Interactive) => cc_switch_lib::cli::interactive::run(cli.app),
+        Some(Commands::Apps(cmd)) => cc_switch_lib::cli::commands::apps::execute(cmd),
         Some(Commands::Auth(cmd)) => cc_switch_lib::cli::commands::auth::execute(cmd),
         Some(Commands::Provider(cmd)) => {
             cc_switch_lib::cli::commands::provider::execute(cmd, cli.app)
@@ -98,6 +99,7 @@ fn command_requires_startup_state(command: &Option<Commands>) -> bool {
 
     match command {
         Some(Commands::Completions(_))
+        | Some(Commands::Apps(_))
         | Some(Commands::Auth(_))
         | Some(Commands::Update(_))
         | Some(Commands::Internal(_))
@@ -129,7 +131,9 @@ fn command_uses_deferred_codex_migration(command: &Option<Commands>) -> bool {
 fn database_access_required(command: &Option<Commands>) -> bool {
     !matches!(
         command,
-        Some(Commands::Completions(_)) | Some(Commands::Update(_))
+        Some(Commands::Completions(_))
+            | Some(Commands::Update(_))
+            | Some(Commands::Apps(_))
     )
 }
 
@@ -238,6 +242,8 @@ mod tests {
         assert!(!command_requires_startup_state(&internal_capture.command));
         assert!(!command_requires_startup_state(&sessions.command));
         assert!(!command_requires_startup_state(&auth.command));
+        let apps = Cli::parse_from(["cc-switch", "apps", "list"]);
+        assert!(!command_requires_startup_state(&apps.command));
         assert!(command_requires_startup_state(&provider.command));
     }
 
@@ -245,9 +251,11 @@ mod tests {
     fn completions_update_skip_database_access() {
         let update = Cli::parse_from(["cc-switch", "update"]);
         let completions = Cli::parse_from(["cc-switch", "completions", "bash"]);
+        let apps = Cli::parse_from(["cc-switch", "apps", "list"]);
 
         assert!(!database_access_required(&update.command));
         assert!(!database_access_required(&completions.command));
+        assert!(!database_access_required(&apps.command));
     }
 
     #[test]

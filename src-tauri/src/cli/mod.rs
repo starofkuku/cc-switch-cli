@@ -40,6 +40,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// List supported application types
+    #[command(subcommand)]
+    Apps(commands::apps::AppsCommand),
+
     /// Manage ChatGPT Codex OAuth accounts
     #[command(subcommand)]
     Auth(commands::auth::AuthCommand),

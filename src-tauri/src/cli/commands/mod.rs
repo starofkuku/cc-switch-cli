@@ -1,4 +1,5 @@
 pub(crate) mod app_targets;
+pub mod apps;
 pub mod auth;
 pub mod completions;
 pub mod config;
