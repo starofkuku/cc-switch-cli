@@ -7,6 +7,15 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.8] - 2026-07-22
+
+### Changed
+
+- **Database / Schema**: Raise `SCHEMA_VERSION` from 13 to **16**, matching Win desktop [farion1231/cc-switch](https://github.com/farion1231/cc-switch) v3.18.0 so WebDAV download of GUI-uploaded snapshots no longer fails with “remote schema too new (16)”.
+  - v13→v14: `proxy_config` allows and seeds `grokbuild`
+  - v14→v15: MCP/Skills `enabled_grokbuild` columns (mapped to CLI `AppType::Grok`)
+  - v15→v16: clear Codex session usage rows/cursors for rebuild on startup
+
 ## [5.10.7] - 2026-07-22
 
 ### Fixed

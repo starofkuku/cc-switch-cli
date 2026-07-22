@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_snapshot_accepts_current_schema_v13_sync_export() -> Result<(), AppError> {
+    fn apply_snapshot_accepts_current_schema_sync_export() -> Result<(), AppError> {
         let temp = tempfile::tempdir().expect("create temp dir");
         let _env = crate::test_support::TestEnvGuard::isolated(temp.path());
 

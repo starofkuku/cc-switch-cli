@@ -13,6 +13,9 @@ pub struct McpApps {
     pub codex: bool,
     #[serde(default)]
     pub gemini: bool,
+    /// Maps to SQLite `enabled_grokbuild` (Win desktop / farion schema name).
+    #[serde(default, alias = "grokbuild")]
+    pub grok: bool,
     #[serde(default)]
     pub opencode: bool,
     #[serde(default)]
@@ -28,7 +31,8 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw | AppType::Pi | AppType::Grok => false,
+            AppType::Grok => self.grok,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -40,7 +44,8 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw | AppType::Pi | AppType::Grok => {}
+            AppType::Grok => self.grok = enabled,
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
@@ -56,6 +61,9 @@ impl McpApps {
         if self.gemini {
             apps.push(AppType::Gemini);
         }
+        if self.grok {
+            apps.push(AppType::Grok);
+        }
         if self.opencode {
             apps.push(AppType::OpenCode);
         }
@@ -67,7 +75,7 @@ impl McpApps {
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
+        !self.claude && !self.codex && !self.gemini && !self.grok && !self.opencode && !self.hermes
     }
 }
 
@@ -80,6 +88,9 @@ pub struct SkillApps {
     pub codex: bool,
     #[serde(default)]
     pub gemini: bool,
+    /// Maps to SQLite `enabled_grokbuild` (Win desktop / farion schema name).
+    #[serde(default, alias = "grokbuild")]
+    pub grok: bool,
     #[serde(default)]
     pub opencode: bool,
     #[serde(default)]
@@ -94,7 +105,8 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw | AppType::Pi | AppType::Grok => false,
+            AppType::Grok => self.grok,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -105,12 +117,13 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw | AppType::Pi | AppType::Grok => {}
+            AppType::Grok => self.grok = enabled,
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.opencode && !self.hermes
+        !self.claude && !self.codex && !self.gemini && !self.grok && !self.opencode && !self.hermes
     }
 
     pub fn only(app: &AppType) -> Self {
@@ -133,6 +146,7 @@ impl SkillApps {
         self.claude |= other.claude;
         self.codex |= other.codex;
         self.gemini |= other.gemini;
+        self.grok |= other.grok;
         self.opencode |= other.opencode;
         self.hermes |= other.hermes;
     }
@@ -368,7 +382,8 @@ impl FromStr for AppType {
             "hermes" => Ok(AppType::Hermes),
             "openclaw" => Ok(AppType::OpenClaw),
             "pi" => Ok(AppType::Pi),
-            "grok" => Ok(AppType::Grok),
+            // "grokbuild" is the Win desktop (farion) schema / proxy_config app_type.
+            "grok" | "grokbuild" | "grok-build" | "grok_build" => Ok(AppType::Grok),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(

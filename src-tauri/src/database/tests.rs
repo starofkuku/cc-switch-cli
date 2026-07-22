@@ -1573,6 +1573,10 @@ fn schema_current_v13_repairs_missing_usage_semantics_columns() {
 
     Database::apply_schema_migrations_on_conn(&conn).expect("repair current schema");
 
+    assert_eq!(
+        Database::get_user_version(&conn).expect("version"),
+        SCHEMA_VERSION
+    );
     assert!(
         Database::has_column(&conn, "proxy_request_logs", "input_token_semantics")
             .expect("check log semantics")
@@ -1581,6 +1585,132 @@ fn schema_current_v13_repairs_missing_usage_semantics_columns() {
         Database::has_column(&conn, "usage_daily_rollups", "input_token_semantics")
             .expect("check rollup semantics")
     );
+}
+
+#[test]
+fn schema_migration_v13_to_v16_adds_grokbuild_and_accepts_version() {
+    let conn = Connection::open_in_memory().expect("open memory db");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE proxy_config (
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini')),
+            proxy_enabled INTEGER NOT NULL DEFAULT 0,
+            listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+            listen_port INTEGER NOT NULL DEFAULT 15721,
+            enable_logging INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+            max_retries INTEGER NOT NULL DEFAULT 3,
+            streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+            non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+            circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+            circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+            circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+            default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+            pricing_model_source TEXT NOT NULL DEFAULT 'response',
+            live_takeover_active INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO proxy_config (app_type) VALUES ('claude'), ('codex'), ('gemini');
+        CREATE TABLE mcp_servers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            server_config TEXT NOT NULL,
+            description TEXT,
+            homepage TEXT,
+            docs TEXT,
+            tags TEXT NOT NULL DEFAULT '[]',
+            enabled_claude BOOLEAN NOT NULL DEFAULT 0,
+            enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0
+        );
+        CREATE TABLE skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            directory TEXT NOT NULL,
+            enabled_claude BOOLEAN NOT NULL DEFAULT 0,
+            enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
+            installed_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE proxy_request_logs (
+            request_id TEXT PRIMARY KEY,
+            data_source TEXT NOT NULL DEFAULT 'proxy'
+        );
+        INSERT INTO proxy_request_logs (request_id, data_source)
+            VALUES ('codex-1', 'codex_session'), ('proxy-1', 'proxy');
+        CREATE TABLE usage_daily_rollups (
+            date TEXT NOT NULL,
+            app_type TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            PRIMARY KEY (date, app_type, provider_id, model)
+        );
+        INSERT INTO usage_daily_rollups (date, app_type, provider_id, model)
+            VALUES ('2026-01-01', 'codex', '_codex_session', 'gpt-5');
+        CREATE TABLE session_log_sync (
+            file_path TEXT PRIMARY KEY,
+            last_modified INTEGER NOT NULL,
+            last_line_offset INTEGER NOT NULL DEFAULT 0,
+            last_synced_at INTEGER NOT NULL
+        );
+        "#,
+    )
+    .expect("seed v13 tables");
+    Database::set_user_version(&conn, 13).expect("set user_version=13");
+
+    Database::apply_schema_migrations_on_conn(&conn).expect("migrate to v16");
+
+    assert_eq!(
+        Database::get_user_version(&conn).expect("version after migration"),
+        16
+    );
+    let grok_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'grokbuild'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count grokbuild proxy row");
+    assert_eq!(grok_rows, 1, "v13->v14 should seed grokbuild proxy_config");
+    assert!(
+        Database::has_column(&conn, "mcp_servers", "enabled_grokbuild")
+            .expect("mcp enabled_grokbuild"),
+        "v14->v15 should add enabled_grokbuild to mcp_servers"
+    );
+    assert!(
+        Database::has_column(&conn, "skills", "enabled_grokbuild")
+            .expect("skills enabled_grokbuild"),
+        "v14->v15 should add enabled_grokbuild to skills"
+    );
+    let remaining_codex_logs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count codex logs");
+    assert_eq!(
+        remaining_codex_logs, 0,
+        "v15->v16 should clear codex_session proxy logs"
+    );
+    let remaining_proxy_logs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM proxy_request_logs WHERE request_id = 'proxy-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count proxy logs");
+    assert_eq!(remaining_proxy_logs, 1, "non-codex logs must be preserved");
 }
 
 #[test]
@@ -1805,7 +1935,7 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
     let count: i32 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count rows");
-    assert_eq!(count, 3, "per-app proxy_config should have 3 rows");
+    assert_eq!(count, 4, "per-app proxy_config should have 4 rows (incl. grokbuild)");
 
     // 新结构下应能按 app_type 查询
     let _: i32 = conn
@@ -2001,11 +2131,11 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "skills_ssot_migration_pending should be set after v2->v3 migration"
     );
 
-    // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
+    // v3.9+ / v14+：proxy_config per-app seed 必须存在（含 grokbuild）
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 3);
+    assert_eq!(proxy_rows, 4);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

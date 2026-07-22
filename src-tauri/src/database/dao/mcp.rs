@@ -12,11 +12,20 @@ impl Database {
     /// 获取所有 MCP 服务器
     pub fn get_all_mcp_servers(&self) -> Result<IndexMap<String, McpServer>, AppError> {
         let conn = lock_conn!(self.conn);
-        let mut stmt = conn.prepare(
+        let has_grokbuild = Self::has_column(&conn, "mcp_servers", "enabled_grokbuild")
+            .unwrap_or(false);
+        let sql = if has_grokbuild {
+            "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes, enabled_grokbuild
+             FROM mcp_servers
+             ORDER BY name ASC, id ASC"
+        } else {
             "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes
              FROM mcp_servers
              ORDER BY name ASC, id ASC"
-        ).map_err(|e| AppError::Database(e.to_string()))?;
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
         let server_iter = stmt
             .query_map([], |row| {
@@ -32,6 +41,11 @@ impl Database {
                 let enabled_gemini: bool = row.get(9)?;
                 let enabled_opencode: bool = row.get(10)?;
                 let enabled_hermes: bool = row.get(11)?;
+                let enabled_grok: bool = if has_grokbuild {
+                    row.get(12)?
+                } else {
+                    false
+                };
 
                 let server = serde_json::from_str(&server_config_str).unwrap_or_default();
                 let tags = serde_json::from_str(&tags_str).unwrap_or_default();
@@ -46,6 +60,7 @@ impl Database {
                             claude: enabled_claude,
                             codex: enabled_codex,
                             gemini: enabled_gemini,
+                            grok: enabled_grok,
                             opencode: enabled_opencode,
                             hermes: enabled_hermes,
                         },
@@ -69,42 +84,85 @@ impl Database {
     /// 保存 MCP 服务器
     pub fn save_mcp_server(&self, server: &McpServer) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        conn.execute(
-            "INSERT INTO mcp_servers (
-                id, name, server_config, description, homepage, docs, tags,
-                enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                server_config = excluded.server_config,
-                description = excluded.description,
-                homepage = excluded.homepage,
-                docs = excluded.docs,
-                tags = excluded.tags,
-                enabled_claude = excluded.enabled_claude,
-                enabled_codex = excluded.enabled_codex,
-                enabled_gemini = excluded.enabled_gemini,
-                enabled_opencode = excluded.enabled_opencode,
-                enabled_hermes = excluded.enabled_hermes",
-            params![
-                server.id,
-                server.name,
-                serde_json::to_string(&server.server).map_err(|e| AppError::Database(format!(
-                    "Failed to serialize server config: {e}"
-                )))?,
-                server.description,
-                server.homepage,
-                server.docs,
-                serde_json::to_string(&server.tags)
-                    .map_err(|e| AppError::Database(format!("Failed to serialize tags: {e}")))?,
-                server.apps.claude,
-                server.apps.codex,
-                server.apps.gemini,
-                server.apps.opencode,
-                server.apps.hermes,
-            ],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        let has_grokbuild = Self::has_column(&conn, "mcp_servers", "enabled_grokbuild")
+            .unwrap_or(false);
+        if has_grokbuild {
+            conn.execute(
+                "INSERT INTO mcp_servers (
+                    id, name, server_config, description, homepage, docs, tags,
+                    enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes, enabled_grokbuild
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    server_config = excluded.server_config,
+                    description = excluded.description,
+                    homepage = excluded.homepage,
+                    docs = excluded.docs,
+                    tags = excluded.tags,
+                    enabled_claude = excluded.enabled_claude,
+                    enabled_codex = excluded.enabled_codex,
+                    enabled_gemini = excluded.enabled_gemini,
+                    enabled_opencode = excluded.enabled_opencode,
+                    enabled_hermes = excluded.enabled_hermes,
+                    enabled_grokbuild = excluded.enabled_grokbuild",
+                params![
+                    server.id,
+                    server.name,
+                    serde_json::to_string(&server.server).map_err(|e| AppError::Database(format!(
+                        "Failed to serialize server config: {e}"
+                    )))?,
+                    server.description,
+                    server.homepage,
+                    server.docs,
+                    serde_json::to_string(&server.tags)
+                        .map_err(|e| AppError::Database(format!("Failed to serialize tags: {e}")))?,
+                    server.apps.claude,
+                    server.apps.codex,
+                    server.apps.gemini,
+                    server.apps.opencode,
+                    server.apps.hermes,
+                    server.apps.grok,
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        } else {
+            conn.execute(
+                "INSERT INTO mcp_servers (
+                    id, name, server_config, description, homepage, docs, tags,
+                    enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    server_config = excluded.server_config,
+                    description = excluded.description,
+                    homepage = excluded.homepage,
+                    docs = excluded.docs,
+                    tags = excluded.tags,
+                    enabled_claude = excluded.enabled_claude,
+                    enabled_codex = excluded.enabled_codex,
+                    enabled_gemini = excluded.enabled_gemini,
+                    enabled_opencode = excluded.enabled_opencode,
+                    enabled_hermes = excluded.enabled_hermes",
+                params![
+                    server.id,
+                    server.name,
+                    serde_json::to_string(&server.server).map_err(|e| AppError::Database(format!(
+                        "Failed to serialize server config: {e}"
+                    )))?,
+                    server.description,
+                    server.homepage,
+                    server.docs,
+                    serde_json::to_string(&server.tags)
+                        .map_err(|e| AppError::Database(format!("Failed to serialize tags: {e}")))?,
+                    server.apps.claude,
+                    server.apps.codex,
+                    server.apps.gemini,
+                    server.apps.opencode,
+                    server.apps.hermes,
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
         Ok(())
     }
 
