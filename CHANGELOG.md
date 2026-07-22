@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.7] - 2026-07-22
+
+### Fixed
+
+- **Apps / Pi models.json**: Strip unsupported `input` modalities (`pdf`, `audio`, `video`, …) when enriching from models.dev and when writing `~/.pi/agent/models.json`. Pi only accepts `text` and `image`; extra values caused `Invalid models.json schema` errors after switching providers.
+
 ## [5.10.6] - 2026-07-21
 
 ### Added

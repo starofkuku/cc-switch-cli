@@ -431,18 +431,19 @@ pub fn openclaw_model_entry_from_upstream(
         obj.insert("attachment".into(), Value::Bool(attachment));
     }
     if let Some(modalities) = &matched.modalities {
-        if !modalities.input.is_empty() {
-            obj.insert(
-                "input".into(),
-                Value::Array(
-                    modalities
-                        .input
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
+        // Pi (and OpenClaw-shaped entries shared with Pi) only accept text/image.
+        // models.dev also lists pdf/audio/video which fail Pi's models.json schema.
+        let mut seen = std::collections::HashSet::new();
+        let input: Vec<Value> = modalities
+            .input
+            .iter()
+            .map(String::as_str)
+            .filter(|modality| matches!(*modality, "text" | "image"))
+            .filter(|modality| seen.insert(*modality))
+            .map(|modality| Value::String(modality.to_string()))
+            .collect();
+        if !input.is_empty() {
+            obj.insert("input".into(), Value::Array(input));
         }
     }
 
@@ -551,7 +552,13 @@ mod tests {
                 tool_call: Some(true),
                 attachment: None,
                 modalities: Some(ModelsDevModalities {
-                    input: vec!["text".into(), "image".into()],
+                    input: vec![
+                        "text".into(),
+                        "image".into(),
+                        "pdf".into(),
+                        "video".into(),
+                        "audio".into(),
+                    ],
                     output: vec!["text".into()],
                 }),
                 limit: Some(ModelsDevModelLimit {
@@ -585,7 +592,8 @@ mod tests {
         assert_eq!(entry["name"], "GPT-5.4");
         assert_eq!(entry["contextWindow"], 200_000);
         assert_eq!(entry["reasoning"], true);
-        assert_eq!(entry["input"][0], "text");
+        // Pi schema only allows text/image; pdf/audio/video must be dropped.
+        assert_eq!(entry["input"], json!(["text", "image"]));
 
         let (bare, ok) = openclaw_model_entry_from_upstream("totally-custom-id", Some(&catalog));
         assert!(!ok);

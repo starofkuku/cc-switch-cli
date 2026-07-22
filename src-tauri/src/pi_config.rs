@@ -43,7 +43,64 @@ pub fn read_pi_models() -> Result<Value, AppError> {
 }
 
 pub fn write_pi_models(models: &Value) -> Result<(), AppError> {
-    write_json_file(&get_pi_models_path(), models)
+    // Pi only accepts input modalities "text" | "image". models.dev enrichment
+    // may inject pdf/audio/video and break schema validation on launch.
+    let mut sanitized = models.clone();
+    sanitize_models_document(&mut sanitized);
+    write_json_file(&get_pi_models_path(), &sanitized)
+}
+
+/// Pi `models.json` schema allows only these model input modalities.
+const PI_INPUT_MODALITIES: &[&str] = &["text", "image"];
+
+/// Strip modalities Pi does not accept (e.g. pdf/audio/video from models.dev).
+pub fn sanitize_models_document(models: &mut Value) {
+    let Some(providers) = models
+        .get_mut("providers")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for provider in providers.values_mut() {
+        sanitize_provider_models(provider);
+    }
+}
+
+fn sanitize_provider_models(provider: &mut Value) {
+    let Some(models) = provider.get_mut("models").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for model in models {
+        sanitize_model_input(model);
+    }
+}
+
+fn sanitize_model_input(model: &mut Value) {
+    let Some(obj) = model.as_object_mut() else {
+        return;
+    };
+    let Some(input) = obj.get("input") else {
+        return;
+    };
+    let Some(arr) = input.as_array() else {
+        obj.remove("input");
+        return;
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let filtered: Vec<Value> = arr
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|modality| PI_INPUT_MODALITIES.contains(modality))
+        .filter(|modality| seen.insert(*modality))
+        .map(|modality| Value::String(modality.to_string()))
+        .collect();
+
+    if filtered.is_empty() {
+        obj.remove("input");
+    } else {
+        obj.insert("input".to_string(), Value::Array(filtered));
+    }
 }
 
 pub fn get_providers() -> Result<Map<String, Value>, AppError> {
@@ -76,7 +133,7 @@ pub fn prepare_provider_with_base(
         .and_then(Value::as_object_mut)
         .ok_or_else(|| AppError::Config("Pi models.json providers must be an object".into()))?;
 
-    let merged = match providers.get(id) {
+    let mut merged = match providers.get(id) {
         Some(existing) => match base_provider {
             Some(base) => live_merge::merge_json_with_base_live(
                 &crate::app_config::AppType::Pi,
@@ -94,6 +151,7 @@ pub fn prepare_provider_with_base(
         },
         None => provider,
     };
+    sanitize_provider_models(&mut merged);
     providers.insert(id.to_string(), merged);
     Ok(models)
 }
@@ -217,5 +275,74 @@ mod tests {
         assert_eq!(settings["theme"], "light");
         assert_eq!(settings["defaultProvider"], "demo");
         assert_eq!(settings["defaultModel"], "model-a");
+    }
+
+    #[test]
+    fn pi_write_strips_unsupported_input_modalities() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _env = TestEnvGuard::isolated(temp.path());
+
+        write_pi_models(&json!({
+            "providers": {
+                "8-10": {
+                    "baseUrl": "https://example.com/v1",
+                    "api": "openai-responses",
+                    "models": [
+                        {
+                            "id": "m1",
+                            "input": ["text", "image", "pdf", "video", "audio"]
+                        },
+                        {
+                            "id": "m2",
+                            "input": ["audio", "pdf"]
+                        },
+                        {
+                            "id": "m3",
+                            "input": ["text", "text", "image"]
+                        }
+                    ]
+                }
+            }
+        }))
+        .expect("write models");
+
+        let live = read_pi_models().expect("read models");
+        assert_eq!(
+            live["providers"]["8-10"]["models"][0]["input"],
+            json!(["text", "image"])
+        );
+        assert!(live["providers"]["8-10"]["models"][1]
+            .get("input")
+            .is_none());
+        assert_eq!(
+            live["providers"]["8-10"]["models"][2]["input"],
+            json!(["text", "image"])
+        );
+    }
+
+    #[test]
+    fn pi_prepare_sanitizes_merged_provider_models() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _env = TestEnvGuard::isolated(temp.path());
+        write_pi_models(&json!({ "providers": {} })).expect("seed");
+
+        let prepared = prepare_provider_with_base(
+            "relay",
+            None,
+            json!({
+                "baseUrl": "https://relay.example/v1",
+                "api": "openai-responses",
+                "models": [{
+                    "id": "gpt",
+                    "input": ["text", "image", "pdf"]
+                }]
+            }),
+        )
+        .expect("prepare");
+
+        assert_eq!(
+            prepared["providers"]["relay"]["models"][0]["input"],
+            json!(["text", "image"])
+        );
     }
 }
