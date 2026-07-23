@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.8-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.9-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -189,9 +189,9 @@ See the "Features" section for full command list.
 
 ## 📥 Installation
 
-### Method 1: Quick Install (Linux musl only)
+### Method 1: Quick Install (Linux musl + macOS arm64)
 
-This fork publishes **Linux musl** builds only (`linux-x64-musl`, `linux-arm64-musl`).
+This fork publishes **Linux musl** (`linux-x64-musl`, `linux-arm64-musl`) and **macOS arm64** (`macos-arm64`, Apple Silicon) builds.
 
 ```bash
 curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/install.sh | bash
@@ -226,6 +226,15 @@ sudo mv cc-switch /usr/local/bin/
 # For Raspberry Pi or ARM servers
 curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-arm64-musl.tar.gz
 tar -xzf cc-switch-cli-linux-arm64-musl.tar.gz
+chmod +x cc-switch
+sudo mv cc-switch /usr/local/bin/
+```
+
+#### macOS (Apple Silicon / arm64)
+
+```bash
+curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-macos-arm64.tar.gz
+tar -xzf cc-switch-cli-macos-arm64.tar.gz
 chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
@@ -268,6 +277,7 @@ Manage API configurations for **Claude Code**, **Codex**, **Gemini**, **OpenCode
 ```bash
 cc-switch provider list              # List all providers
 cc-switch provider current           # Show current provider
+cc-switch provider show-key <id>     # Print the provider API key (unmasked)
 cc-switch provider switch <id>       # Switch provider
 cc-switch use <id>                   # Switch provider (shortcut)
 cc-switch provider add               # Add new provider

@@ -95,7 +95,6 @@ confirm_overwrite_if_needed() {
 set_linux_asset_candidates() {
   local arch="$1"
 
-  # This fork only publishes static Linux musl builds.
   case "${arch}" in
     x86_64|amd64)
       ASSET_CANDIDATES=("cc-switch-cli-linux-x64-musl.tar.gz")
@@ -105,13 +104,31 @@ set_linux_asset_candidates() {
       ;;
     *)
       err "Unsupported Linux architecture: ${arch}"
-      err "This release only provides linux-x64-musl and linux-arm64-musl."
+      err "This release provides linux-x64-musl and linux-arm64-musl."
       err "See available assets: ${RELEASES_URL}"
       exit 1
       ;;
   esac
 
-  info "Using Linux musl build (only platform published by this fork)."
+  info "Using Linux musl build."
+}
+
+set_macos_asset_candidates() {
+  local arch="$1"
+
+  case "${arch}" in
+    arm64|aarch64)
+      ASSET_CANDIDATES=("cc-switch-cli-macos-arm64.tar.gz")
+      ;;
+    *)
+      err "Unsupported macOS architecture: ${arch}"
+      err "This release provides macos-arm64 (Apple Silicon) only."
+      err "See available assets: ${RELEASES_URL}"
+      exit 1
+      ;;
+  esac
+
+  info "Using macOS arm64 (Apple Silicon) build."
 }
 
 # ── platform detection ───────────────────────────────────────────────
@@ -126,9 +143,11 @@ detect_asset() {
     Linux)
       set_linux_asset_candidates "${arch}"
       ;;
-    Darwin|MINGW*|MSYS*|CYGWIN*|Windows_NT)
-      err "This fork only publishes Linux musl builds."
-      err "Unsupported OS: ${os}"
+    Darwin)
+      set_macos_asset_candidates "${arch}"
+      ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      err "Windows builds are not published by this fork."
       err "See available assets: ${RELEASES_URL}"
       exit 1
       ;;

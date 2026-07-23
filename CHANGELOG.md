@@ -7,6 +7,17 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.9] - 2026-07-23
+
+### Added
+
+- **Release / macOS arm64**: Publish `cc-switch-cli-macos-arm64.tar.gz` (Apple Silicon) via CI; `install.sh` and self-update (`latest.json`) detect Darwin arm64.
+- **CLI / Provider show-key**: `cc-switch --app <app> provider show-key <id>` prints the configured API key unmasked (single line, for scripting).
+
+### Changed
+
+- **Docs / Install**: Document Linux musl + macOS arm64 install paths.
+
 ## [5.10.8] - 2026-07-22
 
 ### Changed

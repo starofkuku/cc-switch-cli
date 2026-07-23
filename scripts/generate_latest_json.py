@@ -20,16 +20,16 @@ def file_exists(release_dir: Path, filename: str) -> bool:
     ).is_file()
 
 
-def add_linux_musl_platform(
+def add_platform(
     manifest: dict,
     release_dir: Path,
     base_url: str,
     platform_key: str,
-    musl_name: str,
+    asset_name: str,
 ):
-    if file_exists(release_dir, musl_name):
+    if file_exists(release_dir, asset_name):
         manifest["platforms"][platform_key] = asset_entry(
-            release_dir, base_url, musl_name
+            release_dir, base_url, asset_name
         )
 
 
@@ -54,20 +54,26 @@ def main() -> int:
         "platforms": {},
     }
 
-    # This fork only publishes static Linux musl builds.
-    add_linux_musl_platform(
+    add_platform(
         manifest,
         release_dir,
         base_url,
         "linux-x86_64",
         "cc-switch-cli-linux-x64-musl.tar.gz",
     )
-    add_linux_musl_platform(
+    add_platform(
         manifest,
         release_dir,
         base_url,
         "linux-aarch64",
         "cc-switch-cli-linux-arm64-musl.tar.gz",
+    )
+    add_platform(
+        manifest,
+        release_dir,
+        base_url,
+        "darwin-aarch64",
+        "cc-switch-cli-macos-arm64.tar.gz",
     )
 
     if not manifest["platforms"]:

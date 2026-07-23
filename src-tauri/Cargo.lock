@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch"
-version = "5.10.8"
+version = "5.10.9"
 dependencies = [
  "anyhow",
  "async-stream",

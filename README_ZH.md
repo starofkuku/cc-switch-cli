@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.8-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.9-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -189,9 +189,9 @@ cc-switch --app grok provider list      # 管理 Grok 自定义模型
 
 ## 📥 安装
 
-### 方法 1：快速安装（仅 Linux musl）
+### 方法 1：快速安装（Linux musl + macOS arm64）
 
-本 fork 只发布 **Linux musl** 构建（`linux-x64-musl`、`linux-arm64-musl`）。
+本 fork 发布 **Linux musl**（`linux-x64-musl`、`linux-arm64-musl`）和 **macOS arm64**（`macos-arm64`，Apple Silicon）构建。
 
 ```bash
 curl -fsSL https://github.com/starofkuku/cc-switch-cli/releases/latest/download/install.sh | bash
@@ -226,6 +226,15 @@ sudo mv cc-switch /usr/local/bin/
 # 适用于树莓派或 ARM 服务器
 curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-linux-arm64-musl.tar.gz
 tar -xzf cc-switch-cli-linux-arm64-musl.tar.gz
+chmod +x cc-switch
+sudo mv cc-switch /usr/local/bin/
+```
+
+#### macOS（Apple Silicon / arm64）
+
+```bash
+curl -LO https://github.com/starofkuku/cc-switch-cli/releases/latest/download/cc-switch-cli-macos-arm64.tar.gz
+tar -xzf cc-switch-cli-macos-arm64.tar.gz
 chmod +x cc-switch
 sudo mv cc-switch /usr/local/bin/
 ```
@@ -268,6 +277,7 @@ copy target\release\cc-switch.exe C:\Windows\System32\
 ```bash
 cc-switch provider list              # 列出所有供应商
 cc-switch provider current           # 显示当前供应商
+cc-switch provider show-key <id>     # 打印供应商配置的 API Key（明文）
 cc-switch provider switch <id>       # 切换供应商
 cc-switch use <id>                   # 切换供应商（快捷命令）
 cc-switch provider add               # 添加新供应商

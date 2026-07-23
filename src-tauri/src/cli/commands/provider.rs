@@ -552,6 +552,11 @@ pub enum ProviderCommand {
     List,
     /// Show current provider
     Current,
+    /// Print the stored API key for a provider (unmasked)
+    ShowKey {
+        /// Provider ID
+        id: String,
+    },
     /// Switch to a provider
     Switch {
         /// Provider ID to switch to
@@ -708,6 +713,7 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
     match cmd {
         ProviderCommand::List => provider_inspect::list_providers(app_type),
         ProviderCommand::Current => provider_inspect::show_current(app_type),
+        ProviderCommand::ShowKey { id } => provider_inspect::show_key(app_type, &id),
         ProviderCommand::Switch { id } => switch_provider(app_type, &id),
         ProviderCommand::Add {
             template,

@@ -169,6 +169,89 @@ pub(crate) fn show_current(app_type: AppType) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Print the unmasked API key configured for a provider.
+///
+/// Output is a single line with only the key value, suitable for scripting.
+pub(crate) fn show_key(app_type: AppType, id: &str) -> Result<(), AppError> {
+    let state = get_state()?;
+    let providers = ProviderService::list(&state, app_type.clone())?;
+    let provider = providers.get(id).ok_or_else(|| {
+        AppError::localized(
+            "provider.show_key.not_found",
+            format!("供应商不存在: {id}"),
+            format!("Provider not found: {id}"),
+        )
+    })?;
+
+    let key = extract_provider_api_key(&app_type, provider).ok_or_else(|| {
+        AppError::localized(
+            "provider.show_key.missing",
+            format!("供应商 {id} 未配置 API Key"),
+            format!("Provider {id} has no API key configured"),
+        )
+    })?;
+
+    println!("{key}");
+    Ok(())
+}
+
+/// Extract the plain API key from provider settings for the given app type.
+pub(crate) fn extract_provider_api_key(app_type: &AppType, provider: &Provider) -> Option<String> {
+    let raw = match app_type {
+        AppType::Claude => StreamCheckService::extract_claude_key(provider),
+        AppType::Codex => StreamCheckService::extract_codex_key(provider),
+        AppType::Gemini => provider
+            .settings_config
+            .get("env")
+            .and_then(|env| {
+                env.get("GEMINI_API_KEY")
+                    .or_else(|| env.get("GOOGLE_API_KEY"))
+            })
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                // settings may already be env-map shaped for some imports
+                provider
+                    .settings_config
+                    .get("GEMINI_API_KEY")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        AppType::OpenCode => provider
+            .settings_config
+            .get("options")
+            .and_then(|o| o.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                provider
+                    .settings_config
+                    .get("apiKey")
+                    .or_else(|| provider.settings_config.get("api_key"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
+        AppType::Hermes => provider
+            .settings_config
+            .get("apiKey")
+            .or_else(|| provider.settings_config.get("api_key"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        AppType::OpenClaw | AppType::Pi | AppType::Grok => provider
+            .settings_config
+            .get("apiKey")
+            .or_else(|| provider.settings_config.get("api_key"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 pub(crate) fn speedtest_provider(app_type: AppType, id: &str) -> Result<(), AppError> {
     let state = get_state()?;
     let providers = ProviderService::list(&state, app_type.clone())?;
@@ -1444,5 +1527,52 @@ mod tests {
             err.to_string().contains("options.baseURL"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn extract_provider_api_key_reads_codex_auth_openai_key() {
+        let provider = Provider::with_id(
+            "relay".to_string(),
+            "Relay".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": "  sk-codex-plain  " },
+                "config": "model_provider = \"relay\"\n"
+            }),
+            None,
+        );
+        assert_eq!(
+            extract_provider_api_key(&AppType::Codex, &provider).as_deref(),
+            Some("sk-codex-plain")
+        );
+    }
+
+    #[test]
+    fn extract_provider_api_key_reads_claude_env_token() {
+        let provider = Provider::with_id(
+            "claude".to_string(),
+            "Claude".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "sk-ant-plain",
+                    "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+                }
+            }),
+            None,
+        );
+        assert_eq!(
+            extract_provider_api_key(&AppType::Claude, &provider).as_deref(),
+            Some("sk-ant-plain")
+        );
+    }
+
+    #[test]
+    fn extract_provider_api_key_missing_returns_none() {
+        let provider = Provider::with_id(
+            "empty".to_string(),
+            "Empty".to_string(),
+            json!({ "auth": {} }),
+            None,
+        );
+        assert!(extract_provider_api_key(&AppType::Codex, &provider).is_none());
     }
 }

@@ -474,7 +474,6 @@ fn manifest_asset_candidates(
     platform_key: &str,
     preference: LinuxLibcPreference,
 ) -> Result<Vec<ManifestAsset>, AppError> {
-    // This fork only publishes static Linux musl builds.
     let _ = preference;
     let entry = manifest.platforms.get(platform_key).ok_or_else(|| {
         AppError::Message(format!(
@@ -487,33 +486,37 @@ fn manifest_asset_candidates(
         signature: entry.signature.clone(),
     };
 
-    if !platform_key.starts_with("linux-") {
-        return Err(AppError::Message(format!(
-            "Self-update is only supported for Linux musl builds (got '{platform_key}')."
-        )));
+    // Linux: require musl assets. macOS: use the platform entry as-is.
+    if platform_key.starts_with("linux-") {
+        let mut candidates = Vec::new();
+        if let Some(variant) = entry.variants.get("musl") {
+            push_manifest_asset(
+                &mut candidates,
+                ManifestAsset {
+                    url: variant.url.clone(),
+                    signature: variant.signature.clone(),
+                },
+            );
+        }
+        if asset_looks_like_musl(&primary.url) {
+            push_manifest_asset(&mut candidates, primary);
+        }
+
+        if candidates.is_empty() {
+            return Err(AppError::Message(format!(
+                "Update manifest does not provide a musl asset for platform '{platform_key}'."
+            )));
+        }
+        return Ok(candidates);
     }
 
-    let mut candidates = Vec::new();
-    if let Some(variant) = entry.variants.get("musl") {
-        push_manifest_asset(
-            &mut candidates,
-            ManifestAsset {
-                url: variant.url.clone(),
-                signature: variant.signature.clone(),
-            },
-        );
-    }
-    if asset_looks_like_musl(&primary.url) {
-        push_manifest_asset(&mut candidates, primary);
+    if platform_key == "darwin-aarch64" {
+        return Ok(vec![primary]);
     }
 
-    if candidates.is_empty() {
-        return Err(AppError::Message(format!(
-            "Update manifest does not provide a musl asset for platform '{platform_key}'."
-        )));
-    }
-
-    Ok(candidates)
+    Err(AppError::Message(format!(
+        "Self-update is only supported for Linux musl and macOS arm64 builds (got '{platform_key}')."
+    )))
 }
 
 fn select_current_manifest_asset(manifest: &UpdateManifest) -> Result<ManifestAsset, AppError> {
@@ -525,14 +528,14 @@ fn release_asset_candidates_for_platform(
     arch: &str,
     preference: LinuxLibcPreference,
 ) -> Result<Vec<String>, AppError> {
-    // This fork only publishes static Linux musl builds.
     let _ = preference;
     let names = match (os, arch) {
         ("linux", "x86_64") => vec!["cc-switch-cli-linux-x64-musl.tar.gz".to_string()],
         ("linux", "aarch64") => vec!["cc-switch-cli-linux-arm64-musl.tar.gz".to_string()],
+        ("macos", "aarch64") => vec!["cc-switch-cli-macos-arm64.tar.gz".to_string()],
         _ => {
             return Err(AppError::Message(format!(
-                "Self-update is only supported for Linux musl builds (got {os}/{arch})."
+                "Self-update is only supported for Linux musl and macOS arm64 builds (got {os}/{arch})."
             )))
         }
     };

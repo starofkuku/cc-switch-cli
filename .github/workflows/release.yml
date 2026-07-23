@@ -88,11 +88,19 @@ jobs:
             platform: linux-x64-musl
             target: x86_64-unknown-linux-musl
             binary: cc-switch
+            use_cross: true
           # Linux ARM64 - MUSL only
           - os: ubuntu-22.04
             platform: linux-arm64-musl
             target: aarch64-unknown-linux-musl
             binary: cc-switch
+            use_cross: true
+          # macOS Apple Silicon
+          - os: macos-14
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+            binary: cc-switch
+            use_cross: false
 
     steps:
       - name: Checkout
@@ -111,11 +119,18 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install cross
+        if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build with cross
+        if: matrix.use_cross
         working-directory: src-tauri
         run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: ${{ !matrix.use_cross }}
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary
         shell: bash
@@ -193,8 +208,20 @@ jobs:
               release-assets/cc-switch-cli-linux-arm64-musl.tar.gz
           fi
 
+          # macOS Apple Silicon
+          if [ -f "artifacts/cc-switch-cli-macos-arm64/cc-switch" ]; then
+            tar -czf release-assets/cc-switch-cli-${VERSION}-macos-arm64.tar.gz \
+              -C artifacts/cc-switch-cli-macos-arm64 cc-switch
+            cp release-assets/cc-switch-cli-${VERSION}-macos-arm64.tar.gz \
+              release-assets/cc-switch-cli-macos-arm64.tar.gz
+          fi
+
           if ! compgen -G "release-assets/cc-switch-cli-*-linux-*-musl.tar.gz" > /dev/null; then
             echo "No Linux musl release assets were produced" >&2
+            exit 1
+          fi
+          if ! compgen -G "release-assets/cc-switch-cli-*-macos-arm64.tar.gz" > /dev/null; then
+            echo "No macOS arm64 release assets were produced" >&2
             exit 1
           fi
 
@@ -258,7 +285,10 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            This release ships **Linux musl** builds only (`linux-x64-musl`, `linux-arm64-musl`).
+            This release ships:
+
+            - **Linux musl**: `linux-x64-musl`, `linux-arm64-musl`
+            - **macOS**: `macos-arm64` (Apple Silicon)
 
             Install:
 

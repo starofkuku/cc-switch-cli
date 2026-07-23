@@ -1429,6 +1429,7 @@ command = "echo"
                 claude: false,
                 codex: true,
                 gemini: false,
+                grok: false,
                 opencode: false,
                 hermes: false,
             },
@@ -2176,4 +2177,54 @@ fn provider_switch_ambiguous_name_lists_candidate_ids() {
     let message = err.to_string();
     assert!(message.contains("id-one"), "expected id-one in: {message}");
     assert!(message.contains("id-two"), "expected id-two in: {message}");
+}
+
+#[test]
+#[serial]
+fn provider_show_key_returns_codex_openai_api_key() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "relay".to_string();
+        manager.providers.insert(
+            "relay".to_string(),
+            Provider::with_id(
+                "relay".to_string(),
+                "Relay".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "sk-codex-show-key" },
+                    "config": "model_provider = \"relay\"\n"
+                }),
+                None,
+            ),
+        );
+    }
+    let state = state_from_config(config);
+    state.save().expect("persist codex provider");
+    drop(state);
+
+    provider_command(
+        ProviderCommand::ShowKey {
+            id: "relay".to_string(),
+        },
+        AppType::Codex,
+    );
+
+    let err = provider_command_result(
+        ProviderCommand::ShowKey {
+            id: "missing".to_string(),
+        },
+        AppType::Codex,
+    )
+    .expect_err("missing provider should error");
+    assert!(
+        err.to_string().contains("missing") || err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
 }
