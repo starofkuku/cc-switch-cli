@@ -564,9 +564,9 @@ pub enum ProviderCommand {
     },
     /// Add a new provider.
     ///
-    /// In a TTY without flags: optionally clone from another app's provider,
-    /// then (Claude/Codex) Custom or models.dev catalog wizard.
-    /// Pass flags for non-interactive add.
+    /// In a TTY without flags: optionally clone from another app, then a full
+    /// CLI guided flow for every app (Claude/Codex: catalog or custom; others:
+    /// field prompts). Pass flags for non-interactive add.
     Add {
         /// Provider template to apply before creation
         #[arg(long, value_enum)]
@@ -958,9 +958,9 @@ fn non_empty(value: Option<String>) -> Option<String> {
 
 fn add_requires_name_error() -> AppError {
     AppError::InvalidInput(if crate::cli::i18n::is_chinese() {
-        "provider add 需要 --name 参数；如需交互式添加，请运行 TUI（cc-switch）".to_string()
+        "非交互式 provider add 需要 --name（以及该应用所需的 --config/--base-url 等参数）。交互式添加：在终端直接运行 `cc-switch --app <app> provider add`（无需 TUI）".to_string()
     } else {
-        "provider add requires --name; run the TUI (cc-switch) for interactive add".to_string()
+        "non-interactive provider add requires --name (plus app-specific flags like --config/--base-url). For guided CLI add, run `cc-switch --app <app> provider add` in a TTY (no TUI needed)".to_string()
     })
 }
 
@@ -1305,8 +1305,11 @@ fn add_has_noninteractive_input(args: &AddProviderArgs) -> bool {
 fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError> {
     let noninteractive = add_has_noninteractive_input(&args);
 
-    // TTY without flags: offer clone-from-other-app first, then catalog wizard (Claude/Codex).
-    if crate::cli::commands::provider_clone::should_offer_clone(noninteractive) {
+    // TTY without flags: full CLI guided flow for every app (no TUI required).
+    // 1) optional clone from another app
+    // 2) Claude/Codex → models.dev catalog / custom wizard
+    // 3) all other apps → guided field prompts (same as edit)
+    if crate::cli::commands::provider_add_wizard::should_run_interactive_add(noninteractive) {
         let state = AppState::try_new()?;
         let config = state.config.read().unwrap();
         let manager = config
@@ -1315,23 +1318,24 @@ fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError
         let existing_ids: Vec<String> = manager.providers.keys().cloned().collect();
         drop(config);
 
-        if let Some(provider) =
-            crate::cli::commands::provider_clone::maybe_clone_provider(&app_type, &existing_ids)?
-        {
-            display_provider_summary(&provider, &app_type);
-            let provider_id = provider.id.clone();
-            ProviderService::add(&state, app_type, provider)?;
-            println!(
-                "\n{}",
-                success(&texts::entity_added_success(
-                    texts::entity_provider(),
-                    &provider_id
-                ))
-            );
-            return Ok(());
+        if crate::cli::commands::provider_clone::should_offer_clone(noninteractive) {
+            if let Some(provider) =
+                crate::cli::commands::provider_clone::maybe_clone_provider(&app_type, &existing_ids)?
+            {
+                display_provider_summary(&provider, &app_type);
+                let provider_id = provider.id.clone();
+                ProviderService::add(&state, app_type, provider)?;
+                println!(
+                    "\n{}",
+                    success(&texts::entity_added_success(
+                        texts::entity_provider(),
+                        &provider_id
+                    ))
+                );
+                return Ok(());
+            }
         }
 
-        // Declined clone → Claude/Codex catalog/custom wizard.
         if crate::cli::commands::provider_add_wizard::supports_catalog_wizard(&app_type) {
             let (provider, prompt_result) =
                 crate::cli::commands::provider_add_wizard::run_catalog_add_wizard(
@@ -1344,6 +1348,18 @@ fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError
                 prompt_result,
             );
         }
+
+        let (provider, prompt_result) =
+            crate::cli::commands::provider_add_wizard::run_interactive_manual_add(
+                &app_type,
+                &existing_ids,
+            )?;
+        return crate::cli::commands::provider_add_wizard::finish_wizard_add_with_confirm(
+            app_type,
+            provider,
+            prompt_result,
+            true,
+        );
     }
 
     let name = non_empty(args.name.clone()).ok_or_else(add_requires_name_error)?;

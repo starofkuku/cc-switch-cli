@@ -1,19 +1,20 @@
-//! Interactive CLI wizard for Claude/Codex provider add.
+//! Interactive CLI wizards for `provider add`.
 //!
-//! - Source picker: Custom (first) or models.dev vendors (filterable).
-//! - Custom: existing field flow + optional /v1/models pick for default model.
-//! - Vendor: auto base URL; only API key + model from local catalog JSON.
+//! - Claude/Codex: Custom or models.dev catalog (filterable).
+//! - All other apps: guided field prompts via `prompt_settings_config`
+//!   (same path as `provider edit`, no TUI required).
 
 use std::io::IsTerminal;
 
-use inquire::{Select, Text};
+use inquire::{Confirm, Select, Text};
 use serde_json::Value;
 
 use crate::app_config::AppType;
 use crate::cli::commands::provider_input::{
     build_claude_settings_config_from_prompt, build_codex_settings_config_from_prompt,
     current_timestamp, display_provider_summary, generate_provider_id_for_app,
-    prompt_model_with_optional_v1_fetch, SettingsConfigPromptResult,
+    prompt_basic_fields, prompt_model_with_optional_v1_fetch, prompt_optional_fields,
+    prompt_settings_config, SettingsConfigPromptResult,
 };
 use crate::cli::i18n::texts;
 use crate::cli::ui::{info, success, warning};
@@ -64,14 +65,75 @@ pub(crate) fn supports_catalog_wizard(app_type: &AppType) -> bool {
     matches!(app_type, AppType::Claude | AppType::Codex)
 }
 
+/// True when `provider add` should run a full CLI guided flow (no flags, TTY).
+pub(crate) fn should_run_interactive_add(has_noninteractive_input: bool) -> bool {
+    std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && !has_noninteractive_input
+}
+
 pub(crate) fn should_run_catalog_wizard(
     app_type: &AppType,
     has_noninteractive_input: bool,
 ) -> bool {
-    supports_catalog_wizard(app_type)
-        && std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-        && !has_noninteractive_input
+    supports_catalog_wizard(app_type) && should_run_interactive_add(has_noninteractive_input)
+}
+
+/// Guided CLI add for apps without the models.dev catalog wizard
+/// (Gemini, OpenCode, Hermes, OpenClaw, Pi, Grok, …).
+///
+/// Prompts: name → settings (app-specific) → optional fields → confirm.
+pub(crate) fn run_interactive_manual_add(
+    app_type: &AppType,
+    existing_ids: &[String],
+) -> Result<(Provider, Option<SettingsConfigPromptResult>), AppError> {
+    crate::cli::terminal::disable_bracketed_paste_mode_best_effort();
+
+    println!(
+        "{}",
+        info(&format!(
+            "Interactive provider add for {} (guided prompts)",
+            app_type.as_str()
+        ))
+    );
+
+    let (name, website_url) = prompt_basic_fields(None)?;
+    let id = generate_provider_id_for_app(app_type, &name, existing_ids);
+
+    let prompt_result = prompt_settings_config(app_type, None, None, false, &name)?;
+
+    let optional = if Confirm::new(texts::modify_optional_fields_prompt())
+        .with_default(false)
+        .prompt()
+        .map_err(inquire_err)?
+    {
+        prompt_optional_fields(None)?
+    } else {
+        crate::cli::commands::provider_input::OptionalFields {
+            notes: None,
+            icon: None,
+            icon_color: None,
+            sort_index: None,
+        }
+    };
+
+    let mut provider = Provider {
+        id,
+        name,
+        settings_config: prompt_result.settings_config.clone(),
+        website_url,
+        category: None,
+        created_at: Some(current_timestamp()),
+        sort_index: optional.sort_index,
+        notes: optional.notes,
+        icon: optional.icon,
+        icon_color: optional.icon_color,
+        meta: None,
+        in_failover_queue: false,
+    };
+    apply_wizard_meta(app_type, &mut provider, Some(&prompt_result));
+
+    Ok((provider, Some(prompt_result)))
 }
 
 fn protocol_pools(app_type: &AppType) -> Result<Vec<ModelsDevProtocolPool>, AppError> {
@@ -479,6 +541,26 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn interactive_add_supported_for_all_apps_via_catalog_or_manual() {
+        for app in AppType::all() {
+            if supports_catalog_wizard(&app) {
+                assert!(matches!(app, AppType::Claude | AppType::Codex));
+            } else {
+                // Non-catalog apps use run_interactive_manual_add in the TTY path.
+                assert!(matches!(
+                    app,
+                    AppType::Gemini
+                        | AppType::OpenCode
+                        | AppType::Hermes
+                        | AppType::OpenClaw
+                        | AppType::Pi
+                        | AppType::Grok
+                ));
+            }
+        }
+    }
+
     fn codex_provider() -> Provider {
         Provider::with_id(
             "catalog".to_string(),
@@ -533,11 +615,32 @@ pub(crate) fn finish_wizard_add(
     provider: Provider,
     prompt_result: Option<SettingsConfigPromptResult>,
 ) -> Result<(), AppError> {
+    finish_wizard_add_with_confirm(app_type, provider, prompt_result, false)
+}
+
+/// Persist a wizard-built provider. When `confirm` is true, show summary and ask first.
+pub(crate) fn finish_wizard_add_with_confirm(
+    app_type: AppType,
+    provider: Provider,
+    prompt_result: Option<SettingsConfigPromptResult>,
+    confirm: bool,
+) -> Result<(), AppError> {
     let state = crate::store::AppState::try_new()?;
     let mut provider = provider;
     apply_wizard_meta(&app_type, &mut provider, prompt_result.as_ref());
 
     display_provider_summary(&provider, &app_type);
+    if confirm {
+        let ok = Confirm::new(&texts::confirm_create_entity(texts::entity_provider()))
+            .with_default(true)
+            .prompt()
+            .map_err(inquire_err)?;
+        if !ok {
+            println!("{}", info(texts::cancelled()));
+            return Ok(());
+        }
+    }
+
     let provider_id = provider.id.clone();
     ProviderService::add(&state, app_type, provider)?;
     println!(

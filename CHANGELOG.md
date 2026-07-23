@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.10] - 2026-07-23
+
+### Added
+
+- **CLI / Provider add (all apps)**: In a TTY without flags, `provider add` runs a full guided CLI flow for every app after optional clone — Claude/Codex keep the models.dev catalog/custom wizard; Gemini, OpenCode, Hermes, OpenClaw, Pi, and Grok use step-by-step field prompts (no TUI required).
+
 ## [5.10.9] - 2026-07-23
 
 ### Added
