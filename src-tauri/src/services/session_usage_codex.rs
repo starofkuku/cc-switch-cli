@@ -751,12 +751,12 @@ pub(crate) fn reset_codex_usage_on_conn(
                 })?;
             let mapped = statement
                 .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|error| AppError::Database(format!("查询会话同步 cursor 失败: {error}")))?;
+                .map_err(|error| {
+                    AppError::Database(format!("查询会话同步 cursor 失败: {error}"))
+                })?;
             mapped
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    AppError::Database(format!("解析会话同步 cursor 失败: {error}"))
-                })?
+                .map_err(|error| AppError::Database(format!("解析会话同步 cursor 失败: {error}")))?
         };
         for file_path in paths
             .into_iter()

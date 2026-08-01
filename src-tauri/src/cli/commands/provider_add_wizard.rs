@@ -12,9 +12,9 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::cli::commands::provider_input::{
     build_claude_settings_config_from_prompt, build_codex_settings_config_from_prompt,
-    current_timestamp, display_provider_summary, generate_provider_id_for_app,
-    prompt_basic_fields, prompt_model_with_optional_v1_fetch, prompt_optional_fields,
-    prompt_settings_config, SettingsConfigPromptResult,
+    current_timestamp, display_provider_summary, generate_provider_id_for_app, prompt_basic_fields,
+    prompt_model_with_optional_v1_fetch, prompt_optional_fields, prompt_settings_config,
+    SettingsConfigPromptResult,
 };
 use crate::cli::i18n::texts;
 use crate::cli::ui::{info, success, warning};
@@ -67,9 +67,7 @@ pub(crate) fn supports_catalog_wizard(app_type: &AppType) -> bool {
 
 /// True when `provider add` should run a full CLI guided flow (no flags, TTY).
 pub(crate) fn should_run_interactive_add(has_noninteractive_input: bool) -> bool {
-    std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-        && !has_noninteractive_input
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal() && !has_noninteractive_input
 }
 
 pub(crate) fn should_run_catalog_wizard(

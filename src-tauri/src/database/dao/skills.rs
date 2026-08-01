@@ -19,8 +19,7 @@ impl Database {
     /// 获取所有已安装的 Skills
     pub fn get_all_installed_skills(&self) -> Result<IndexMap<String, InstalledSkill>, AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild =
-            Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
+        let has_grokbuild = Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
         let sql = if has_grokbuild {
             "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                     readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes, enabled_grokbuild, installed_at
@@ -52,11 +51,7 @@ impl Database {
                         gemini: row.get(10)?,
                         opencode: row.get(11)?,
                         hermes: row.get(12)?,
-                        grok: if has_grokbuild {
-                            row.get(13)?
-                        } else {
-                            false
-                        },
+                        grok: if has_grokbuild { row.get(13)? } else { false },
                     },
                     installed_at: row.get(installed_at_idx)?,
                 })
@@ -74,8 +69,7 @@ impl Database {
     /// 获取单个已安装的 Skill
     pub fn get_installed_skill(&self, id: &str) -> Result<Option<InstalledSkill>, AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild =
-            Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
+        let has_grokbuild = Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
         let sql = if has_grokbuild {
             "SELECT id, name, description, directory, repo_owner, repo_name, repo_branch,
                     readme_url, enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes, enabled_grokbuild, installed_at
@@ -106,11 +100,7 @@ impl Database {
                     gemini: row.get(10)?,
                     opencode: row.get(11)?,
                     hermes: row.get(12)?,
-                    grok: if has_grokbuild {
-                        row.get(13)?
-                    } else {
-                        false
-                    },
+                    grok: if has_grokbuild { row.get(13)? } else { false },
                 },
                 installed_at: row.get(installed_at_idx)?,
             })
@@ -126,8 +116,7 @@ impl Database {
     /// 保存 Skill（添加或更新）
     pub fn save_skill(&self, skill: &InstalledSkill) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild =
-            Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
+        let has_grokbuild = Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
         if has_grokbuild {
             conn.execute(
                 "INSERT OR REPLACE INTO skills
@@ -201,8 +190,7 @@ impl Database {
     /// 更新 Skill 的应用启用状态
     pub fn update_skill_apps(&self, id: &str, apps: &SkillApps) -> Result<bool, AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild =
-            Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
+        let has_grokbuild = Self::has_column(&conn, "skills", "enabled_grokbuild").unwrap_or(false);
         let affected = if has_grokbuild {
             conn.execute(
                 "UPDATE skills SET enabled_claude = ?1, enabled_codex = ?2, enabled_gemini = ?3, enabled_opencode = ?4, enabled_hermes = ?5, enabled_grokbuild = ?6 WHERE id = ?7",

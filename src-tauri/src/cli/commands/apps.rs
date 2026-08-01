@@ -25,10 +25,7 @@ pub fn execute(cmd: AppsCommand) -> Result<(), AppError> {
 pub fn supported_app_labels() -> Vec<String> {
     AppType::value_variants()
         .iter()
-        .filter_map(|app| {
-            app.to_possible_value()
-                .map(|v| v.get_name().to_string())
-        })
+        .filter_map(|app| app.to_possible_value().map(|v| v.get_name().to_string()))
         .collect()
 }
 

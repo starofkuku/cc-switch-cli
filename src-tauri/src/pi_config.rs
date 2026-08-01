@@ -55,10 +55,7 @@ const PI_INPUT_MODALITIES: &[&str] = &["text", "image"];
 
 /// Strip modalities Pi does not accept (e.g. pdf/audio/video from models.dev).
 pub fn sanitize_models_document(models: &mut Value) {
-    let Some(providers) = models
-        .get_mut("providers")
-        .and_then(Value::as_object_mut)
-    else {
+    let Some(providers) = models.get_mut("providers").and_then(Value::as_object_mut) else {
         return;
     };
     for provider in providers.values_mut() {

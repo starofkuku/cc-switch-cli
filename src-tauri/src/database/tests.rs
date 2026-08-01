@@ -1935,7 +1935,10 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
     let count: i32 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count rows");
-    assert_eq!(count, 4, "per-app proxy_config should have 4 rows (incl. grokbuild)");
+    assert_eq!(
+        count, 4,
+        "per-app proxy_config should have 4 rows (incl. grokbuild)"
+    );
 
     // 新结构下应能按 app_type 查询
     let _: i32 = conn

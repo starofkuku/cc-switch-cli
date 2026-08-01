@@ -172,7 +172,7 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
         claude: false,
         codex: false,
         gemini: false,
-            grok: false,
+        grok: false,
         opencode: false,
         hermes: false,
     };

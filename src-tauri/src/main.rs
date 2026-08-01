@@ -131,9 +131,7 @@ fn command_uses_deferred_codex_migration(command: &Option<Commands>) -> bool {
 fn database_access_required(command: &Option<Commands>) -> bool {
     !matches!(
         command,
-        Some(Commands::Completions(_))
-            | Some(Commands::Update(_))
-            | Some(Commands::Apps(_))
+        Some(Commands::Completions(_)) | Some(Commands::Update(_)) | Some(Commands::Apps(_))
     )
 }
 

@@ -3,7 +3,7 @@ use clap::Subcommand;
 use colored::Colorize;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::style::{Print, ResetColor, SetForegroundColor, Color as CtColor};
+use crossterm::style::{Color as CtColor, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -299,9 +299,10 @@ fn export_session(
             choices.push(load_export_choice(provider_id, session, false)?);
         }
         let selected_index = prompt_export_session_picker(&choices)?;
-        choices.into_iter().nth(selected_index).ok_or_else(|| {
-            AppError::Message("Invalid session selection.".to_string())
-        })?
+        choices
+            .into_iter()
+            .nth(selected_index)
+            .ok_or_else(|| AppError::Message("Invalid session selection.".to_string()))?
     };
 
     write_export_document(provider_id, &selected, output)
@@ -347,7 +348,11 @@ fn group_sessions_by_workdir(sessions: Vec<SessionMeta>) -> Vec<WorkdirGroup> {
     for group in &mut groups {
         session_manager::sort_by_recent(&mut group.sessions);
     }
-    groups.sort_by(|a, b| b.last_active.cmp(&a.last_active).then_with(|| a.display.cmp(&b.display)));
+    groups.sort_by(|a, b| {
+        b.last_active
+            .cmp(&a.last_active)
+            .then_with(|| a.display.cmp(&b.display))
+    });
     groups
 }
 
@@ -784,9 +789,9 @@ fn prompt_export_session_picker(choices: &[ExportChoice]) -> Result<usize, AppEr
             term_rows,
         )?;
 
-        if !event::poll(Duration::from_millis(250)).map_err(|e| {
-            AppError::Message(format!("failed to poll keyboard events: {e}"))
-        })? {
+        if !event::poll(Duration::from_millis(250))
+            .map_err(|e| AppError::Message(format!("failed to poll keyboard events: {e}")))?
+        {
             continue;
         }
         let Event::Key(key) = event::read()
@@ -919,8 +924,7 @@ fn draw_export_picker(
     let end = (list_scroll + list_height).min(choices.len());
     for (visible_i, index) in (list_scroll..end).enumerate() {
         let choice = &choices[index];
-        let time =
-            format_session_time(choice.session.last_active_at.or(choice.session.created_at));
+        let time = format_session_time(choice.session.last_active_at.or(choice.session.created_at));
         let marker = if index == selected { ">" } else { " " };
         let line = format!(
             "{marker} {:>3}. [{}] {}  ({})",

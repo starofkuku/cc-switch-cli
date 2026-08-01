@@ -12,8 +12,8 @@ impl Database {
     /// 获取所有 MCP 服务器
     pub fn get_all_mcp_servers(&self) -> Result<IndexMap<String, McpServer>, AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild = Self::has_column(&conn, "mcp_servers", "enabled_grokbuild")
-            .unwrap_or(false);
+        let has_grokbuild =
+            Self::has_column(&conn, "mcp_servers", "enabled_grokbuild").unwrap_or(false);
         let sql = if has_grokbuild {
             "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_opencode, enabled_hermes, enabled_grokbuild
              FROM mcp_servers
@@ -41,11 +41,7 @@ impl Database {
                 let enabled_gemini: bool = row.get(9)?;
                 let enabled_opencode: bool = row.get(10)?;
                 let enabled_hermes: bool = row.get(11)?;
-                let enabled_grok: bool = if has_grokbuild {
-                    row.get(12)?
-                } else {
-                    false
-                };
+                let enabled_grok: bool = if has_grokbuild { row.get(12)? } else { false };
 
                 let server = serde_json::from_str(&server_config_str).unwrap_or_default();
                 let tags = serde_json::from_str(&tags_str).unwrap_or_default();
@@ -84,8 +80,8 @@ impl Database {
     /// 保存 MCP 服务器
     pub fn save_mcp_server(&self, server: &McpServer) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        let has_grokbuild = Self::has_column(&conn, "mcp_servers", "enabled_grokbuild")
-            .unwrap_or(false);
+        let has_grokbuild =
+            Self::has_column(&conn, "mcp_servers", "enabled_grokbuild").unwrap_or(false);
         if has_grokbuild {
             conn.execute(
                 "INSERT INTO mcp_servers (
@@ -146,14 +142,15 @@ impl Database {
                 params![
                     server.id,
                     server.name,
-                    serde_json::to_string(&server.server).map_err(|e| AppError::Database(format!(
-                        "Failed to serialize server config: {e}"
-                    )))?,
+                    serde_json::to_string(&server.server).map_err(|e| AppError::Database(
+                        format!("Failed to serialize server config: {e}")
+                    ))?,
                     server.description,
                     server.homepage,
                     server.docs,
-                    serde_json::to_string(&server.tags)
-                        .map_err(|e| AppError::Database(format!("Failed to serialize tags: {e}")))?,
+                    serde_json::to_string(&server.tags).map_err(|e| AppError::Database(
+                        format!("Failed to serialize tags: {e}")
+                    ))?,
                     server.apps.claude,
                     server.apps.codex,
                     server.apps.gemini,
