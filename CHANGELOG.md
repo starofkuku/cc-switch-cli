@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.11] - 2026-08-01
+
+### Added
+
+- **CLI / Provider update-key**: `cc-switch --app <app> provider update-key <id> --api-key <key>` updates a provider's stored API key non-interactively (scriptable key rotation). Claude honors `--api-key-field auth-token|api-key` and defaults to the provider's existing field via metadata; Codex writes `auth.OPENAI_API_KEY`, Gemini writes `env.GEMINI_API_KEY`, and OpenCode/Hermes/OpenClaw/Pi/Grok write `apiKey`. For additive-mode apps the change is synced back to the live config file; for the current Claude/Codex/Gemini provider the live config is updated too.
+
 ## [5.10.10] - 2026-07-23
 
 ### Added
