@@ -8,7 +8,7 @@ use std::net::TcpListener;
 
 use cc_switch_lib::{
     get_claude_settings_path, get_codex_auth_path, get_codex_config_path, read_json_file,
-    update_settings, write_codex_live_atomic, AppSettings, AppType, McpApps, McpServer,
+    update_settings, write_codex_live_atomic, AppSettings, AppState, AppType, McpApps, McpServer,
     MultiAppConfig, Provider, ProviderMeta, ProviderService, UsageScript,
 };
 
@@ -2225,6 +2225,276 @@ fn provider_show_key_returns_codex_openai_api_key() {
     .expect_err("missing provider should error");
     assert!(
         err.to_string().contains("missing") || err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_updates_codex_openai_api_key() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "relay".to_string();
+        manager.providers.insert(
+            "relay".to_string(),
+            Provider::with_id(
+                "relay".to_string(),
+                "Relay".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "sk-old-key" },
+                    "config": "model_provider = \"relay\"\n\n[model_providers.relay]\nname = \"relay\"\nbase_url = \"https://relay.example/v1\"\nwire_api = \"responses\"\n"
+                }),
+                None,
+            ),
+        );
+    }
+    let state = state_from_config(config);
+    state.save().expect("persist codex provider");
+    drop(state);
+
+    provider_command(
+        ProviderCommand::UpdateKey {
+            id: "relay".to_string(),
+            api_key: "sk-new-key".to_string(),
+            api_key_field: None,
+        },
+        AppType::Codex,
+    );
+
+    let state = AppState::try_new().expect("reload state");
+    let providers = ProviderService::list(&state, AppType::Codex).expect("list codex providers");
+    let provider = providers.get("relay").expect("relay provider");
+    assert_eq!(
+        provider.settings_config["auth"]["OPENAI_API_KEY"],
+        json!("sk-new-key")
+    );
+    assert!(
+        provider.settings_config.get("apiKey").is_none(),
+        "top-level apiKey alias should be removed"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_claude_uses_meta_field_by_default() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "relay".to_string();
+        let mut provider = Provider::with_id(
+            "relay".to_string(),
+            "Relay".to_string(),
+            json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "sk-old" } }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            api_key_field: Some("ANTHROPIC_AUTH_TOKEN".to_string()),
+            ..Default::default()
+        });
+        manager.providers.insert("relay".to_string(), provider);
+    }
+    let state = state_from_config(config);
+    state.save().expect("persist claude provider");
+    drop(state);
+
+    provider_command(
+        ProviderCommand::UpdateKey {
+            id: "relay".to_string(),
+            api_key: "sk-new".to_string(),
+            api_key_field: None,
+        },
+        AppType::Claude,
+    );
+
+    let state = AppState::try_new().expect("reload state");
+    let providers = ProviderService::list(&state, AppType::Claude).expect("list claude providers");
+    let provider = providers.get("relay").expect("relay provider");
+    assert_eq!(
+        provider.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"],
+        json!("sk-new")
+    );
+    assert!(
+        provider.settings_config["env"]
+            .get("ANTHROPIC_API_KEY")
+            .is_none(),
+        "alternate field should be removed"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_claude_explicit_api_key_field() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "relay".to_string();
+        manager.providers.insert(
+            "relay".to_string(),
+            Provider::with_id(
+                "relay".to_string(),
+                "Relay".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "sk-old" } }),
+                None,
+            ),
+        );
+    }
+    let state = state_from_config(config);
+    state.save().expect("persist claude provider");
+    drop(state);
+
+    provider_command(
+        ProviderCommand::UpdateKey {
+            id: "relay".to_string(),
+            api_key: "sk-new".to_string(),
+            api_key_field: Some(
+                cc_switch_lib::cli::commands::provider::ClaudeApiKeyFieldArg::ApiKey,
+            ),
+        },
+        AppType::Claude,
+    );
+
+    let state = AppState::try_new().expect("reload state");
+    let providers = ProviderService::list(&state, AppType::Claude).expect("list claude providers");
+    let provider = providers.get("relay").expect("relay provider");
+    assert_eq!(
+        provider.settings_config["env"]["ANTHROPIC_API_KEY"],
+        json!("sk-new")
+    );
+    assert!(
+        provider.settings_config["env"]
+            .get("ANTHROPIC_AUTH_TOKEN")
+            .is_none(),
+        "old field should be removed when switching fields"
+    );
+    assert_eq!(
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.api_key_field.as_deref()),
+        Some("ANTHROPIC_API_KEY")
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_additive_pi_syncs_live_models() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    // Pi live 配置写在隔离 HOME 的 .pi/agent 下（未设置 PI_CODING_AGENT_DIR）
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    let models_path = pi_dir.join("models.json");
+    fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&json!({
+            "providers": {
+                "relay": {
+                    "baseUrl": "https://relay.example/v1",
+                    "api": "openai-completions",
+                    "apiKey": "sk-old-pi",
+                    "models": [{ "id": "gpt-4o" }]
+                }
+            }
+        }))
+        .expect("serialize models"),
+    )
+    .expect("write models.json");
+
+    let state = AppState::try_new().expect("state");
+    ProviderService::import_live_config(&state, AppType::Pi).expect("import pi live");
+    drop(state);
+
+    provider_command(
+        ProviderCommand::UpdateKey {
+            id: "relay".to_string(),
+            api_key: "sk-new-pi".to_string(),
+            api_key_field: None,
+        },
+        AppType::Pi,
+    );
+
+    // cc-switch 数据库内的 settings_config 已更新
+    let state = AppState::try_new().expect("reload");
+    let providers = ProviderService::list(&state, AppType::Pi).expect("list pi providers");
+    let provider = providers.get("relay").expect("relay provider");
+    assert_eq!(provider.settings_config["apiKey"], json!("sk-new-pi"));
+
+    // live models.json 同步（其他字段保留）
+    let live: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&models_path).expect("read models"))
+            .expect("parse models");
+    assert_eq!(live["providers"]["relay"]["apiKey"], json!("sk-new-pi"));
+    assert_eq!(
+        live["providers"]["relay"]["baseUrl"],
+        json!("https://relay.example/v1")
+    );
+    assert_eq!(
+        live["providers"]["relay"]["models"][0]["id"],
+        json!("gpt-4o")
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_missing_provider_errors() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let err = provider_command_result(
+        ProviderCommand::UpdateKey {
+            id: "missing".to_string(),
+            api_key: "sk-new".to_string(),
+            api_key_field: None,
+        },
+        AppType::Codex,
+    )
+    .expect_err("missing provider should error");
+    assert!(
+        err.to_string().contains("missing") || err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_update_key_empty_api_key_errors() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let err = provider_command_result(
+        ProviderCommand::UpdateKey {
+            id: "whatever".to_string(),
+            api_key: "   ".to_string(),
+            api_key_field: None,
+        },
+        AppType::Codex,
+    )
+    .expect_err("empty api key should error");
+    assert!(
+        err.to_string().contains("--api-key"),
         "unexpected error: {err}"
     );
 }

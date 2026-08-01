@@ -557,6 +557,17 @@ pub enum ProviderCommand {
         /// Provider ID
         id: String,
     },
+    /// Update the stored API key for a provider
+    UpdateKey {
+        /// Provider ID
+        id: String,
+        /// New API key or token
+        #[arg(long)]
+        api_key: String,
+        /// Claude API-key field to update (default: auth-token)
+        #[arg(long, value_enum)]
+        api_key_field: Option<ClaudeApiKeyFieldArg>,
+    },
     /// Switch to a provider
     Switch {
         /// Provider ID to switch to
@@ -714,6 +725,11 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
         ProviderCommand::List => provider_inspect::list_providers(app_type),
         ProviderCommand::Current => provider_inspect::show_current(app_type),
         ProviderCommand::ShowKey { id } => provider_inspect::show_key(app_type, &id),
+        ProviderCommand::UpdateKey {
+            id,
+            api_key,
+            api_key_field,
+        } => update_provider_key(app_type, &id, &api_key, api_key_field),
         ProviderCommand::Switch { id } => switch_provider(app_type, &id),
         ProviderCommand::Add {
             template,
@@ -1319,9 +1335,10 @@ fn add_provider(app_type: AppType, args: AddProviderArgs) -> Result<(), AppError
         drop(config);
 
         if crate::cli::commands::provider_clone::should_offer_clone(noninteractive) {
-            if let Some(provider) =
-                crate::cli::commands::provider_clone::maybe_clone_provider(&app_type, &existing_ids)?
-            {
+            if let Some(provider) = crate::cli::commands::provider_clone::maybe_clone_provider(
+                &app_type,
+                &existing_ids,
+            )? {
                 display_provider_summary(&provider, &app_type);
                 let provider_id = provider.id.clone();
                 ProviderService::add(&state, app_type, provider)?;
@@ -1599,6 +1616,175 @@ fn edit_provider(app_type: AppType, id: &str) -> Result<(), AppError> {
         println!("{}", warning(texts::current_provider_synced_warning()));
     }
 
+    Ok(())
+}
+
+fn update_provider_key(
+    app_type: AppType,
+    id: &str,
+    api_key: &str,
+    api_key_field: Option<ClaudeApiKeyFieldArg>,
+) -> Result<(), AppError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(AppError::InvalidInput(
+            "update-key requires a non-empty --api-key".to_string(),
+        ));
+    }
+
+    let state = AppState::try_new()?;
+    let providers = ProviderService::list(&state, app_type.clone())?;
+    let original = providers.get(id).cloned().ok_or_else(|| {
+        let msg = texts::entity_not_found(texts::entity_provider(), id);
+        AppError::localized("provider.not_found", msg.clone(), msg)
+    })?;
+    let is_current = {
+        let config = state.config.read().map_err(AppError::from)?;
+        config
+            .get_manager(&app_type)
+            .map(|manager| manager.current == id)
+            .unwrap_or(false)
+    };
+
+    let mut settings_config = original.settings_config.clone();
+    let mut meta = original.meta.clone();
+    set_provider_api_key(
+        &app_type,
+        &mut settings_config,
+        &mut meta,
+        api_key,
+        api_key_field,
+    )?;
+
+    let updated = Provider {
+        id: original.id.clone(),
+        name: original.name.clone(),
+        settings_config,
+        website_url: original.website_url.clone(),
+        category: original.category.clone(),
+        created_at: original.created_at,
+        sort_index: original.sort_index,
+        notes: original.notes.clone(),
+        meta,
+        icon: original.icon.clone(),
+        icon_color: original.icon_color.clone(),
+        in_failover_queue: original.in_failover_queue,
+    };
+
+    ProviderService::update(&state, app_type.clone(), updated)?;
+
+    println!(
+        "\n{}",
+        success(&texts::entity_updated_success(texts::entity_provider(), id))
+    );
+    if is_current {
+        println!("{}", warning(texts::current_provider_synced_warning()));
+    }
+    Ok(())
+}
+
+/// Write a new API key into the provider's settings_config using each app's
+/// key-field layout, and sync Claude's `meta.api_key_field`.
+fn set_provider_api_key(
+    app_type: &AppType,
+    settings_config: &mut serde_json::Value,
+    meta: &mut Option<ProviderMeta>,
+    api_key: &str,
+    api_key_field: Option<ClaudeApiKeyFieldArg>,
+) -> Result<(), AppError> {
+    if !settings_config.is_object() {
+        return Err(AppError::localized(
+            "provider.update_key.settings_not_object",
+            "供应商配置不是 JSON 对象，无法更新 API Key",
+            "Provider settings are not a JSON object; cannot update API key",
+        ));
+    }
+    let claude_field = if matches!(app_type, AppType::Claude) {
+        Some(
+            api_key_field
+                .map(ClaudeApiKeyField::from)
+                .unwrap_or_else(|| {
+                    ClaudeApiKeyField::from_meta_and_settings(meta.as_ref(), settings_config)
+                }),
+        )
+    } else {
+        None
+    };
+
+    let obj = settings_config
+        .as_object_mut()
+        .expect("checked object above");
+    let insert_trimmed = |map: &mut serde_json::Map<String, serde_json::Value>, key: &str| {
+        map.insert(key.to_string(), serde_json::json!(api_key.trim()));
+    };
+
+    match app_type {
+        AppType::Claude => {
+            let field = claude_field.expect("computed for Claude above");
+            let env = obj
+                .entry("env".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !env.is_object() {
+                *env = serde_json::json!({});
+            }
+            let env = env.as_object_mut().expect("env must be an object");
+            insert_trimmed(env, field.as_env_key());
+            env.remove(field.alternate_env_key());
+            if let Some(meta) = meta.as_mut() {
+                meta.api_key_field = match field {
+                    ClaudeApiKeyField::ApiKey => {
+                        Some(crate::provider::CLAUDE_API_KEY_ENV_KEY.to_string())
+                    }
+                    ClaudeApiKeyField::AuthToken => None,
+                };
+            }
+        }
+        AppType::Codex => {
+            let auth = obj
+                .entry("auth".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !auth.is_object() {
+                *auth = serde_json::json!({});
+            }
+            let auth = auth.as_object_mut().expect("auth must be an object");
+            insert_trimmed(auth, "OPENAI_API_KEY");
+            // 清理旧的 env / 顶层别名，避免新旧 key 并存
+            if let Some(env) = obj
+                .get_mut("env")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                env.remove("OPENAI_API_KEY");
+            }
+            obj.remove("apiKey");
+            obj.remove("api_key");
+        }
+        AppType::Gemini => {
+            let env = obj
+                .entry("env".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if !env.is_object() {
+                *env = serde_json::json!({});
+            }
+            let env = env.as_object_mut().expect("env must be an object");
+            insert_trimmed(env, "GEMINI_API_KEY");
+            env.remove("GOOGLE_API_KEY");
+            obj.remove("GEMINI_API_KEY");
+        }
+        AppType::OpenCode => {
+            insert_trimmed(obj, "apiKey");
+            obj.remove("api_key");
+            if let Some(options) = obj
+                .get_mut("options")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                options.insert("apiKey".to_string(), serde_json::json!(api_key.trim()));
+            }
+        }
+        AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+            insert_trimmed(obj, "apiKey");
+            obj.remove("api_key");
+        }
+    }
     Ok(())
 }
 
