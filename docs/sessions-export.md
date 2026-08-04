@@ -1,6 +1,7 @@
 # Sessions Export
 
-Export one local assistant session to a shareable JSON file (`ccswitch-session` v1).
+Export one local assistant session to JSON. Most apps use the normalized
+`ccswitch-session` v1 format; Codex uses a lossless structured rollout export.
 
 Supported apps: `claude`, `codex`, `gemini`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`.
 
@@ -72,10 +73,41 @@ Resolution rules:
 
 | Flag | Behavior |
 |------|----------|
-| (default) | `./ccswitch-<app>-<id8>-<YYYYMMDD>.json` in the current working directory |
+| (default, Codex) | `.tmp/ccswitch-codex-<id8>-<YYYYMMDD>.json` |
+| (default, other apps) | `./ccswitch-<app>-<id8>-<YYYYMMDD>.json` in the current working directory |
 | `-o` / `--output <path>` | Write to the given file (parent dirs are created if needed) |
 
-## Output JSON shape
+Codex full exports may contain paths, configuration, or credentials. On Unix,
+the JSON file is restricted to mode `0600`. Do not commit it.
+
+## Codex lossless export
+
+Codex export reads the complete native rollout JSONL rather than the bounded
+message preview. It preserves every line in source order, including system and
+developer instructions, reasoning, tool calls and outputs, errors,
+interruptions, unknown event fields, and malformed JSON lines.
+
+```json
+{
+  "schema_version": 1,
+  "source": {},
+  "summary": {},
+  "events": [],
+  "indexes": {}
+}
+```
+
+`indexes` locates message ranges, confirmed user decisions, handoff summaries,
+files, current Git changes, commands, validation results, patches, commits, and
+pending work. Tool calls and outputs are paired by `call_id` when available.
+
+The command also writes `CODEX_SESSION_CONTEXT-<id8>.md` in the recorded project
+root (or beside the JSON when the project root is unavailable). This redacted
+context document separates confirmed facts, code-verified state, conversation
+inference, and unverified conclusions. Existing non-Codex export behavior is
+unchanged.
+
+## Normalized output JSON shape (non-Codex)
 
 ```json
 {
@@ -98,6 +130,7 @@ Resolution rules:
 
 Notes:
 
+- These notes apply to the normalized non-Codex format above.
 - Only **user** and **assistant** text are included (tools / system / reasoning are dropped).
 - `sourcePath` is a local absolute path; strip it before sharing if you care about privacy.
 - Very long sessions may be truncated by the session reader; the CLI prints a warning when that happens.

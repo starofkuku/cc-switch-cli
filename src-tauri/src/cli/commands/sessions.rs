@@ -120,7 +120,7 @@ pub enum SessionsCommand {
         /// Session id or unique id prefix (skips interactive picker when set)
         #[arg(long = "id")]
         id: Option<String>,
-        /// Output path (default: ./ccswitch-<app>-<id>-<date>.json)
+        /// Output path (Codex defaults to .tmp/; other apps default to ./)
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
     },
@@ -551,6 +551,28 @@ fn load_export_choice(
     session: SessionMeta,
     strict: bool,
 ) -> Result<ExportChoice, AppError> {
+    // Codex's dedicated exporter reads the complete rollout directly. For
+    // non-interactive exports, avoid loading the bounded preview reader first.
+    if provider_id == "codex" && strict {
+        if session
+            .source_path
+            .as_deref()
+            .is_none_or(|path| path.trim().is_empty())
+        {
+            return Err(AppError::Message(format!(
+                "Session '{}' has no source path; cannot export.",
+                session.session_id
+            )));
+        }
+        let label = format_export_choice_label(&session, &[]);
+        return Ok(ExportChoice {
+            session,
+            label,
+            messages: Vec::new(),
+            messages_truncated: false,
+        });
+    }
+
     let batch = match session.source_path.as_deref() {
         Some(path) => match session_manager::load_messages(provider_id, path) {
             Ok(batch) => Some(batch),
@@ -592,6 +614,10 @@ fn write_export_document(
     selected: &ExportChoice,
     output: Option<PathBuf>,
 ) -> Result<(), AppError> {
+    if provider_id == "codex" {
+        return write_codex_export_document(selected, output);
+    }
+
     let export_messages: Vec<SessionExportMessage> = selected
         .messages
         .iter()
@@ -652,6 +678,45 @@ fn write_export_document(
             warning(
                 "Source message stream was truncated by the session reader; export may be incomplete."
             )
+        );
+    }
+    Ok(())
+}
+
+fn write_codex_export_document(
+    selected: &ExportChoice,
+    output: Option<PathBuf>,
+) -> Result<(), AppError> {
+    use crate::session_manager::providers::codex_export;
+
+    let out_path =
+        output.unwrap_or_else(|| codex_export::default_export_path(&selected.session.session_id));
+    let result = codex_export::export_conversation(&selected.session, &out_path)
+        .map_err(AppError::Message)?;
+
+    println!(
+        "{}",
+        success(&format!(
+            "Exported {} Codex event(s) from {} to {}",
+            result.event_count,
+            selected.session.session_id,
+            result.json_path.display()
+        ))
+    );
+    println!(
+        "{}",
+        info(&format!(
+            "Generated project context: {}",
+            result.context_path.display()
+        ))
+    );
+    if result.invalid_event_count > 0 {
+        println!(
+            "{}",
+            warning(&format!(
+                "Preserved {} malformed JSONL line(s) as invalid_json events.",
+                result.invalid_event_count
+            ))
         );
     }
     Ok(())
@@ -2053,5 +2118,34 @@ mod tests {
             ..titled
         };
         assert_eq!(session_title(&fallback), "abcdef123456");
+    }
+
+    #[test]
+    fn codex_export_writes_lossless_archive_without_preview_messages() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path().join("project");
+        fs::create_dir_all(&project).expect("project");
+        let rollout = temp.path().join("rollout.jsonl");
+        fs::write(
+            &rollout,
+            "{\"timestamp\":\"2026-08-04T00:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"hello\"}}\n",
+        )
+        .expect("rollout");
+        let session = SessionMeta {
+            project_dir: Some(project.display().to_string()),
+            source_path: Some(rollout.display().to_string()),
+            ..meta("codex", "session-123456")
+        };
+        let choice = load_export_choice("codex", session, true).expect("choice");
+        assert!(choice.messages.is_empty());
+        let output = temp.path().join("archive.json");
+
+        write_export_document("codex", &choice, Some(output.clone())).expect("export");
+
+        let exported: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        assert_eq!(exported["schema_version"], 1);
+        assert_eq!(exported["events"].as_array().unwrap().len(), 1);
+        assert!(project.join("CODEX_SESSION_CONTEXT-session-.md").is_file());
     }
 }

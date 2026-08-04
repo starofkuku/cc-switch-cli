@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.11-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.12-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -369,7 +369,7 @@ cc-switch skills repos disable <repo> # Disable repo without changing branch
 
 ### 🕘 Session History & Usage Statistics
 
-Review saved assistant sessions, resume a session with one command, delete old records, export a session for sharing, and import local session logs into token/cost statistics.
+Review saved assistant sessions, resume a session with one command, delete old records, export session data, and import local session logs into token/cost statistics.
 
 **Features:** cross-app session scanning (Claude, Codex, Gemini, OpenCode, OpenClaw, Hermes, Grok, Pi), message preview, interactive export, one-command resume, safe delete confirmation, JSON output, and usage sync for Claude, Codex, Gemini, and OpenCode.
 
@@ -381,11 +381,15 @@ cc-switch sessions resume <id>       # Resume a saved session
 cc-switch sessions delete <id>       # Delete a saved session
 cc-switch sessions sync-usage --all  # Sync local logs into usage statistics
 
-# Export one session to a shareable JSON file (requires --app; no default app)
+# Export one session (requires --app; no default app)
 cc-switch --app grok sessions export
 cc-switch --app grok sessions export --id 019f8253-b95c-7891-aee3-3af7e28cb122
 cc-switch --app claude sessions export -o ./share.json
+cc-switch --app codex sessions export --id <session-id> # Full rollout under .tmp + redacted context doc
 ```
+
+Codex exports are lossless archives and may contain sensitive data; they are
+not intended for direct sharing or commit.
 
 Full usage (interactive picker keys, `--id` matching, JSON shape, per-app session paths): see [docs/sessions-export.md](docs/sessions-export.md).
 
