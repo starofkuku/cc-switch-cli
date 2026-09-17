@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.12-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.13-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -339,6 +339,7 @@ cc-switch prompts rename <id> [name] # 重命名提示词预设，不传名称�
 cc-switch prompts edit <id>          # 编辑提示词预设
 cc-switch prompts show <id>          # 显示完整内容
 cc-switch prompts delete <id>        # 删除提示词
+cc-switch prompts copy <from> <to> [--force]  # 将某个应用的全局提示词文件（CLAUDE.md/AGENTS.md/GEMINI.md）复制给另一个应用
 ```
 
 ### 🎯 Skills 管理

@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.13] - 2026-09-17
+
+### Added
+
+- **CLI / Prompts copy**: `cc-switch prompts copy <from> <to> [--force]` copies one app's live global prompt file onto another app's (e.g. Claude `CLAUDE.md` → Codex `AGENTS.md`). It is a raw file copy that does not create or activate a prompt preset, refuses to overwrite without `--force`, refuses the same app on both sides, and skips the destination when that app is uninitialized so no config directory is created.
+
 ## [5.10.12] - 2026-08-04
 
 ### Changed

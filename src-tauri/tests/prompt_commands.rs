@@ -313,6 +313,179 @@ fn prompt_import_command_reports_missing_live_file() {
 
 #[test]
 #[serial]
+fn prompt_copy_command_copies_live_file_between_apps() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let claude_path = cc_switch_lib::get_claude_settings_path()
+        .parent()
+        .expect("claude settings parent")
+        .join("CLAUDE.md");
+    std::fs::create_dir_all(claude_path.parent().expect("claude parent"))
+        .expect("create claude dir");
+    std::fs::write(&claude_path, "# Shared instructions\nbody\n").expect("write claude prompt");
+
+    // Destination app must look initialized for the copy to be allowed.
+    let codex_dir = ensure_test_home().join(".codex");
+    std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+
+    execute(
+        PromptsCommand::Copy {
+            from: AppType::Claude,
+            to: AppType::Codex,
+            force: false,
+        },
+        None,
+    )
+    .expect("copy command succeeds");
+
+    let codex_prompt = std::fs::read_to_string(codex_dir.join("AGENTS.md")).expect("read copy");
+    assert_eq!(codex_prompt, "# Shared instructions\nbody\n");
+}
+
+#[test]
+#[serial]
+fn prompt_copy_refuses_to_overwrite_without_force() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let claude_path = cc_switch_lib::get_claude_settings_path()
+        .parent()
+        .expect("claude settings parent")
+        .join("CLAUDE.md");
+    std::fs::create_dir_all(claude_path.parent().expect("claude parent"))
+        .expect("create claude dir");
+    std::fs::write(&claude_path, "source\n").expect("write claude prompt");
+
+    let codex_dir = ensure_test_home().join(".codex");
+    std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+    let codex_prompt = codex_dir.join("AGENTS.md");
+    std::fs::write(&codex_prompt, "existing\n").expect("write existing codex prompt");
+
+    let err = execute(
+        PromptsCommand::Copy {
+            from: AppType::Claude,
+            to: AppType::Codex,
+            force: false,
+        },
+        None,
+    )
+    .expect_err("copy without force should fail when destination exists");
+    assert!(
+        err.to_string().contains("已存在"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&codex_prompt).expect("read existing"),
+        "existing\n",
+        "destination must stay untouched without --force"
+    );
+}
+
+#[test]
+#[serial]
+fn prompt_copy_force_overwrites_and_leaves_no_preset() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let claude_path = cc_switch_lib::get_claude_settings_path()
+        .parent()
+        .expect("claude settings parent")
+        .join("CLAUDE.md");
+    std::fs::create_dir_all(claude_path.parent().expect("claude parent"))
+        .expect("create claude dir");
+    std::fs::write(&claude_path, "fresh source\n").expect("write claude prompt");
+
+    let codex_dir = ensure_test_home().join(".codex");
+    std::fs::create_dir_all(&codex_dir).expect("create codex dir");
+    let codex_prompt = codex_dir.join("AGENTS.md");
+    std::fs::write(&codex_prompt, "stale\n").expect("write existing codex prompt");
+
+    execute(
+        PromptsCommand::Copy {
+            from: AppType::Claude,
+            to: AppType::Codex,
+            force: true,
+        },
+        None,
+    )
+    .expect("copy --force succeeds");
+
+    assert_eq!(
+        std::fs::read_to_string(&codex_prompt).expect("read copy"),
+        "fresh source\n"
+    );
+
+    // A raw live-file copy must not register a Codex prompt preset.
+    let state = cc_switch_lib::AppState::try_new().expect("reload state");
+    let prompts = PromptService::get_prompts(&state, AppType::Codex).expect("load codex prompts");
+    assert!(
+        prompts.is_empty(),
+        "copy must not create prompt presets, got {prompts:?}"
+    );
+}
+
+#[test]
+#[serial]
+fn prompt_copy_rejects_uninitialized_destination_without_creating_dir() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let claude_path = cc_switch_lib::get_claude_settings_path()
+        .parent()
+        .expect("claude settings parent")
+        .join("CLAUDE.md");
+    std::fs::create_dir_all(claude_path.parent().expect("claude parent"))
+        .expect("create claude dir");
+    std::fs::write(&claude_path, "source\n").expect("write claude prompt");
+
+    let err = execute(
+        PromptsCommand::Copy {
+            from: AppType::Claude,
+            to: AppType::Gemini,
+            force: true,
+        },
+        None,
+    )
+    .expect_err("uninitialized destination should fail");
+    assert!(
+        err.to_string().contains("尚未初始化"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !ensure_test_home().join(".gemini").exists(),
+        "must not create the destination app directory"
+    );
+}
+
+#[test]
+#[serial]
+fn prompt_copy_rejects_same_app() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let err = execute(
+        PromptsCommand::Copy {
+            from: AppType::Claude,
+            to: AppType::Claude,
+            force: true,
+        },
+        None,
+    )
+    .expect_err("same app should fail");
+    assert!(
+        err.to_string().contains("不能相同"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[serial]
 fn generate_prompt_id_falls_back_when_name_has_no_valid_slug_chars() {
     let ids = vec!["prompt".to_string(), "prompt-1".to_string()];
     let generated = PromptService::generate_prompt_id("!!!", &ids);

@@ -950,6 +950,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_prompts_copy_subcommand() {
+        let cli = Cli::parse_from(["cc-switch", "prompts", "copy", "claude", "codex", "--force"]);
+
+        match cli.command {
+            Some(Commands::Prompts(super::commands::prompts::PromptsCommand::Copy {
+                from,
+                to,
+                force,
+            })) => {
+                assert_eq!(from, AppType::Claude);
+                assert_eq!(to, AppType::Codex);
+                assert!(force);
+            }
+            _ => panic!("expected prompts copy command"),
+        }
+    }
+
+    #[test]
     fn parses_provider_stream_check_subcommand() {
         let cli = Cli::parse_from(["cc-switch", "provider", "stream-check", "demo"]);
 

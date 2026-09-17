@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use indexmap::IndexMap;
 
 use crate::app_config::AppType;
@@ -352,6 +354,71 @@ impl PromptService {
         let content =
             std::fs::read_to_string(&file_path).map_err(|e| AppError::io(&file_path, e))?;
         Ok(Some(content))
+    }
+
+    /// Path of the live "global" prompt file for an app (e.g. `CLAUDE.md`,
+    /// `AGENTS.md`, `GEMINI.md`).
+    pub fn live_prompt_path(app: &AppType) -> Result<PathBuf, AppError> {
+        prompt_file_path(app)
+    }
+
+    /// Copy the live prompt file of one app onto another app's live prompt file.
+    ///
+    /// This is a raw file-to-file copy: it never reads or writes the prompt-preset
+    /// database, so it does not register the destination as a cc-switch-managed
+    /// prompt. Deletion/overwrite safety follows `sync_policy::should_sync_live`
+    /// for the destination app, matching every other live-config writer.
+    pub fn copy_live_prompt(
+        from: &AppType,
+        to: &AppType,
+        overwrite: bool,
+    ) -> Result<PathBuf, AppError> {
+        if from == to {
+            return Err(AppError::localized(
+                "prompt.copy.same_app",
+                "源应用与目标应用不能相同",
+                "Source and destination apps must differ",
+            ));
+        }
+
+        let source = prompt_file_path(from)?;
+        if !source.is_file() {
+            return Err(AppError::localized(
+                "prompt.copy.source_missing",
+                format!("源提示词文件不存在: {}", source.display()),
+                format!("Source prompt file does not exist: {}", source.display()),
+            ));
+        }
+
+        if !crate::sync_policy::should_sync_live(to) {
+            return Err(AppError::localized(
+                "prompt.copy.destination_not_initialized",
+                format!("目标应用 {} 尚未初始化，拒绝写入其配置目录", to.as_str()),
+                format!(
+                    "Destination app {} is not initialized; refusing to write its config directory",
+                    to.as_str()
+                ),
+            ));
+        }
+
+        let destination = prompt_file_path(to)?;
+        if destination.exists() && !overwrite {
+            return Err(AppError::localized(
+                "prompt.copy.destination_exists",
+                format!(
+                    "目标提示词文件已存在: {}（使用 --force 覆盖）",
+                    destination.display()
+                ),
+                format!(
+                    "Destination prompt file already exists: {} (use --force to overwrite)",
+                    destination.display()
+                ),
+            ));
+        }
+
+        let content = std::fs::read_to_string(&source).map_err(|e| AppError::io(&source, e))?;
+        write_text_file(&destination, &content)?;
+        Ok(destination)
     }
 
     pub fn sync_all_active_to_live_best_effort(state: &AppState) -> Result<(), AppError> {

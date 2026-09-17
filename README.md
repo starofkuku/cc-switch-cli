@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.12-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.13-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -339,6 +339,7 @@ cc-switch prompts rename <id> [name] # Rename prompt preset, interactive if name
 cc-switch prompts edit <id>          # Edit prompt preset
 cc-switch prompts show <id>          # Display full content
 cc-switch prompts delete <id>        # Delete prompt
+cc-switch prompts copy <from> <to> [--force]  # Copy one app's live prompt file (CLAUDE.md/AGENTS.md/GEMINI.md) onto another app
 ```
 
 ### 🎯 Skills Management

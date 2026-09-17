@@ -16,6 +16,16 @@ pub enum PromptsCommand {
     Live,
     /// Import the current live prompt file as an inactive preset
     Import,
+    /// Copy the live prompt file of one app onto another app
+    Copy {
+        /// Source app whose live prompt file is read, e.g. claude
+        from: AppType,
+        /// Destination app whose live prompt file is written, e.g. codex
+        to: AppType,
+        /// Overwrite the destination file if it already exists
+        #[arg(long)]
+        force: bool,
+    },
     /// Activate a prompt preset
     Activate {
         /// Prompt preset ID
@@ -78,6 +88,7 @@ pub fn execute(cmd: PromptsCommand, app: Option<AppType>) -> Result<(), AppError
         PromptsCommand::Current => show_current(app_type),
         PromptsCommand::Live => show_live_prompt(app_type),
         PromptsCommand::Import => import_prompt(app_type),
+        PromptsCommand::Copy { from, to, force } => copy_prompt(&from, &to, force),
         PromptsCommand::Activate { id } => activate_prompt(app_type, &id),
         PromptsCommand::Deactivate => deactivate_prompt(app_type),
         PromptsCommand::Create {
@@ -269,6 +280,38 @@ fn import_prompt(app_type: AppType) -> Result<(), AppError> {
         info(&format!(
             "Tip: Use 'cc-switch prompts activate {}' to activate it.",
             id
+        ))
+    );
+
+    Ok(())
+}
+
+fn copy_prompt(from: &AppType, to: &AppType, force: bool) -> Result<(), AppError> {
+    let source = PromptService::live_prompt_path(from)?;
+    let destination = PromptService::copy_live_prompt(from, to, force)?;
+
+    println!(
+        "{}",
+        success(crate::t!(
+            "✓ Copied live prompt file.",
+            "✓ 已复制全局提示词文件。"
+        ))
+    );
+    let from_line = crate::t!(
+        format!("  From: {} ({})", from.as_str(), source.display()),
+        format!("  来源: {} ({})", from.as_str(), source.display())
+    );
+    let to_line = crate::t!(
+        format!("  To:   {} ({})", to.as_str(), destination.display()),
+        format!("  目标: {} ({})", to.as_str(), destination.display())
+    );
+    println!("{}", info(&from_line));
+    println!("{}", info(&to_line));
+    println!(
+        "{}",
+        info(crate::t!(
+            "Note: This only writes the live file; it does not create or activate a prompt preset.",
+            "注意: 这里只写 live 文件，不会创建或激活提示词预设。"
         ))
     );
 
