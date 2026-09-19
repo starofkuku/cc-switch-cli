@@ -571,6 +571,7 @@ fn yes_no(value: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::save_manual_visible_apps;
+    use crate::app_config::AppType;
     use crate::settings::{VisibleApps, VisibleAppsMode};
     use crate::test_support::{
         lock_test_home_and_settings, set_test_home_override, TestHomeSettingsLock,
@@ -630,10 +631,13 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn settings_visible_apps_manual_save_rejects_empty_selection() {
+    fn settings_visible_apps_manual_save_accepts_all_false_because_pi_and_grok_stay_visible() {
         let _guard = SettingsTestGuard::new();
 
-        let err = save_manual_visible_apps(VisibleApps {
+        // `VisibleApps::is_enabled_for` returns true for Pi and Grok unconditionally, so
+        // no combination of the six togglable flags can produce an empty visible set.
+        // Persisting an all-false selection is therefore valid; the TUI still has apps.
+        save_manual_visible_apps(VisibleApps {
             claude: false,
             codex: false,
             gemini: false,
@@ -641,8 +645,13 @@ mod tests {
             hermes: false,
             openclaw: false,
         })
-        .expect_err("empty visible apps should be rejected");
+        .expect("all-false selection is valid while Pi/Grok stay visible");
 
-        assert!(err.to_string().contains("At least one app"));
+        let settings = crate::settings::get_settings();
+        assert_eq!(settings.visible_apps_settings.mode, VisibleAppsMode::Manual);
+        assert_eq!(
+            settings.visible_apps.ordered_enabled(),
+            vec![AppType::Pi, AppType::Grok]
+        );
     }
 }

@@ -4437,10 +4437,11 @@ fn header_centers_tabs_when_room_allows() {
     let first_label = lane
         .find(AppType::Claude.as_str())
         .expect("claude tab should render");
+    // Pi and Grok are always visible, so Grok is the last tab in the header.
     let last_label_end = lane
-        .rfind(AppType::OpenClaw.as_str())
-        .map(|idx| idx + AppType::OpenClaw.as_str().len())
-        .expect("openclaw tab should render");
+        .rfind(AppType::Grok.as_str())
+        .map(|idx| idx + AppType::Grok.as_str().len())
+        .expect("grok tab should render");
     let left_gap = first_label;
     let right_gap = lane.len().saturating_sub(last_label_end);
 

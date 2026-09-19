@@ -1078,9 +1078,11 @@ mod tests {
             app.on_key(key(KeyCode::Char(']')), &data()),
             Action::SetAppType(AppType::Codex)
         ));
+        // Pi and Grok are always visible, so they are the last entries in the cycle
+        // order and wrapping backwards from Claude lands on Grok rather than OpenClaw.
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::SetAppType(AppType::OpenClaw)
+            Action::SetAppType(AppType::Grok)
         ));
     }
 
@@ -1105,7 +1107,7 @@ mod tests {
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('【')), &data()),
-            Action::SetAppType(AppType::OpenClaw)
+            Action::SetAppType(AppType::Grok)
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('］')), &data()),
@@ -1113,7 +1115,7 @@ mod tests {
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('［')), &data()),
-            Action::SetAppType(AppType::OpenClaw)
+            Action::SetAppType(AppType::Grok)
         ));
     }
 
@@ -1150,7 +1152,7 @@ mod tests {
         let mut app = App::new(Some(AppType::OpenClaw));
         assert!(matches!(
             app.on_key(key(KeyCode::Char(']')), &data()),
-            Action::SetAppType(AppType::Claude)
+            Action::SetAppType(AppType::Pi)
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
@@ -1183,7 +1185,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn app_cycle_noops_when_only_one_app_is_visible() {
+    fn app_cycle_still_cycles_through_always_visible_pi_and_grok() {
         let temp_home = TempDir::new().expect("create temp home");
         let _env = TestEnvGuard::isolated(temp_home.path());
         crate::settings::set_visible_apps(crate::settings::VisibleApps {
@@ -1196,15 +1198,17 @@ mod tests {
         })
         .expect("save visible apps");
 
+        // Pi and Grok cannot be hidden, so a single togglable app can never produce a
+        // single-entry visible set; cycling still rotates through them.
         let mut app = App::new(Some(AppType::Codex));
 
         assert!(matches!(
             app.on_key(key(KeyCode::Char(']')), &data()),
-            Action::None
+            Action::SetAppType(AppType::Pi)
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::None
+            Action::SetAppType(AppType::Grok)
         ));
     }
 
@@ -1225,9 +1229,10 @@ mod tests {
 
         let mut app = App::new(Some(AppType::Claude));
 
+        // Wrapping backwards past the hidden apps reaches Grok, the last always-visible app.
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::SetAppType(AppType::OpenClaw)
+            Action::SetAppType(AppType::Grok)
         ));
     }
 
@@ -1248,9 +1253,10 @@ mod tests {
 
         let mut app = App::new(Some(AppType::OpenClaw));
 
+        // OpenClaw is hidden here; the next visible app after it is Pi, not Claude.
         assert!(matches!(
             app.on_key(key(KeyCode::Char(']')), &data()),
-            Action::SetAppType(AppType::Claude)
+            Action::SetAppType(AppType::Pi)
         ));
     }
 
@@ -10002,7 +10008,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn visible_apps_picker_rejects_zero_selection_without_closing() {
+    fn visible_apps_picker_applies_selection_when_only_pi_and_grok_remain() {
         let temp_home = TempDir::new().expect("create temp home");
         let _env = TestEnvGuard::isolated(temp_home.path());
         crate::settings::set_visible_apps(crate::settings::VisibleApps {
@@ -10029,25 +10035,31 @@ mod tests {
         let toggle_action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(toggle_action, Action::None));
 
+        // Deselecting every togglable app is allowed: Pi and Grok are unconditionally
+        // visible, so the picker can never reach a truly empty selection. The overlay
+        // closes and the choice is handed to the runtime action instead of being blocked.
         let action = app.on_key(key(KeyCode::Enter), &data);
-        assert!(matches!(action, Action::None));
-        assert!(matches!(
-            &app.overlay,
-            Overlay::VisibleAppsPicker { apps, .. }
-                if !apps.claude
-                    && !apps.codex
-                    && !apps.gemini
-                    && !apps.opencode
-                    && !apps.openclaw
-        ));
-        assert!(matches!(
-            app.toast.as_ref(),
-            Some(Toast {
-                message,
-                kind: ToastKind::Warning,
-                ..
-            }) if message == texts::tui_toast_visible_apps_zero_selection_warning()
-        ));
+        assert!(
+            matches!(
+                &action,
+                Action::SetVisibleApps { apps }
+                    if !apps.claude
+                        && !apps.codex
+                        && !apps.gemini
+                        && !apps.opencode
+                        && !apps.hermes
+                        && !apps.openclaw
+            ),
+            "expected the all-false selection to be applied, got {action:?}"
+        );
+        assert!(
+            matches!(app.overlay, Overlay::None),
+            "picker overlay should close after applying"
+        );
+        assert!(
+            app.toast.is_none(),
+            "no zero-selection warning should be raised while Pi/Grok remain visible"
+        );
     }
 
     #[test]

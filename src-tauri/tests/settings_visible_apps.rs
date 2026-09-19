@@ -16,6 +16,8 @@ mod app_config {
         OpenCode,
         OpenClaw,
         Hermes,
+        Pi,
+        Grok,
     }
 
     impl AppType {
@@ -27,6 +29,8 @@ mod app_config {
                 AppType::OpenCode => "opencode",
                 AppType::OpenClaw => "openclaw",
                 AppType::Hermes => "hermes",
+                AppType::Pi => "pi",
+                AppType::Grok => "grok",
             }
         }
     }
@@ -137,9 +141,23 @@ mod error {
         },
         #[error("锁获取失败: {0}")]
         Lock(String),
+        #[error("{zh} ({en})")]
+        Localized {
+            key: &'static str,
+            zh: String,
+            en: String,
+        },
     }
 
     impl AppError {
+        pub fn localized(key: &'static str, zh: impl Into<String>, en: impl Into<String>) -> Self {
+            Self::Localized {
+                key,
+                zh: zh.into(),
+                en: en.into(),
+            }
+        }
+
         pub fn io(path: impl AsRef<Path>, source: std::io::Error) -> Self {
             Self::Io {
                 path: path.as_ref().display().to_string(),
@@ -216,6 +234,41 @@ mod services {
                     Some(("Nutstore", "https://dav.nutstore.net/dav/..."))
                 }
                 _ => None,
+            }
+        }
+    }
+}
+
+mod test_support {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    pub struct TestEnvGuard {
+        home: Option<OsString>,
+        config_dir: Option<OsString>,
+    }
+
+    impl TestEnvGuard {
+        pub fn isolated(root: &Path) -> Self {
+            let guard = Self {
+                home: std::env::var_os("HOME"),
+                config_dir: std::env::var_os("CC_SWITCH_CONFIG_DIR"),
+            };
+            std::env::set_var("HOME", root);
+            std::env::set_var("CC_SWITCH_CONFIG_DIR", root.join(".cc-switch"));
+            guard
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            match &self.home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.config_dir {
+                Some(value) => std::env::set_var("CC_SWITCH_CONFIG_DIR", value),
+                None => std::env::remove_var("CC_SWITCH_CONFIG_DIR"),
             }
         }
     }
@@ -320,6 +373,9 @@ fn default_visible_apps_hide_gemini() {
             AppType::OpenCode,
             AppType::Hermes,
             AppType::OpenClaw,
+            // Pi and Grok are always visible.
+            AppType::Pi,
+            AppType::Grok,
         ]
     );
     assert!(!visible.is_enabled_for(&AppType::Gemini));
@@ -396,7 +452,10 @@ fn load_reads_valid_non_default_visible_apps_from_settings_json() {
             AppType::Codex,
             AppType::Gemini,
             AppType::OpenCode,
-            AppType::Hermes
+            AppType::Hermes,
+            // Pi and Grok are always visible.
+            AppType::Pi,
+            AppType::Grok,
         ]
     );
 }
@@ -490,10 +549,12 @@ fn existing_settings_without_visible_apps_settings_migrate_to_manual_mode() {
 
 #[test]
 #[serial]
-fn set_visible_apps_rejects_zero_selection() {
+fn set_visible_apps_accepts_zero_togglable_selection_while_pi_and_grok_remain() {
     let _home = HomeGuard::new();
 
-    let err = set_visible_apps(VisibleApps {
+    // Pi and Grok are unconditionally visible, so an all-false togglable selection is
+    // valid: the visible set still contains Pi and Grok.
+    set_visible_apps(VisibleApps {
         claude: false,
         codex: false,
         gemini: false,
@@ -501,17 +562,17 @@ fn set_visible_apps_rejects_zero_selection() {
         openclaw: false,
         hermes: false,
     })
-    .expect_err("zero visible apps should be rejected");
+    .expect("all-false togglable selection is valid while Pi/Grok stay visible");
 
-    match err {
-        AppError::InvalidInput(message) => assert!(message.contains("At least one app")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(
+        get_visible_apps().ordered_enabled(),
+        vec![AppType::Pi, AppType::Grok]
+    );
 }
 
 #[test]
 #[serial]
-fn update_settings_rejects_all_false_visible_apps() {
+fn update_settings_accepts_all_false_visible_apps_while_pi_and_grok_remain() {
     let _home = HomeGuard::new();
 
     let settings = AppSettings {
@@ -526,13 +587,13 @@ fn update_settings_rejects_all_false_visible_apps() {
         ..Default::default()
     };
 
-    let err =
-        update_settings(settings).expect_err("update_settings should reject zero visible apps");
+    // The "at least one app" guard can no longer trip because Pi and Grok are always on.
+    update_settings(settings).expect("update_settings should accept the all-false selection");
 
-    match err {
-        AppError::InvalidInput(message) => assert!(message.contains("At least one app")),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(
+        get_visible_apps().ordered_enabled(),
+        vec![AppType::Pi, AppType::Grok]
+    );
 }
 
 #[test]
@@ -561,7 +622,7 @@ fn empty_visible_apps_object_normalizes_without_resetting_the_file() {
 
 #[test]
 #[serial]
-fn load_normalizes_all_false_visible_apps_to_defaults() {
+fn load_keeps_all_false_togglable_apps_because_pi_and_grok_are_always_visible() {
     let home = HomeGuard::new();
     write_settings_json(
         &home,
@@ -579,9 +640,27 @@ fn load_normalizes_all_false_visible_apps_to_defaults() {
 
     reload_test_settings();
 
+    // `VisibleApps::normalize` only resets to defaults when nothing is visible. Pi and
+    // Grok are always visible, so the all-false selection is preserved verbatim rather
+    // than being replaced by `default_visible_apps()`.
     let settings = AppSettings::load();
-    assert_eq!(settings.visible_apps, default_visible_apps());
-    assert_eq!(get_visible_apps(), default_visible_apps());
+    assert_eq!(
+        settings.visible_apps,
+        VisibleApps {
+            claude: false,
+            codex: false,
+            gemini: false,
+            opencode: false,
+            openclaw: false,
+            hermes: false,
+        },
+        "all-false togglable selection must be kept verbatim, not reset to defaults"
+    );
+    assert_eq!(
+        settings.visible_apps.ordered_enabled(),
+        vec![AppType::Pi, AppType::Grok]
+    );
+    assert_eq!(get_visible_apps(), settings.visible_apps);
 }
 
 #[test]
@@ -623,17 +702,19 @@ fn next_visible_app_wraps_and_skips_hidden_entries() {
         next_visible_app(&visible, &AppType::Claude, 1),
         Some(AppType::OpenCode)
     );
+    // OpenClaw is followed by Pi, which is always visible.
     assert_eq!(
         next_visible_app(&visible, &AppType::OpenClaw, 1),
-        Some(AppType::Claude)
+        Some(AppType::Pi)
     );
     assert_eq!(
         next_visible_app(&visible, &AppType::Hermes, 1),
         Some(AppType::OpenClaw)
     );
+    // Wrapping backwards from Claude passes the hidden apps and lands on Grok.
     assert_eq!(
         next_visible_app(&visible, &AppType::Claude, -1),
-        Some(AppType::OpenClaw)
+        Some(AppType::Grok)
     );
     assert_eq!(
         next_visible_app(&visible, &AppType::Hermes, -1),

@@ -7,6 +7,13 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.14] - 2026-09-19
+
+### Fixed
+
+- **Tests / Visible apps**: Repair the unit-test suite broken since Pi and Grok became unconditionally visible. App cycling, the visible-apps picker, the header tab centering assertion, the zero-selection guards, and `LocalTool::all()` expectations now reflect the 8-app reality, so `cargo test --lib` is green again (was 13 failures).
+- **Tests / Compilation**: Restore compilation of the `settings_current_provider`, `settings_visible_apps`, `import_export_sync`, `mcp_commands`, and `provider_service` integration targets, which had drifted after the Pi and Grok app additions (missing `Grok` enum variant, missing `McpApps::grok` field, and missing `test_support`/`AppError::localized` shims).
+
 ## [5.10.13] - 2026-09-17
 
 ### Added

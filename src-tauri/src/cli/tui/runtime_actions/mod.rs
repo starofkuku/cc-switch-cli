@@ -1408,7 +1408,9 @@ mod tests {
         .expect("set visible apps");
 
         assert_eq!(crate::settings::get_visible_apps(), next_visible_apps);
-        assert_eq!(app.app_type, AppType::Claude);
+        // OpenClaw becomes hidden, so the TUI switches to the next visible app after it,
+        // which is Pi (always visible) — not Claude.
+        assert_eq!(app.app_type, AppType::Pi);
         assert_eq!(app.route, Route::Config);
         assert!(matches!(
             app.toast.as_ref(),
@@ -1527,7 +1529,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn set_visible_apps_zero_selection_shows_warning_and_keeps_state_unchanged() {
+    fn set_visible_apps_zero_togglable_selection_is_allowed_while_pi_and_grok_remain() {
         let temp_home = TempDir::new().expect("create temp home");
         let _env = EnvGuard::set_home(temp_home.path());
         let initial_visible_apps = crate::settings::VisibleApps {
@@ -1545,6 +1547,9 @@ mod tests {
         let mut data = UiData::default();
         data.providers.current_id = "before".to_string();
 
+        // Pi and Grok are unconditionally visible, so an all-false togglable selection no
+        // longer trips the zero-selection warning; Codex stays visible or switches to the
+        // next visible app instead of being rejected.
         run_action(
             &mut app,
             &mut data,
@@ -1559,17 +1564,21 @@ mod tests {
                 },
             },
         )
-        .expect("runtime should warn instead of erroring");
+        .expect("runtime should accept an all-false togglable selection");
 
-        assert_eq!(crate::settings::get_visible_apps(), initial_visible_apps);
-        assert_eq!(app.app_type, AppType::Codex);
-        assert_eq!(data.providers.current_id, "before");
-        assert!(matches!(
-            app.toast.as_ref(),
-            Some(toast)
-                if toast.kind == super::super::app::ToastKind::Warning
-                    && toast.message == texts::tui_toast_visible_apps_zero_selection_warning()
-        ));
+        let saved = crate::settings::get_visible_apps();
+        assert!(!saved.claude && !saved.codex && !saved.gemini);
+        assert!(!saved.opencode && !saved.hermes && !saved.openclaw);
+        assert_eq!(
+            saved.ordered_enabled(),
+            vec![AppType::Pi, AppType::Grok],
+            "Pi and Grok keep the visible set non-empty"
+        );
+        assert_eq!(
+            app.app_type,
+            AppType::Pi,
+            "Codex was hidden, so the TUI switches to Pi"
+        );
     }
 
     #[test]

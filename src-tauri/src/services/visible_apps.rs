@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn auto_mode_falls_back_to_claude_when_detection_hides_every_controlled_app() {
+    fn auto_mode_keeps_pi_and_grok_when_detection_hides_every_controlled_app() {
         let temp_home = TempDir::new().expect("create temp home");
         let _env = EnvGuard::set_home(temp_home.path());
         let mut settings = crate::settings::get_settings();
@@ -439,9 +439,16 @@ mod tests {
         crate::settings::update_settings(settings).expect("save settings");
 
         let outcome = apply_startup_policy(&VisibleAppsDetection::default()).expect("apply policy");
+
+        // Pi and Grok are always visible (`VisibleApps::is_enabled_for` returns true for
+        // them unconditionally), so hiding every togglable app can never leave the set
+        // empty. The Claude fallback in `ensure_visible_apps_has_fallback` is therefore
+        // unreachable from this path, and Pi/Grok keep the TUI usable.
         assert_eq!(
             outcome.visible_apps.ordered_enabled(),
-            vec![AppType::Claude]
+            vec![AppType::Pi, AppType::Grok]
         );
+        assert!(!outcome.visible_apps.claude, "claude must stay hidden");
+        assert!(!outcome.visible_apps.codex, "codex must stay hidden");
     }
 }
