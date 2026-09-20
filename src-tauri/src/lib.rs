@@ -69,11 +69,11 @@ pub use provider::{Provider, ProviderMeta, UsageScript};
 pub use proxy::{ProxyConfig, ProxyServerInfo, ProxyStatus};
 pub use services::{
     AuthService, ConfigService, CredentialStatus, EndpointLatency, ExtraUsage, HealthStatus,
-    ImportSkillSelection, ManagedAuthAccount, ManagedAuthDeviceCodeResponse, ManagedAuthStatus,
-    McpService, PromptService, ProviderService, ProxyService, QuotaTier, S3RemoteInfo,
-    S3SyncService, S3SyncSummary, SkillService, SpeedtestService, StreamCheckConfig,
-    StreamCheckResult, StreamCheckService, SubscriptionQuota, SyncDecision, WebDavSyncService,
-    WebDavSyncSummary,
+    ImportSkillSelection, LiveImportOptions, LiveImportSummary, ManagedAuthAccount,
+    ManagedAuthDeviceCodeResponse, ManagedAuthStatus, McpService, PromptService, ProviderService,
+    ProxyService, QuotaTier, S3RemoteInfo, S3SyncService, S3SyncSummary, SkillService,
+    SpeedtestService, StreamCheckConfig, StreamCheckResult, StreamCheckService, SubscriptionQuota,
+    SyncDecision, WebDavSyncService, WebDavSyncSummary,
 };
 pub use settings::{
     get_enable_claude_plugin_integration, get_s3_sync_settings, get_skip_claude_onboarding,

@@ -32,6 +32,7 @@ use crate::store::AppState;
 
 use gemini_auth::GeminiAuthType;
 use live::LiveSnapshot;
+pub use live::{LiveImportOptions, LiveImportSummary};
 
 pub use common::migrate_legacy_codex_config;
 #[cfg(test)]
@@ -2610,6 +2611,35 @@ impl ProviderService {
             AppType::Grok => live::import_grok_providers_from_live(state),
             _ => Self::import_default_config(state, app_type).map(usize::from),
         }
+    }
+
+    /// Import live config with explicit `--update`/`--prune` semantics.
+    ///
+    /// Only Pi opts into the extended semantics for now; every other app rejects
+    /// the flags instead of silently ignoring them, so existing behavior can never
+    /// change by accident.
+    pub fn import_live_config_with_options(
+        state: &AppState,
+        app_type: AppType,
+        options: LiveImportOptions,
+    ) -> Result<LiveImportSummary, AppError> {
+        if options == LiveImportOptions::default() {
+            let added = Self::import_live_config(state, app_type)?;
+            return Ok(LiveImportSummary {
+                added,
+                ..Default::default()
+            });
+        }
+
+        if app_type != AppType::Pi {
+            return Err(AppError::localized(
+                "provider.import_live.options_unsupported",
+                "--update/--prune 目前仅支持 --app pi",
+                "--update/--prune are currently only supported for --app pi",
+            ));
+        }
+
+        live::import_pi_providers_from_live_with_options(state, options)
     }
 
     pub fn set_default_model(

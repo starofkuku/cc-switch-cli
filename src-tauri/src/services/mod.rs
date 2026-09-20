@@ -43,6 +43,7 @@ pub use mcp::McpService;
 pub use model_fetch::FetchedModel;
 pub use prompt::PromptService;
 pub use provider::ProviderService;
+pub use provider::{LiveImportOptions, LiveImportSummary};
 pub use proxy::ProxyService;
 pub use s3_sync::{S3RemoteInfo, S3SyncService, S3SyncSummary};
 pub use skill::{ImportSkillSelection, SkillService};

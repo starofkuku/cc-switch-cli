@@ -8,8 +8,8 @@ use std::net::TcpListener;
 
 use cc_switch_lib::{
     get_claude_settings_path, get_codex_auth_path, get_codex_config_path, read_json_file,
-    update_settings, write_codex_live_atomic, AppSettings, AppState, AppType, McpApps, McpServer,
-    MultiAppConfig, Provider, ProviderMeta, ProviderService, UsageScript,
+    update_settings, write_codex_live_atomic, AppSettings, AppState, AppType, LiveImportOptions,
+    McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService, UsageScript,
 };
 
 use cc_switch_lib::cli::commands::provider::ProviderCommand;
@@ -997,15 +997,24 @@ model: {}
     drop(state);
 
     provider_command(
-        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive,
+        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive {
+            update: false,
+            prune: false,
+        },
         AppType::OpenCode,
     );
     provider_command(
-        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive,
+        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive {
+            update: false,
+            prune: false,
+        },
         AppType::Hermes,
     );
     provider_command(
-        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive,
+        cc_switch_lib::cli::commands::provider::ProviderCommand::ImportLive {
+            update: false,
+            prune: false,
+        },
         AppType::OpenClaw,
     );
 
@@ -2452,6 +2461,230 @@ fn provider_update_key_additive_pi_syncs_live_models() {
     assert_eq!(
         live["providers"]["relay"]["models"][0]["id"],
         json!("gpt-4o")
+    );
+}
+
+#[test]
+#[serial]
+fn provider_import_live_options_upsert_and_prune_pi() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    let models_path = pi_dir.join("models.json");
+    let write_live = |providers: serde_json::Value| {
+        fs::write(
+            &models_path,
+            serde_json::to_string_pretty(&json!({ "providers": providers }))
+                .expect("serialize models"),
+        )
+        .expect("write models.json");
+    };
+
+    write_live(json!({
+        "alpha": { "name": "Alpha", "api": "openai", "apiKey": "sk-old",
+                   "baseUrl": "https://old.example/v1", "models": [{ "id": "m1" }] },
+        "beta":  { "name": "Beta",  "api": "openai", "apiKey": "sk-b",
+                   "baseUrl": "https://b.example/v1",   "models": [{ "id": "b1" }] }
+    }));
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("import pi live");
+    }
+
+    // Default import stays add-only: editing alpha and adding gamma must not touch alpha.
+    write_live(json!({
+        "alpha": { "name": "Alpha Renamed", "api": "openai", "apiKey": "sk-new",
+                   "baseUrl": "https://new.example/v1", "models": [{ "id": "m1" }, { "id": "m2" }] },
+        "gamma": { "name": "Gamma", "api": "openai", "apiKey": "sk-g",
+                   "baseUrl": "https://g.example/v1", "models": [{ "id": "g1" }] }
+    }));
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("add-only import");
+        let providers = ProviderService::list(&state, AppType::Pi).expect("list");
+        assert!(
+            providers.contains_key("beta"),
+            "add-only import must not prune"
+        );
+        assert_eq!(
+            providers["alpha"].settings_config["apiKey"],
+            json!("sk-old")
+        );
+        assert!(providers.contains_key("gamma"));
+    }
+
+    // --update refreshes existing rows but keeps cc-switch-authored metadata.
+    {
+        let state = AppState::try_new().expect("state");
+        let mut existing = ProviderService::list(&state, AppType::Pi)
+            .expect("list")
+            .shift_remove("alpha")
+            .expect("alpha");
+        existing.notes = Some("local note".to_string());
+        existing
+            .meta
+            .get_or_insert_with(ProviderMeta::default)
+            .cost_multiplier = Some("0.5".to_string());
+        state.db.save_provider("pi", &existing).expect("seed meta");
+    }
+    let summary = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveImportOptions {
+                update: true,
+                prune: false,
+            },
+        )
+        .expect("update import")
+    };
+    assert_eq!(summary.updated, 2, "alpha and gamma both exist already");
+    assert_eq!(summary.pruned, 0);
+    {
+        let state = AppState::try_new().expect("state");
+        let providers = ProviderService::list(&state, AppType::Pi).expect("list");
+        let alpha = &providers["alpha"];
+        assert_eq!(alpha.name, "Alpha Renamed");
+        assert_eq!(alpha.settings_config["apiKey"], json!("sk-new"));
+        assert_eq!(
+            alpha.settings_config["baseUrl"],
+            json!("https://new.example/v1")
+        );
+        assert_eq!(
+            alpha.notes.as_deref(),
+            Some("local note"),
+            "notes must survive"
+        );
+        assert_eq!(
+            alpha
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.cost_multiplier.as_deref()),
+            Some("0.5"),
+            "cc-switch metadata must survive --update"
+        );
+        assert!(providers.contains_key("beta"), "prune was not requested");
+    }
+
+    // --prune drops live_config_managed rows that live no longer defines.
+    let summary = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveImportOptions {
+                update: false,
+                prune: true,
+            },
+        )
+        .expect("prune import")
+    };
+    assert_eq!(summary.pruned, 1, "beta is gone from live");
+    {
+        let state = AppState::try_new().expect("state");
+        let providers = ProviderService::list(&state, AppType::Pi).expect("list");
+        assert!(!providers.contains_key("beta"));
+        assert!(providers.contains_key("alpha"));
+        assert!(providers.contains_key("gamma"));
+    }
+}
+
+#[test]
+#[serial]
+fn provider_import_live_options_prune_spares_db_only_providers() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    fs::write(
+        pi_dir.join("models.json"),
+        serde_json::to_string_pretty(&json!({
+            "providers": {
+                "from-live": { "name": "From Live", "api": "openai", "apiKey": "sk-l",
+                               "baseUrl": "https://l.example/v1", "models": [{ "id": "l1" }] }
+            }
+        }))
+        .expect("serialize"),
+    )
+    .expect("write models.json");
+
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("import");
+        // A provider that only ever existed inside cc-switch.
+        let db_only = Provider::with_id(
+            "db-only".to_string(),
+            "DB Only".to_string(),
+            json!({ "apiKey": "sk-d", "baseUrl": "https://d.example/v1" }),
+            None,
+        );
+        state
+            .db
+            .save_provider("pi", &db_only)
+            .expect("save db-only");
+        {
+            let mut config = state.config.write().expect("lock");
+            config.ensure_app(&AppType::Pi);
+            config
+                .get_manager_mut(&AppType::Pi)
+                .expect("pi manager")
+                .providers
+                .insert("db-only".to_string(), db_only);
+        }
+        // `AppState::save` takes the config read lock, so the write guard above must
+        // be dropped first to avoid a self-deadlock.
+        state.save().expect("persist");
+    }
+
+    let summary = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveImportOptions {
+                update: true,
+                prune: true,
+            },
+        )
+        .expect("prune import")
+    };
+    assert_eq!(summary.pruned, 0, "db-only rows are never pruned");
+
+    let state = AppState::try_new().expect("state");
+    let providers = ProviderService::list(&state, AppType::Pi).expect("list");
+    assert!(
+        providers.contains_key("db-only"),
+        "db-only must survive prune"
+    );
+    assert!(providers.contains_key("from-live"));
+}
+
+#[test]
+#[serial]
+fn provider_import_live_options_reject_non_pi_apps() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let state = AppState::try_new().expect("state");
+    let err = ProviderService::import_live_config_with_options(
+        &state,
+        AppType::Grok,
+        LiveImportOptions {
+            update: true,
+            prune: false,
+        },
+    )
+    .expect_err("non-pi apps must reject --update/--prune");
+    assert!(
+        err.to_string().contains("仅支持 --app pi"),
+        "unexpected error: {err}"
     );
 }
 

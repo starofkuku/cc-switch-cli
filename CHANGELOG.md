@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.15] - 2026-09-20
+
+### Added
+
+- **CLI / Provider import-live options (Pi)**: `cc-switch --app pi provider import-live` now accepts `--update` and `--prune`. Without flags it keeps the previous add-only behavior. `--update` overwrites existing Pi providers with the live `models.json` content while preserving cc-switch-authored metadata (usage scripts, custom endpoints, proxy overrides, notes, icons, ordering). `--prune` also deletes providers that live no longer defines, but only when they are flagged `liveConfigManaged`, so rows created purely inside cc-switch are never destroyed. Both flags are rejected for every other app.
+
 ## [5.10.14] - 2026-09-19
 
 ### Fixed

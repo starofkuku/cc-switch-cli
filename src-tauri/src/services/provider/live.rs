@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::app_config::AppType;
 use crate::codex_config::{get_codex_auth_path, get_codex_config_path};
@@ -442,44 +442,166 @@ pub fn import_openclaw_providers_from_live(state: &AppState) -> Result<usize, Ap
     Ok(imported)
 }
 
-pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
-    let providers = crate::pi_config::get_providers()?;
-    if providers.is_empty() {
-        return Ok(0);
-    }
+/// Reports what a live import changed, so callers can distinguish "nothing new"
+/// from "nothing at all".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveImportSummary {
+    /// Providers newly created from live config.
+    pub added: usize,
+    /// Existing providers whose stored config was overwritten with live content.
+    pub updated: usize,
+    /// Providers deleted because they no longer exist in live config.
+    pub pruned: usize,
+}
 
-    let mut imported = 0usize;
+impl LiveImportSummary {
+    pub fn is_empty(&self) -> bool {
+        self.added == 0 && self.updated == 0 && self.pruned == 0
+    }
+}
+
+/// How a live import should treat providers that the database already knows about.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveImportOptions {
+    /// Overwrite existing providers with the live content instead of skipping them.
+    pub update: bool,
+    /// Delete providers that no longer exist in live config. Intentionally limited
+    /// to providers marked `live_config_managed`, so rows that were only ever
+    /// created inside cc-switch are never destroyed by a prune.
+    pub prune: bool,
+}
+
+fn import_pi_providers_from_live_with(
+    state: &AppState,
+    options: LiveImportOptions,
+) -> Result<LiveImportSummary, AppError> {
+    let providers = crate::pi_config::get_providers()?;
+    let mut summary = LiveImportSummary::default();
     let existing_ids = state.db.get_provider_ids("pi")?;
-    for (id, settings_config) in providers {
-        if id.trim().is_empty() || existing_ids.contains(&id) || !settings_config.is_object() {
+
+    for (id, settings_config) in providers.iter() {
+        if id.trim().is_empty() || !settings_config.is_object() {
             continue;
         }
+        let replace_existing = existing_ids.contains(id);
+        if replace_existing && !options.update {
+            continue;
+        }
+
         let display_name = settings_config
             .get("name")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|name| !name.is_empty())
-            .unwrap_or(&id)
+            .unwrap_or(id)
             .to_string();
-        let mut provider = Provider::with_id(id.clone(), display_name, settings_config, None);
-        provider.meta = Some(ProviderMeta {
-            live_config_managed: Some(true),
-            ..Default::default()
-        });
+
+        // Live owns the user-visible fields (name + provider config). When the row
+        // already exists, keep everything cc-switch authored around it — usage
+        // scripts, custom endpoints, proxy overrides, icons, notes, ordering — so
+        // `--update` refreshes live content without wiping local metadata.
+        //
+        // Read the existing row straight from SQLite: the in-memory MultiAppConfig
+        // snapshot does not carry every `ProviderMeta` field, so merging from it
+        // would silently drop things like `usageScript` or `customEndpoints`.
+        let existing = if replace_existing {
+            state.db.get_all_providers("pi")?.shift_remove(id)
+        } else {
+            None
+        };
+
+        let provider = match existing {
+            Some(existing) => {
+                let mut merged = existing;
+                merged.name = display_name;
+                merged.settings_config = settings_config.clone();
+                merged
+                    .meta
+                    .get_or_insert_with(ProviderMeta::default)
+                    .live_config_managed = Some(true);
+                merged
+            }
+            None => {
+                let mut created =
+                    Provider::with_id(id.clone(), display_name, settings_config.clone(), None);
+                created.meta = Some(ProviderMeta {
+                    live_config_managed: Some(true),
+                    ..Default::default()
+                });
+                created
+            }
+        };
         state.db.save_provider("pi", &provider)?;
         {
             let mut config = state.config.write().map_err(AppError::from)?;
             config.ensure_app(&AppType::Pi);
             if let Some(manager) = config.get_manager_mut(&AppType::Pi) {
-                manager.providers.insert(id, provider);
+                manager.providers.insert(id.clone(), provider);
             }
         }
-        imported += 1;
+        if replace_existing {
+            summary.updated += 1;
+        } else {
+            summary.added += 1;
+        }
     }
-    if imported > 0 {
+
+    if options.prune {
+        summary.pruned = prune_pi_providers_missing_from_live(state, &providers, &existing_ids)?;
+    }
+
+    if !summary.is_empty() {
         state.save()?;
     }
-    Ok(imported)
+    Ok(summary)
+}
+
+/// Deletes Pi providers that live no longer defines, but only when they are
+/// flagged `live_config_managed` so locally-authored rows survive a prune.
+fn prune_pi_providers_missing_from_live(
+    state: &AppState,
+    live_providers: &Map<String, Value>,
+    existing_ids: &std::collections::HashSet<String>,
+) -> Result<usize, AppError> {
+    let stale = {
+        let config = state.config.read().map_err(AppError::from)?;
+        existing_ids
+            .iter()
+            .filter(|id| !live_providers.contains_key(*id))
+            .filter(|id| {
+                config
+                    .get_manager(&AppType::Pi)
+                    .and_then(|manager| manager.providers.get(*id))
+                    .and_then(|provider| provider.meta.as_ref())
+                    .and_then(|meta| meta.live_config_managed)
+                    == Some(true)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let mut pruned = 0usize;
+    for id in stale {
+        state.db.delete_provider("pi", &id)?;
+        let mut config = state.config.write().map_err(AppError::from)?;
+        if let Some(manager) = config.get_manager_mut(&AppType::Pi) {
+            manager.providers.shift_remove(&id);
+        }
+        pruned += 1;
+    }
+    Ok(pruned)
+}
+
+pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+    let summary = import_pi_providers_from_live_with(state, LiveImportOptions::default())?;
+    Ok(summary.added)
+}
+
+pub(crate) fn import_pi_providers_from_live_with_options(
+    state: &AppState,
+    options: LiveImportOptions,
+) -> Result<LiveImportSummary, AppError> {
+    import_pi_providers_from_live_with(state, options)
 }
 
 pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppError> {

@@ -647,7 +647,14 @@ pub enum ProviderCommand {
         edit: bool,
     },
     /// Import providers from the current live app config
-    ImportLive,
+    ImportLive {
+        /// Also overwrite providers that already exist in cc-switch (Pi only)
+        #[arg(long)]
+        update: bool,
+        /// Also delete `live_config_managed` providers that live no longer defines (Pi only)
+        #[arg(long)]
+        prune: bool,
+    },
     /// Remove a provider from additive live app config without deleting it
     RemoveFromConfig {
         /// Provider ID to remove from live config
@@ -772,7 +779,9 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
         ProviderCommand::Edit { id } => edit_provider(app_type, &id),
         ProviderCommand::Delete { id } => delete_provider(app_type, &id),
         ProviderCommand::Duplicate { id, edit } => duplicate_provider(app_type, &id, edit),
-        ProviderCommand::ImportLive => import_live_config(app_type),
+        ProviderCommand::ImportLive { update, prune } => {
+            import_live_config(app_type, update, prune)
+        }
         ProviderCommand::RemoveFromConfig { id } => remove_from_config(app_type, &id),
         ProviderCommand::SetDefault { id, model } => {
             set_default_provider(app_type, &id, model.as_deref())
@@ -1966,26 +1975,38 @@ fn duplicate_provider_interactive(app_type: AppType, id: &str) -> Result<(), App
     Ok(())
 }
 
-fn import_live_config(app_type: AppType) -> Result<(), AppError> {
+fn import_live_config(app_type: AppType, update: bool, prune: bool) -> Result<(), AppError> {
     let state = get_state()?;
-    let imported = ProviderService::import_live_config(&state, app_type.clone())?;
-    if imported > 0 {
+    let options = crate::services::provider::LiveImportOptions { update, prune };
+    let summary =
+        ProviderService::import_live_config_with_options(&state, app_type.clone(), options)?;
+
+    let app = app_type.as_str();
+    if summary.is_empty() {
         println!(
             "{}",
-            success(&format!(
-                "✓ Imported {imported} provider(s) from {} live config",
-                app_type.as_str()
-            ))
+            info(&format!("No providers imported from {app} live config."))
         );
-    } else {
-        println!(
-            "{}",
-            info(&format!(
-                "No providers imported from {} live config.",
-                app_type.as_str()
-            ))
-        );
+        return Ok(());
     }
+
+    let mut parts = Vec::new();
+    if summary.added > 0 {
+        parts.push(format!("added {}", summary.added));
+    }
+    if summary.updated > 0 {
+        parts.push(format!("updated {}", summary.updated));
+    }
+    if summary.pruned > 0 {
+        parts.push(format!("pruned {}", summary.pruned));
+    }
+    println!(
+        "{}",
+        success(&format!(
+            "✓ Synced {app} live config ({})",
+            parts.join(", ")
+        ))
+    );
     Ok(())
 }
 
