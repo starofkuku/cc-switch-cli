@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.15-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.16-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -180,6 +180,7 @@ cc-switch --app openclaw provider list  # Manage OpenClaw providers
 cc-switch --app pi provider list        # Manage Pi providers
 cc-switch --app pi provider import-live # Import Pi providers from models.json (add-only)
 cc-switch --app pi provider import-live --update --prune  # Make cc-switch match models.json exactly (Pi only)
+cc-switch --app pi provider export-live [--prune]         # Write cc-switch providers into models.json (Pi only)
 cc-switch --app grok provider list      # Manage Grok custom models
 
 # Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`, `grok`
@@ -292,6 +293,21 @@ cc-switch provider stream-check <id> # Run stream health check
 cc-switch provider fetch-models <id> # Fetch remote model list
 cc-switch provider export <id> --output ~/.claude/settings-demo.json # Custom settings file path
 ```
+
+Pi keeps its providers in `~/.pi/agent/models.json`, so it can be synced in either direction (Pi only):
+
+```bash
+# live -> DB: make cc-switch match models.json
+cc-switch --app pi provider import-live                 # add new providers only
+cc-switch --app pi provider import-live --update        # also overwrite existing ones
+cc-switch --app pi provider import-live --update --prune # ...and drop DB rows that live no longer defines
+
+# DB -> live: make models.json match cc-switch
+cc-switch --app pi provider export-live                 # write managed providers into models.json
+cc-switch --app pi provider export-live --prune         # ...and drop live entries cc-switch does not define
+```
+
+Both directions are conservative by default: without `--update`/`--prune` nothing existing is overwritten or deleted, entries the other side does not manage are left untouched, and `--prune` never removes rows that only exist inside cc-switch. Other apps reject these flags instead of silently ignoring them.
 
 ### 🔐 Managed Accounts
 

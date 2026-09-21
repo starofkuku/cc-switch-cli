@@ -32,6 +32,7 @@ use crate::store::AppState;
 
 use gemini_auth::GeminiAuthType;
 use live::LiveSnapshot;
+pub use live::{LiveExportOptions, LiveExportSummary};
 pub use live::{LiveImportOptions, LiveImportSummary};
 
 pub use common::migrate_legacy_codex_config;
@@ -2640,6 +2641,27 @@ impl ProviderService {
         }
 
         live::import_pi_providers_from_live_with_options(state, options)
+    }
+
+    /// Write every Pi provider from the database into the live `models.json`.
+    ///
+    /// Mirror of `import_live_config_with_options`: the database is authoritative.
+    /// Only Pi opts into this for now; other apps reject the call rather than
+    /// silently doing nothing.
+    pub fn export_live_config_with_options(
+        state: &AppState,
+        app_type: AppType,
+        options: LiveExportOptions,
+    ) -> Result<LiveExportSummary, AppError> {
+        if app_type != AppType::Pi {
+            return Err(AppError::localized(
+                "provider.export_live.unsupported",
+                "--prune 导出目前仅支持 --app pi",
+                "Live export is currently only supported for --app pi",
+            ));
+        }
+
+        live::export_pi_providers_to_live_with(state, options)
     }
 
     pub fn set_default_model(

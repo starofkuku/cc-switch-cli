@@ -1233,7 +1233,35 @@ mod tests {
         let cli = Cli::parse_from(["cc-switch", "provider", "import-live"]);
 
         match cli.command {
-            Some(Commands::Provider(super::commands::provider::ProviderCommand::ImportLive)) => {}
+            Some(Commands::Provider(super::commands::provider::ProviderCommand::ImportLive {
+                update,
+                prune,
+            })) => {
+                assert!(!update, "--update must default to false");
+                assert!(!prune, "--prune must default to false");
+            }
+            _ => panic!("expected provider import-live command"),
+        }
+    }
+
+    #[test]
+    fn parses_provider_import_live_update_prune_flags() {
+        let cli = Cli::parse_from([
+            "cc-switch",
+            "provider",
+            "import-live",
+            "--update",
+            "--prune",
+        ]);
+
+        match cli.command {
+            Some(Commands::Provider(super::commands::provider::ProviderCommand::ImportLive {
+                update,
+                prune,
+            })) => {
+                assert!(update);
+                assert!(prune);
+            }
             _ => panic!("expected provider import-live command"),
         }
     }

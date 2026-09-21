@@ -655,6 +655,12 @@ pub enum ProviderCommand {
         #[arg(long)]
         prune: bool,
     },
+    /// Write providers from cc-switch into the live app config (Pi only)
+    ExportLive {
+        /// Also delete live entries that cc-switch does not define
+        #[arg(long)]
+        prune: bool,
+    },
     /// Remove a provider from additive live app config without deleting it
     RemoveFromConfig {
         /// Provider ID to remove from live config
@@ -782,6 +788,7 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
         ProviderCommand::ImportLive { update, prune } => {
             import_live_config(app_type, update, prune)
         }
+        ProviderCommand::ExportLive { prune } => export_live_config(app_type, prune),
         ProviderCommand::RemoveFromConfig { id } => remove_from_config(app_type, &id),
         ProviderCommand::SetDefault { id, model } => {
             set_default_provider(app_type, &id, model.as_deref())
@@ -2004,6 +2011,38 @@ fn import_live_config(app_type: AppType, update: bool, prune: bool) -> Result<()
         "{}",
         success(&format!(
             "✓ Synced {app} live config ({})",
+            parts.join(", ")
+        ))
+    );
+    Ok(())
+}
+
+fn export_live_config(app_type: AppType, prune: bool) -> Result<(), AppError> {
+    let state = get_state()?;
+    let options = crate::services::provider::LiveExportOptions { prune };
+    let summary =
+        ProviderService::export_live_config_with_options(&state, app_type.clone(), options)?;
+
+    let app = app_type.as_str();
+    if summary.is_empty() {
+        println!(
+            "{}",
+            info(&format!("No providers written to {app} live config."))
+        );
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if summary.written > 0 {
+        parts.push(format!("wrote {}", summary.written));
+    }
+    if summary.pruned > 0 {
+        parts.push(format!("pruned {}", summary.pruned));
+    }
+    println!(
+        "{}",
+        success(&format!(
+            "✓ Exported {app} live config ({})",
             parts.join(", ")
         ))
     );

@@ -604,6 +604,106 @@ pub(crate) fn import_pi_providers_from_live_with_options(
     import_pi_providers_from_live_with(state, options)
 }
 
+/// Reports what a live export changed, so callers can tell "already in sync"
+/// apart from "wrote something".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveExportSummary {
+    /// Providers written to live config (created or overwritten).
+    pub written: usize,
+    /// Entries removed from live config because the database no longer has them.
+    pub pruned: usize,
+}
+
+impl LiveExportSummary {
+    pub fn is_empty(&self) -> bool {
+        self.written == 0 && self.pruned == 0
+    }
+}
+
+/// How a live export should treat entries that already exist in live config.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveExportOptions {
+    /// Delete live entries that the database does not define. Without this flag
+    /// the live file keeps entries cc-switch does not manage.
+    pub prune: bool,
+}
+
+/// Push every Pi provider in the database into `models.json`.
+///
+/// This is the mirror of `import_pi_providers_from_live_with`: the database is
+/// authoritative and the live file is rewritten to match it. Entries the
+/// database does not manage are left untouched unless `prune` is requested.
+pub(crate) fn export_pi_providers_to_live_with(
+    state: &AppState,
+    options: LiveExportOptions,
+) -> Result<LiveExportSummary, AppError> {
+    if !crate::sync_policy::should_sync_live(&AppType::Pi) {
+        return Err(AppError::localized(
+            "provider.export_live.not_initialized",
+            "目标应用 pi 尚未初始化，拒绝写入其配置目录",
+            "Destination app pi is not initialized; refusing to write its config directory",
+        ));
+    }
+
+    // Snapshot the database under the read lock, then write files without holding it.
+    let managed: Vec<(String, Value)> = {
+        let config = state.config.read().map_err(AppError::from)?;
+        config
+            .get_manager(&AppType::Pi)
+            .map(|manager| {
+                manager
+                    .providers
+                    .values()
+                    .filter(|provider| {
+                        provider.meta.as_ref().and_then(|m| m.live_config_managed) != Some(false)
+                    })
+                    .map(|provider| (provider.id.clone(), provider.settings_config.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // Start from the live document so unmanaged entries survive a plain export.
+    let mut providers = crate::pi_config::get_providers()?;
+    let mut written = 0usize;
+    for (id, settings_config) in &managed {
+        if id.trim().is_empty() || !settings_config.is_object() {
+            continue;
+        }
+        // Merge against the existing live entry so fields cc-switch does not model
+        // (and that a user may have added by hand) are preserved.
+        let base = providers.shift_remove(id);
+        let built =
+            crate::pi_config::prepare_provider_with_base(id, base, settings_config.clone())?;
+        let entry = built
+            .get("providers")
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(id))
+            .cloned()
+            .ok_or_else(|| AppError::Config(format!("Pi provider preparation dropped '{id}'")))?;
+        providers.insert(id.clone(), entry);
+        written += 1;
+    }
+
+    let mut pruned = 0usize;
+    if options.prune {
+        let managed_ids: std::collections::HashSet<&str> =
+            managed.iter().map(|(id, _)| id.as_str()).collect();
+        providers.retain(|id, _| {
+            if managed_ids.contains(id.as_str()) {
+                true
+            } else {
+                pruned += 1;
+                false
+            }
+        });
+    }
+
+    crate::pi_config::replace_providers(providers)?;
+
+    Ok(LiveExportSummary { written, pruned })
+}
+
 pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     let providers = crate::grok_config::get_providers()?;
     if providers.is_empty() {

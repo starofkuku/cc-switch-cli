@@ -8,8 +8,9 @@ use std::net::TcpListener;
 
 use cc_switch_lib::{
     get_claude_settings_path, get_codex_auth_path, get_codex_config_path, read_json_file,
-    update_settings, write_codex_live_atomic, AppSettings, AppState, AppType, LiveImportOptions,
-    McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService, UsageScript,
+    update_settings, write_codex_live_atomic, AppSettings, AppState, AppType, LiveExportOptions,
+    LiveImportOptions, McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
+    UsageScript,
 };
 
 use cc_switch_lib::cli::commands::provider::ProviderCommand;
@@ -2663,6 +2664,197 @@ fn provider_import_live_options_prune_spares_db_only_providers() {
         "db-only must survive prune"
     );
     assert!(providers.contains_key("from-live"));
+}
+
+#[test]
+#[serial]
+fn provider_export_live_writes_db_into_models_json() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    let models_path = pi_dir.join("models.json");
+    let read_live = || -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(&models_path).expect("read models"))
+            .expect("parse models")
+    };
+
+    // Live starts with a provider cc-switch knows nothing about.
+    fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&json!({
+            "providers": {
+                "hand-written": { "baseUrl": "https://hand.example/v1", "apiKey": "sk-hand" }
+            },
+            "theme": "dark"
+        }))
+        .expect("serialize"),
+    )
+    .expect("write models.json");
+
+    // Import it, then mutate the DB copy so live is stale.
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("import");
+        let mut provider = ProviderService::list(&state, AppType::Pi)
+            .expect("list")
+            .shift_remove("hand-written")
+            .expect("hand-written");
+        provider.settings_config["apiKey"] = json!("sk-from-db");
+        state.db.save_provider("pi", &provider).expect("save");
+    }
+
+    let summary = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::export_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveExportOptions { prune: false },
+        )
+        .expect("export live")
+    };
+    assert_eq!(summary.written, 1, "one managed provider was written");
+    assert_eq!(summary.pruned, 0, "prune was not requested");
+
+    let live = read_live();
+    assert_eq!(
+        live["providers"]["hand-written"]["apiKey"],
+        json!("sk-from-db"),
+        "live must be overwritten by the database"
+    );
+    assert_eq!(live["theme"], json!("dark"), "unrelated keys must survive");
+}
+
+#[test]
+#[serial]
+fn provider_export_live_prune_removes_live_only_entries() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    let models_path = pi_dir.join("models.json");
+
+    // `managed` comes from the database; `stray` exists only in live config.
+    fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&json!({
+            "providers": {
+                "managed": { "baseUrl": "https://m.example/v1", "apiKey": "sk-m" },
+                "stray":   { "baseUrl": "https://s.example/v1", "apiKey": "sk-s" }
+            }
+        }))
+        .expect("serialize"),
+    )
+    .expect("write models.json");
+
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("import");
+        // Drop `stray` from the database only, leaving it in live config.
+        let stray = ProviderService::list(&state, AppType::Pi)
+            .expect("list")
+            .shift_remove("stray")
+            .expect("stray");
+        state.db.delete_provider("pi", &stray.id).expect("delete");
+        let mut config = state.config.write().expect("lock");
+        config
+            .get_manager_mut(&AppType::Pi)
+            .expect("pi manager")
+            .providers
+            .shift_remove("stray");
+    }
+
+    // Without --prune the stray entry is left alone.
+    let plain = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::export_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveExportOptions { prune: false },
+        )
+        .expect("export live")
+    };
+    assert_eq!(plain.pruned, 0);
+    let live =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&models_path).expect("read"))
+            .expect("parse");
+    assert!(
+        live["providers"].get("stray").is_some(),
+        "live-only entry must survive a plain export"
+    );
+
+    // With --prune it is removed.
+    let pruned = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::export_live_config_with_options(
+            &state,
+            AppType::Pi,
+            LiveExportOptions { prune: true },
+        )
+        .expect("export live --prune")
+    };
+    assert_eq!(pruned.pruned, 1, "stray is not in the database");
+    let live =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&models_path).expect("read"))
+            .expect("parse");
+    assert!(live["providers"].get("stray").is_none());
+    assert!(live["providers"].get("managed").is_some());
+}
+
+#[test]
+#[serial]
+fn provider_export_live_rejects_non_pi_apps() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    ensure_test_home();
+
+    let state = AppState::try_new().expect("state");
+    let err = ProviderService::export_live_config_with_options(
+        &state,
+        AppType::Grok,
+        LiveExportOptions { prune: false },
+    )
+    .expect_err("non-pi apps must be rejected");
+    assert!(
+        err.to_string().contains("仅支持 --app pi"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_export_live_uninitialized_pi_is_rejected() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    // `reset_test_fs` does not cover `.pi`, so clear it explicitly: this test
+    // needs Pi to look uninitialized.
+    let pi_dir = home.join(".pi");
+    if pi_dir.exists() {
+        fs::remove_dir_all(&pi_dir).expect("clear stale .pi dir");
+    }
+    assert!(!home.join(".pi").join("agent").exists());
+
+    let state = AppState::try_new().expect("state");
+    let err = ProviderService::export_live_config_with_options(
+        &state,
+        AppType::Pi,
+        LiveExportOptions { prune: false },
+    )
+    .expect_err("uninitialized pi must be rejected");
+    assert!(
+        err.to_string().contains("尚未初始化"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !home.join(".pi").join("agent").exists(),
+        "must not create the destination directory"
+    );
 }
 
 #[test]

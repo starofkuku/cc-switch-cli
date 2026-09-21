@@ -161,6 +161,16 @@ pub fn remove_provider(id: &str) -> Result<(), AppError> {
     write_pi_models(&models)
 }
 
+/// Overwrite the `providers` map of `models.json` with `providers`.
+///
+/// Every other top-level key (and any unrelated field inside the file) is kept
+/// as-is, matching how `prepare_provider_with_base` treats the document.
+pub fn replace_providers(providers: Map<String, Value>) -> Result<(), AppError> {
+    let mut models = read_pi_models()?;
+    models["providers"] = Value::Object(providers);
+    write_pi_models(&models)
+}
+
 pub fn read_pi_settings() -> Result<Value, AppError> {
     let path = get_pi_settings_path();
     if !path.exists() {

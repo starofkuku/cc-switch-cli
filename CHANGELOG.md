@@ -7,6 +7,16 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.16] - 2026-09-21
+
+### Added
+
+- **CLI / Provider sync both ways (Pi)**: `cc-switch --app pi provider export-live [--prune]` writes every database provider into the live `models.json`, mirroring the existing `import-live --update/--prune`. The database is authoritative: managed providers create or overwrite their live entry while unmanaged fields inside a provider survive the merge, and entries that only exist in `models.json` are left alone unless `--prune` is passed. Apps other than Pi reject the flag rather than silently doing nothing.
+
+### Fixed
+
+- **Tests / CLI**: Repair `parses_provider_import_live_subcommand` in `src/cli/mod.rs`, which still matched the pre-`--update/--prune` unit variant of `ProviderCommand::ImportLive` and broke `cargo test --lib` compilation; add coverage for the new flags.
+
 ## [5.10.15] - 2026-09-20
 
 ### Added

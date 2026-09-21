@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.15-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.16-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -180,6 +180,7 @@ cc-switch --app openclaw provider list  # 管理 OpenClaw 供应商
 cc-switch --app pi provider list        # 管理 Pi 供应商
 cc-switch --app pi provider import-live # 从 models.json 导入 Pi 供应商（仅新增）
 cc-switch --app pi provider import-live --update --prune  # 让 cc-switch 完全对齐 models.json（仅 Pi）
+cc-switch --app pi provider export-live [--prune]         # 把 cc-switch 的供应商写入 models.json（仅 Pi）
 cc-switch --app grok provider list      # 管理 Grok 自定义模型
 
 # 支持的应用：`claude`（默认）、`codex`、`gemini`、`opencode`、`hermes`、`openclaw`、`pi`、`grok`
@@ -292,6 +293,21 @@ cc-switch provider stream-check <id> # 执行流式健康检查
 cc-switch provider fetch-models <id> # 拉取远端模型列表
 cc-switch provider export <id> --output ~/.claude/settings-demo.json # 自定义 settings 文件路径
 ```
+
+Pi 的供应商存放在 `~/.pi/agent/models.json`，因此支持双向同步（仅 Pi）：
+
+```bash
+# live -> DB：让 cc-switch 对齐 models.json
+cc-switch --app pi provider import-live                  # 仅新增供应商
+cc-switch --app pi provider import-live --update         # 同时覆盖已存在的
+cc-switch --app pi provider import-live --update --prune # 再删掉 live 里已不存在的 DB 条目
+
+# DB -> live：让 models.json 对齐 cc-switch
+cc-switch --app pi provider export-live                  # 把纳管的供应商写入 models.json
+cc-switch --app pi provider export-live --prune          # 再删掉 cc-switch 未定义的 live 条目
+```
+
+两个方向默认都很保守：不加 `--update`/`--prune` 时不会覆盖或删除任何已有内容，对方未纳管的条目一律保留，且 `--prune` 永远不会删除只存在于 cc-switch 内部的条目。其它应用会直接报错拒绝这些 flag，而不是静默忽略。
 
 ### 🔐 托管账号
 
