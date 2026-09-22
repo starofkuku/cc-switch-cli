@@ -308,6 +308,11 @@ pub fn model_context_limit(model: &ModelsDevModel) -> Option<u64> {
         .and_then(|limit| limit.context.or(limit.input))
 }
 
+/// Maximum output tokens, mapped from models.dev `limit.output`.
+pub fn model_max_tokens(model: &ModelsDevModel) -> Option<u64> {
+    model.limit.as_ref().and_then(|limit| limit.output)
+}
+
 /// Normalize model ids for fuzzy catalog matching.
 pub fn normalize_model_id(id: &str) -> String {
     let mut s = id.trim().to_ascii_lowercase();
@@ -341,52 +346,188 @@ pub fn normalize_model_id(id: &str) -> String {
 ///
 /// When multiple providers share the same id, prefer the entry with the largest
 /// known context window (more complete metadata).
-pub fn find_catalog_model_by_id(
+/// Collapse a model id to a comparison key for fuzzy matching.
+///
+/// Strips case, surrounding whitespace, vendor prefixes and dated release
+/// suffixes so `openai/GPT-5.4-2026-01-15` and `gpt-5.4` compare equal.
+fn fuzzy_key(id: &str) -> String {
+    let normalized = normalize_model_id(id);
+    strip_release_suffix(&normalized)
+}
+
+/// Remove trailing release markers such as `-2026-01-15`, `-20260115`,
+/// `@2026-01-15` or `:latest`, while keeping meaningful name parts.
+///
+/// The date may contain separators itself, so this scans backwards from each
+/// candidate separator and trims the longest trailing date-shaped run.
+fn strip_release_suffix(id: &str) -> String {
+    let mut s = id.trim().to_string();
+    if let Some(rest) = s.strip_suffix(":latest") {
+        s = rest.to_string();
+    }
+
+    // Separator positions, left to right. Try the earliest one first so the
+    // whole `-2026-01-15` run is removed in a single pass.
+    let separators: Vec<usize> = s
+        .char_indices()
+        .filter(|(_, c)| *c == '-' || *c == '@')
+        .map(|(i, _)| i)
+        .collect();
+
+    for idx in separators {
+        let head = &s[..idx];
+        let tail = &s[idx + 1..];
+        if head.is_empty() {
+            continue;
+        }
+        if is_release_marker(tail) {
+            s = head.to_string();
+            break;
+        }
+    }
+
+    s
+}
+
+/// A trailing release marker: `YYYYMMDD` or `YYYY-MM-DD`.
+fn is_release_marker(value: &str) -> bool {
+    is_date_like(value.trim_start_matches(['-', '@']))
+}
+
+/// `YYYYMMDD` or `YYYY-MM-DD`.
+fn is_date_like(value: &str) -> bool {
+    match value.len() {
+        8 => value.chars().all(|c| c.is_ascii_digit()),
+        10 => {
+            let bytes = value.as_bytes();
+            bytes[4] == b'-'
+                && bytes[7] == b'-'
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, b)| *b == b'-' || (i != 4 && i != 7 && b.is_ascii_digit()))
+        }
+        _ => false,
+    }
+}
+
+/// Similarity score in `0..=1000` between two fuzzy keys.
+///
+/// Exact match wins outright; otherwise a shared prefix and a long common
+/// prefix ratio are combined so `gpt-5.4` beats `gpt-5.4-mini` for query
+/// `gpt5.4`, while unrelated ids stay low.
+fn similarity_score(query: &str, candidate: &str) -> u64 {
+    if query == candidate {
+        return 1000;
+    }
+    if query.is_empty() || candidate.is_empty() {
+        return 0;
+    }
+
+    let shared_prefix = query
+        .chars()
+        .zip(candidate.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let prefix_ratio = (shared_prefix * 2 * 1000) as u64
+        / (query.chars().count() + candidate.chars().count()) as u64;
+
+    // Containment is a strong signal but weaker than an exact match.
+    let contains: u64 = if candidate.contains(query) || query.contains(candidate) {
+        200
+    } else {
+        0
+    };
+
+    prefix_ratio + contains
+}
+
+/// Rank every catalog model against `upstream_id`, best first.
+///
+/// Used both to auto-match and to build the manual picker candidates.
+pub fn rank_catalog_models(
+    catalog: &ModelsDevCatalog,
+    upstream_id: &str,
+) -> Vec<(ModelsDevModel, u64)> {
+    let needle = fuzzy_key(upstream_id);
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(ModelsDevModel, u64)> = catalog
+        .providers
+        .values()
+        .flat_map(|provider| provider.models.iter())
+        .map(|(key, entry)| {
+            let model = entry.clone().into_model(key);
+            let score = [
+                fuzzy_key(&model.id),
+                fuzzy_key(key),
+                model.name.as_deref().map(fuzzy_key).unwrap_or_default(),
+            ]
+            .iter()
+            .map(|candidate| similarity_score(&needle, candidate))
+            .max()
+            .unwrap_or(0);
+            (model, score)
+        })
+        .filter(|(_, score)| *score > 0)
+        .collect();
+
+    // Prefer the higher score, then the larger context window, then a stable id.
+    scored.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| {
+                model_context_limit(&b.0)
+                    .unwrap_or(0)
+                    .cmp(&model_context_limit(&a.0).unwrap_or(0))
+            })
+            .then_with(|| a.0.id.cmp(&b.0.id))
+    });
+    scored
+}
+
+/// Confidence at or above which a fuzzy hit is applied without asking.
+const AUTO_MATCH_MIN_SCORE: u64 = 800;
+
+/// Best automatic catalog match for an upstream model id.
+///
+/// Returns `None` when nothing scores high enough, leaving the decision to the
+/// caller (usually a manual picker).
+pub fn find_catalog_model_fuzzy(
     catalog: &ModelsDevCatalog,
     upstream_id: &str,
 ) -> Option<ModelsDevModel> {
-    let needle = normalize_model_id(upstream_id);
-    if needle.is_empty() {
-        return None;
-    }
+    rank_catalog_models(catalog, upstream_id)
+        .into_iter()
+        .find(|(_, score)| *score >= AUTO_MATCH_MIN_SCORE)
+        .map(|(model, _)| model)
+}
 
-    let mut best: Option<ModelsDevModel> = None;
-    let mut best_score: u64 = 0;
+/// Every catalog model, sorted by provider then id, for the manual picker.
+pub fn all_catalog_models(catalog: &ModelsDevCatalog) -> Vec<ModelsDevModel> {
+    let mut models: Vec<ModelsDevModel> = catalog
+        .providers
+        .values()
+        .flat_map(|provider| provider.models.iter())
+        .map(|(key, entry)| entry.clone().into_model(key))
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+    models
+}
 
-    for provider in catalog.providers.values() {
-        for (key, entry) in &provider.models {
-            let model = match entry {
-                ModelsDevModelEntry::Full(model) => {
-                    let mut model = model.clone();
-                    if model.id.trim().is_empty() {
-                        model.id = key.clone();
-                    }
-                    model
-                }
-                ModelsDevModelEntry::Sparse(value) => {
-                    ModelsDevModelEntry::Sparse(value.clone()).into_model(key)
-                }
-            };
-            let candidates = [
-                normalize_model_id(&model.id),
-                normalize_model_id(key),
-                model
-                    .name
-                    .as_deref()
-                    .map(normalize_model_id)
-                    .unwrap_or_default(),
-            ];
-            if !candidates.iter().any(|c| c == &needle) {
-                continue;
-            }
-            let score = model_context_limit(&model).unwrap_or(0);
-            if best.as_ref().is_none_or(|_| score >= best_score) {
-                best_score = score;
-                best = Some(model);
-            }
-        }
-    }
-    best
+/// Catalog models closest to `upstream_id`, for the manual picker's shortlist.
+pub fn catalog_candidates(
+    catalog: &ModelsDevCatalog,
+    upstream_id: &str,
+    limit: usize,
+) -> Vec<ModelsDevModel> {
+    rank_catalog_models(catalog, upstream_id)
+        .into_iter()
+        .take(limit)
+        .map(|(model, _)| model)
+        .collect()
 }
 
 /// Build an OpenClaw/Pi `models[]` entry from an upstream model id.
@@ -404,10 +545,17 @@ pub fn openclaw_model_entry_from_upstream(
     let Some(catalog) = catalog else {
         return (Value::Object(obj), false);
     };
-    let Some(matched) = find_catalog_model_by_id(catalog, upstream_id) else {
+    let Some(matched) = find_catalog_model_fuzzy(catalog, upstream_id) else {
         return (Value::Object(obj), false);
     };
 
+    enrich_model_entry(&mut obj, &matched);
+    (Value::Object(obj), true)
+}
+
+/// Copy the catalog-derived fields onto an existing `{"id": ...}` entry,
+/// preserving anything already present that models.dev does not define.
+pub fn enrich_model_entry(obj: &mut serde_json::Map<String, Value>, matched: &ModelsDevModel) {
     if let Some(name) = matched
         .name
         .as_deref()
@@ -416,9 +564,14 @@ pub fn openclaw_model_entry_from_upstream(
     {
         obj.insert("name".into(), Value::String(name.to_string()));
     }
-    if let Some(ctx) = model_context_limit(&matched) {
+    if let Some(ctx) = model_context_limit(matched) {
         if ctx <= u64::from(u32::MAX) {
             obj.insert("contextWindow".into(), Value::Number(ctx.into()));
+        }
+    }
+    if let Some(max_tokens) = model_max_tokens(matched) {
+        if max_tokens <= u64::from(u32::MAX) {
+            obj.insert("maxTokens".into(), Value::Number(max_tokens.into()));
         }
     }
     if let Some(reasoning) = matched.reasoning {
@@ -446,14 +599,39 @@ pub fn openclaw_model_entry_from_upstream(
             obj.insert("input".into(), Value::Array(input));
         }
     }
-
-    (Value::Object(obj), true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn release_suffixes_are_stripped_for_fuzzy_matching() {
+        // Dated variants must collapse onto the bare model id.
+        assert_eq!(fuzzy_key("gpt-5.4-2026-01-15"), "gpt-5.4");
+        assert_eq!(fuzzy_key("gpt-5.4-20260115"), "gpt-5.4");
+        assert_eq!(fuzzy_key("openai/GPT-5.4-2026-01-15"), "gpt-5.4");
+        assert_eq!(fuzzy_key("gpt-5.4:latest"), "gpt-5.4");
+
+        // Meaningful suffixes must survive.
+        assert_eq!(fuzzy_key("gpt-5.4"), "gpt-5.4");
+        assert_eq!(fuzzy_key("gpt-5.4-mini"), "gpt-5.4-mini");
+        assert_eq!(fuzzy_key("claude-sonnet-5"), "claude-sonnet-5");
+    }
+
+    #[test]
+    fn similarity_ranks_exact_above_partial() {
+        let exact = similarity_score("gpt-5.4", "gpt-5.4");
+        let variant = similarity_score("gpt-5.4", "gpt-5.4-mini");
+        let unrelated = similarity_score("gpt-5.4", "llama-3-70b");
+        assert!(
+            exact > variant,
+            "exact {exact} should beat variant {variant}"
+        );
+        assert!(variant > unrelated, "variant {variant} vs {unrelated}");
+        assert_eq!(exact, 1000);
+    }
 
     #[test]
     fn pool_filter_classifies_responses_and_chat_providers() {

@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.16-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.17-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -181,6 +181,7 @@ cc-switch --app pi provider list        # 管理 Pi 供应商
 cc-switch --app pi provider import-live # 从 models.json 导入 Pi 供应商（仅新增）
 cc-switch --app pi provider import-live --update --prune  # 让 cc-switch 完全对齐 models.json（仅 Pi）
 cc-switch --app pi provider export-live [--prune]         # 把 cc-switch 的供应商写入 models.json（仅 Pi）
+cc-switch --app pi provider add-model <id> --model <model>  # 给某个 Pi 渠道添加模型（自动补全参数）
 cc-switch --app grok provider list      # 管理 Grok 自定义模型
 
 # 支持的应用：`claude`（默认）、`codex`、`gemini`、`opencode`、`hermes`、`openclaw`、`pi`、`grok`
@@ -308,6 +309,23 @@ cc-switch --app pi provider export-live --prune          # 再删掉 cc-switch �
 ```
 
 两个方向默认都很保守：不加 `--update`/`--prune` 时不会覆盖或删除任何已有内容，对方未纳管的条目一律保留，且 `--prune` 永远不会删除只存在于 cc-switch 内部的条目。其它应用会直接报错拒绝这些 flag，而不是静默忽略。
+
+只给某一个 Pi 渠道添加模型、不动它的其它任何参数：
+
+```bash
+cc-switch --app pi provider add-model relay --model gpt-5.4   # 添加一个 id（可重复）
+cc-switch --app pi provider add-model relay --fetch           # 从 /v1/models 自动发现
+```
+
+模型 id 会与 models.dev 目录做模糊匹配（忽略厂商前缀，以及 `-2026-01-15` 这类日期后缀），命中后填充 `contextWindow`、`maxTokens`、`reasoning`、`toolCall`、`attachment`、`input`。已存在的 id 会跳过。无 TTY 时未命中的 id 写为 `{"id": ...}`；交互式下会提供可搜索的选择器手动指定。
+
+当 models.dev 新增或调整了你关心的模型时，刷新本地目录缓存：
+
+```bash
+cc-switch provider catalog refresh   # 下载 https://models.dev/api.json 到本地缓存
+```
+
+完整用法（双向同步语义、prune 规则、目录匹配与刷新）见 [docs/pi-provider-sync.md](docs/pi-provider-sync.md)。
 
 ### 🔐 托管账号
 

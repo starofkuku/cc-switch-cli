@@ -11,6 +11,7 @@ pub mod env_checker;
 pub mod env_manager;
 pub mod local_env_check;
 pub mod mcp;
+pub mod model_enrichment;
 pub mod model_fetch;
 pub mod models_dev;
 pub mod prompt;

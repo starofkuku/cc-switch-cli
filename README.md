@@ -2,7 +2,7 @@
 
 # CC-Switch CLI
 
-[![Version](https://img.shields.io/badge/version-5.10.16-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
+[![Version](https://img.shields.io/badge/version-5.10.17-blue.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/starofkuku/cc-switch-cli/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -181,6 +181,7 @@ cc-switch --app pi provider list        # Manage Pi providers
 cc-switch --app pi provider import-live # Import Pi providers from models.json (add-only)
 cc-switch --app pi provider import-live --update --prune  # Make cc-switch match models.json exactly (Pi only)
 cc-switch --app pi provider export-live [--prune]         # Write cc-switch providers into models.json (Pi only)
+cc-switch --app pi provider add-model <id> --model <model>  # Add a model to one Pi provider (catalog-enriched)
 cc-switch --app grok provider list      # Manage Grok custom models
 
 # Supported apps: `claude` (default), `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`, `grok`
@@ -308,6 +309,23 @@ cc-switch --app pi provider export-live --prune         # ...and drop live entri
 ```
 
 Both directions are conservative by default: without `--update`/`--prune` nothing existing is overwritten or deleted, entries the other side does not manage are left untouched, and `--prune` never removes rows that only exist inside cc-switch. Other apps reject these flags instead of silently ignoring them.
+
+Add models to a single Pi provider without touching any of its other settings:
+
+```bash
+cc-switch --app pi provider add-model relay --model gpt-5.4   # add one id (repeatable)
+cc-switch --app pi provider add-model relay --fetch           # discover from /v1/models
+```
+
+Model ids are resolved against the models.dev catalog by fuzzy match (vendor prefixes and dated suffixes like `-2026-01-15` are ignored), and the matched entry fills `contextWindow`, `maxTokens`, `reasoning`, `toolCall`, `attachment` and `input`. Ids that already exist in the provider are skipped. Without a TTY the unmatched ids are written as `{"id": ...}`; interactively you are offered a searchable picker instead.
+
+Refresh the cached catalog when models.dev adds or adjusts models you care about:
+
+```bash
+cc-switch provider catalog refresh   # download https://models.dev/api.json into the local cache
+```
+
+Full usage (sync semantics, pruning rules, catalog matching and refresh): see [docs/pi-provider-sync.md](docs/pi-provider-sync.md).
 
 ### 🔐 Managed Accounts
 

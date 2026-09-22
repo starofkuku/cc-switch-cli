@@ -655,6 +655,17 @@ pub enum ProviderCommand {
         #[arg(long)]
         prune: bool,
     },
+    /// Add one or more models to an existing provider without touching anything else (Pi only)
+    AddModel {
+        /// Provider ID to add models to
+        id: String,
+        /// Model id to add (repeatable)
+        #[arg(long = "model", value_name = "ID")]
+        models: Vec<String>,
+        /// Discover models from the provider's /v1/models endpoint
+        #[arg(long)]
+        fetch: bool,
+    },
     /// Write providers from cc-switch into the live app config (Pi only)
     ExportLive {
         /// Also delete live entries that cc-switch does not define
@@ -789,6 +800,9 @@ pub fn execute(cmd: ProviderCommand, app: Option<AppType>) -> Result<(), AppErro
             import_live_config(app_type, update, prune)
         }
         ProviderCommand::ExportLive { prune } => export_live_config(app_type, prune),
+        ProviderCommand::AddModel { id, models, fetch } => {
+            add_provider_model(app_type, &id, models, fetch)
+        }
         ProviderCommand::RemoveFromConfig { id } => remove_from_config(app_type, &id),
         ProviderCommand::SetDefault { id, model } => {
             set_default_provider(app_type, &id, model.as_deref())
@@ -2014,6 +2028,77 @@ fn import_live_config(app_type: AppType, update: bool, prune: bool) -> Result<()
             parts.join(", ")
         ))
     );
+    Ok(())
+}
+
+fn add_provider_model(
+    app_type: AppType,
+    provider_id: &str,
+    models: Vec<String>,
+    fetch: bool,
+) -> Result<(), AppError> {
+    if app_type != AppType::Pi {
+        return Err(AppError::localized(
+            "provider.add_model.unsupported",
+            "add-model 目前仅支持 --app pi",
+            "add-model is currently only supported for --app pi",
+        ));
+    }
+    if models.is_empty() && !fetch {
+        return Err(AppError::InvalidInput(
+            "Provide at least one --model <id>, or pass --fetch".to_string(),
+        ));
+    }
+
+    let state = get_state()?;
+    let summary = ProviderService::add_models_to_provider(
+        &state,
+        app_type.clone(),
+        provider_id,
+        &models,
+        fetch,
+    )?;
+
+    let app = app_type.as_str();
+    for (id, resolution) in &summary.added {
+        let label = match resolution {
+            crate::services::model_enrichment::ModelResolution::Auto => "enriched from models.dev",
+            crate::services::model_enrichment::ModelResolution::Manual => "picked manually",
+            crate::services::model_enrichment::ModelResolution::Unmatched => {
+                "id-only (no catalog match)"
+            }
+        };
+        println!("{}  + {id}  ({label})", info("→"));
+    }
+
+    if summary.added.is_empty() {
+        println!(
+            "{}",
+            info(&format!(
+                "No models added to '{provider_id}'; nothing new was found."
+            ))
+        );
+    } else {
+        println!(
+            "{}",
+            success(&format!(
+                "✓ Added {} model(s) to '{provider_id}' in {app} config",
+                summary.added.len()
+            ))
+        );
+    }
+
+    if !summary.skipped_existing.is_empty() {
+        println!(
+            "{}",
+            info(&format!(
+                "  skipped {} (already present): {}",
+                summary.skipped_existing.len(),
+                summary.skipped_existing.join(", ")
+            ))
+        );
+    }
+
     Ok(())
 }
 

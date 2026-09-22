@@ -346,6 +346,18 @@ pub(crate) fn stream_check_provider(app_type: AppType, id: &str) -> Result<(), A
     Ok(())
 }
 
+/// Fetch the upstream model id list for a stored provider.
+///
+/// Shared by `provider fetch-models` and `provider add-model` so both use the
+/// same base-url/key resolution and endpoint fallback.
+pub(crate) fn fetch_live_model_ids(
+    app_type: &AppType,
+    provider: &Provider,
+) -> Result<Vec<String>, AppError> {
+    let source = model_fetch_source(provider, app_type)?;
+    fetch_models_from_source(&source)
+}
+
 pub(crate) fn fetch_models_provider(app_type: AppType, id: &str) -> Result<(), AppError> {
     let state = get_state()?;
     let providers = ProviderService::list(&state, app_type.clone())?;

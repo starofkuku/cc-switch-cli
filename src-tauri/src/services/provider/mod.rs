@@ -2664,6 +2664,25 @@ impl ProviderService {
         live::export_pi_providers_to_live_with(state, options)
     }
 
+    /// Append models to one Pi provider, leaving every other field untouched.
+    pub fn add_models_to_provider(
+        state: &AppState,
+        app_type: AppType,
+        provider_id: &str,
+        requested: &[String],
+        fetch: bool,
+    ) -> Result<live::AddModelsSummary, AppError> {
+        if app_type != AppType::Pi {
+            return Err(AppError::localized(
+                "provider.add_model.unsupported",
+                "add-model 目前仅支持 --app pi",
+                "add-model is currently only supported for --app pi",
+            ));
+        }
+
+        live::add_models_to_pi_provider(state, provider_id, requested, fetch)
+    }
+
     pub fn set_default_model(
         state: &AppState,
         app_type: AppType,

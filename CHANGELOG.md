@@ -7,6 +7,18 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.17] - 2026-09-22
+
+### Added
+
+- **CLI / Provider add-model (Pi)**: `cc-switch --app pi provider add-model <id> --model <model> [--fetch]` adds models to an existing Pi provider while leaving every other field untouched, including hand-added ones. Existing ids are skipped. `--fetch` discovers ids from the provider's own `/v1/models`; ids with no catalog match are skipped rather than written as placeholders.
+- **Catalog / fuzzy matching**: models.dev lookups now tolerate vendor prefixes, `:latest` and dated release suffixes (`openai/GPT-5.4-2026-01-15` resolves to `gpt-5.4`), and rank candidates by similarity instead of requiring an exact id. When nothing matches confidently at an interactive prompt, a searchable picker offers the closest candidates plus the full catalog. Matched entries additionally fill `maxTokens` from `limit.output`, which was previously ignored.
+- **Docs**: new [docs/pi-provider-sync.md](docs/pi-provider-sync.md) covering both sync directions, pruning rules, catalog matching and cache refresh.
+
+### Fixed
+
+- **CLI / Provider add-model**: duplicate ids passed to `--model` were added twice; they are now deduplicated in order.
+
 ## [5.10.16] - 2026-09-21
 
 ### Added

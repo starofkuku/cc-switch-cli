@@ -3467,19 +3467,34 @@ fn prompt_openclaw_models_json(
                             );
                         }
 
+                        let mut summary =
+                            crate::services::model_enrichment::ModelEnrichmentSummary::default();
+                        let interactive =
+                            crate::services::model_enrichment::can_prompt_interactively();
+                        if catalog.is_none() {
+                            println!(
+                                "{}",
+                                info(
+                                    "models.dev catalog unavailable; writing id-only entries for manual edit."
+                                )
+                            );
+                        }
+
                         let mut existing: Vec<Value> =
                             serde_json::from_str(&working_json).unwrap_or_else(|_| Vec::new());
                         if !existing.iter().all(|v| v.is_object()) {
                             existing = Vec::new();
                         }
 
-                        let mut enriched = 0usize;
-                        let mut bare = 0usize;
                         for id in selected {
                             let id = id.trim();
                             if id.is_empty() {
                                 continue;
                             }
+                            let previous = existing
+                                .iter()
+                                .find(|entry| entry.get("id").and_then(Value::as_str) == Some(id))
+                                .cloned();
                             // Replace same id if already present.
                             existing.retain(|entry| {
                                 entry
@@ -3488,16 +3503,14 @@ fn prompt_openclaw_models_json(
                                     .map(|existing_id| existing_id != id)
                                     .unwrap_or(true)
                             });
-                            let (entry, ok) =
-                                crate::services::models_dev::openclaw_model_entry_from_upstream(
+                            let (entry, resolution) =
+                                crate::services::model_enrichment::resolve_model_entry(
                                     id,
                                     catalog.as_ref(),
-                                );
-                            if ok {
-                                enriched += 1;
-                            } else {
-                                bare += 1;
-                            }
+                                    previous.as_ref(),
+                                    interactive,
+                                )?;
+                            summary.record(resolution, id);
                             existing.push(entry);
                         }
 
@@ -3505,9 +3518,7 @@ fn prompt_openclaw_models_json(
                             .unwrap_or_else(|_| "[]".to_string());
                         println!(
                             "{}",
-                            info(&format!(
-                                "Merged models: {enriched} enriched from models.dev, {bare} id-only (edit JSON if needed)."
-                            ))
+                            info(&format!("Merged models: {}", summary.describe()))
                         );
                     }
                 }

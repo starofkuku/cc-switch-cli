@@ -704,6 +704,137 @@ pub(crate) fn export_pi_providers_to_live_with(
     Ok(LiveExportSummary { written, pruned })
 }
 
+/// Outcome of `provider add-model`.
+#[derive(Debug, Clone, Default)]
+pub struct AddModelsSummary {
+    /// Models appended, with how each id was resolved.
+    pub added: Vec<(String, crate::services::model_enrichment::ModelResolution)>,
+    /// Requested ids that were already present in the provider.
+    pub skipped_existing: Vec<String>,
+}
+
+/// Append models to a single Pi provider, changing **only** its `models[]`.
+///
+/// Existing ids are skipped. Catalog parameters are filled by the shared fuzzy
+/// enrichment flow, so an unmatched id is only recorded as `{"id": ...}` when
+/// the user is not at a TTY (scripts/CI) or explicitly declines the picker.
+/// Nothing else on the provider, and no other provider, is touched.
+pub(crate) fn add_models_to_pi_provider(
+    state: &AppState,
+    provider_id: &str,
+    requested: &[String],
+    fetch: bool,
+) -> Result<AddModelsSummary, AppError> {
+    if !crate::sync_policy::should_sync_live(&AppType::Pi) {
+        return Err(AppError::localized(
+            "provider.add_model.not_initialized",
+            "目标应用 pi 尚未初始化，拒绝写入其配置目录",
+            "Destination app pi is not initialized; refusing to write its config directory",
+        ));
+    }
+
+    let mut provider = state
+        .db
+        .get_all_providers("pi")?
+        .shift_remove(provider_id)
+        .ok_or_else(|| {
+            AppError::localized(
+                "provider.add_model.missing_provider",
+                format!("Pi 供应商不存在: {provider_id}"),
+                format!("Pi provider not found: {provider_id}"),
+            )
+        })?;
+
+    // Collect the ids to consider: explicit --model values first, then anything
+    // discovered from the provider's own endpoint. Deduplicate in order so the
+    // same id passed twice is only added once.
+    let mut wanted: Vec<String> = Vec::new();
+    let push_unique = |wanted: &mut Vec<String>, id: &str| {
+        let id = id.trim().to_string();
+        if !id.is_empty() && !wanted.contains(&id) {
+            wanted.push(id);
+        }
+    };
+    for id in requested {
+        push_unique(&mut wanted, id);
+    }
+    if fetch {
+        let discovered =
+            crate::cli::commands::provider_inspect::fetch_live_model_ids(&AppType::Pi, &provider)?;
+        for id in discovered {
+            push_unique(&mut wanted, &id);
+        }
+    }
+    if wanted.is_empty() {
+        return Err(AppError::InvalidInput(
+            "No model ids to add (empty --model list and /v1/models returned nothing)".to_string(),
+        ));
+    }
+
+    let catalog = crate::services::models_dev::ModelsDevCatalog::load_or_fetch().ok();
+    let interactive = crate::services::model_enrichment::can_prompt_interactively();
+
+    let existing_models: Vec<Value> = provider
+        .settings_config
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let existing_ids: std::collections::HashSet<String> = existing_models
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+
+    let mut summary = AddModelsSummary::default();
+    let mut merged = existing_models;
+
+    for id in wanted {
+        if existing_ids.contains(&id) {
+            summary.skipped_existing.push(id);
+            continue;
+        }
+        let (entry, resolution) = crate::services::model_enrichment::resolve_model_entry(
+            &id,
+            catalog.as_ref(),
+            None,
+            interactive,
+        )?;
+        // `--fetch` is a discovery convenience; when the user is not selecting a
+        // subset, drop ids that carry no catalog data so the config is not
+        // polluted with parameters-less placeholders.
+        if resolution == crate::services::model_enrichment::ModelResolution::Unmatched && fetch {
+            continue;
+        }
+        merged.push(entry);
+        summary.added.push((id, resolution));
+    }
+
+    if !summary.added.is_empty() {
+        // Replace only the provider's own `models` array.
+        if let Some(obj) = provider.settings_config.as_object_mut() {
+            obj.insert("models".into(), Value::Array(merged));
+        }
+        state.db.save_provider("pi", &provider)?;
+
+        // Keep the live file in step so the next sync does not revert this.
+        let live = crate::pi_config::prepare_provider_with_base(
+            &provider.id,
+            None,
+            provider.settings_config.clone(),
+        )?;
+        crate::pi_config::write_pi_models(&live)?;
+
+        let mut config = state.config.write().map_err(AppError::from)?;
+        config.ensure_app(&AppType::Pi);
+        if let Some(manager) = config.get_manager_mut(&AppType::Pi) {
+            manager.providers.insert(provider.id.clone(), provider);
+        }
+    }
+
+    Ok(summary)
+}
+
 pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     let providers = crate::grok_config::get_providers()?;
     if providers.is_empty() {

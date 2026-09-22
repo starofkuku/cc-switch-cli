@@ -2807,6 +2807,177 @@ fn provider_export_live_prune_removes_live_only_entries() {
 
 #[test]
 #[serial]
+fn provider_add_model_only_touches_the_models_array() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = home.join(".pi").join("agent");
+    fs::create_dir_all(&pi_dir).expect("create pi agent dir");
+    let models_path = pi_dir.join("models.json");
+    fs::write(
+        &models_path,
+        serde_json::to_string_pretty(&json!({
+            "providers": {
+                "relay": {
+                    "name": "Relay",
+                    "api": "openai",
+                    "apiKey": "sk-keep",
+                    "baseUrl": "https://relay.example/v1",
+                    "models": [{ "id": "existing-model" }]
+                }
+            }
+        }))
+        .expect("serialize"),
+    )
+    .expect("write models.json");
+
+    {
+        let state = AppState::try_new().expect("state");
+        ProviderService::import_live_config(&state, AppType::Pi).expect("import");
+    }
+
+    // `existing-model` is already there; `new-model` is not in the catalog, so
+    // with no TTY it stays id-only.
+    let summary = {
+        let state = AppState::try_new().expect("state");
+        ProviderService::add_models_to_provider(
+            &state,
+            AppType::Pi,
+            "relay",
+            &[
+                "existing-model".to_string(),
+                "brand-new-model".to_string(),
+                "brand-new-model".to_string(),
+            ],
+            false,
+        )
+        .expect("add models")
+    };
+
+    assert_eq!(summary.skipped_existing, vec!["existing-model".to_string()]);
+    assert_eq!(summary.added.len(), 1, "duplicate ids collapse to one add");
+    assert_eq!(summary.added[0].0, "brand-new-model");
+
+    // Database side: only `models` changed.
+    {
+        let state = AppState::try_new().expect("state");
+        let provider = ProviderService::list(&state, AppType::Pi)
+            .expect("list")
+            .shift_remove("relay")
+            .expect("relay");
+        assert_eq!(provider.settings_config["apiKey"], json!("sk-keep"));
+        assert_eq!(
+            provider.settings_config["baseUrl"],
+            json!("https://relay.example/v1")
+        );
+        let ids: Vec<String> = provider.settings_config["models"]
+            .as_array()
+            .expect("models array")
+            .iter()
+            .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(ids, vec!["existing-model", "brand-new-model"]);
+    }
+
+    // Live side mirrors it, and unrelated fields survive.
+    let live: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&models_path).expect("read models"))
+            .expect("parse");
+    assert_eq!(live["providers"]["relay"]["apiKey"], json!("sk-keep"));
+    assert_eq!(live["providers"]["relay"]["name"], json!("Relay"));
+}
+
+#[test]
+#[serial]
+fn provider_add_model_rejects_unknown_provider_and_non_pi() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+    fs::create_dir_all(home.join(".pi").join("agent")).expect("create pi dir");
+
+    let state = AppState::try_new().expect("state");
+    let err = ProviderService::add_models_to_provider(
+        &state,
+        AppType::Pi,
+        "nope",
+        &["m1".to_string()],
+        false,
+    )
+    .expect_err("unknown provider must fail");
+    assert!(err.to_string().contains("不存在"), "unexpected: {err}");
+
+    let err = ProviderService::add_models_to_provider(
+        &state,
+        AppType::Grok,
+        "whatever",
+        &["m1".to_string()],
+        false,
+    )
+    .expect_err("non-pi apps must be rejected");
+    assert!(
+        err.to_string().contains("仅支持 --app pi"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_add_model_needs_an_id_and_an_initialized_app() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+    let pi_dir = home.join(".pi");
+    if pi_dir.exists() {
+        fs::remove_dir_all(&pi_dir).expect("clear stale .pi");
+    }
+
+    let state = AppState::try_new().expect("state");
+
+    // Uninitialized Pi is refused before anything else, and never creates the dir.
+    let err = ProviderService::add_models_to_provider(
+        &state,
+        AppType::Pi,
+        "relay",
+        &["m1".to_string()],
+        false,
+    )
+    .expect_err("uninitialized pi must be rejected");
+    assert!(err.to_string().contains("尚未初始化"), "unexpected: {err}");
+    assert!(
+        !pi_dir.exists(),
+        "must not create the destination directory"
+    );
+}
+
+#[test]
+#[serial]
+fn provider_add_model_rejects_an_empty_id_list() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+    fs::create_dir_all(home.join(".pi").join("agent")).expect("create pi dir");
+
+    let state = AppState::try_new().expect("state");
+    let provider = Provider::with_id(
+        "relay".to_string(),
+        "Relay".to_string(),
+        json!({ "api": "openai", "apiKey": "sk", "baseUrl": "https://relay.example/v1" }),
+        None,
+    );
+    state.db.save_provider("pi", &provider).expect("save relay");
+
+    let err = ProviderService::add_models_to_provider(&state, AppType::Pi, "relay", &[], false)
+        .expect_err("empty id list must fail");
+    assert!(
+        err.to_string().contains("No model ids to add"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+#[serial]
 fn provider_export_live_rejects_non_pi_apps() {
     let _guard = lock_test_mutex();
     reset_test_fs();
