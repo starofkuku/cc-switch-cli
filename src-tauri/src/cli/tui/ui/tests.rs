@@ -3511,6 +3511,7 @@ fn installed_skill(directory: &str, name: &str) -> InstalledSkill {
             grok: false,
             opencode: false,
             hermes: false,
+            zcode: false,
         },
         installed_at: 1,
     }
@@ -4980,6 +4981,7 @@ fn home_connection_card_labels_mcp_and_skills_with_active_counts() {
                 grok: false,
                 opencode: false,
                 hermes: false,
+                zcode: false,
             },
             installed_at: 0,
         },
@@ -5969,6 +5971,7 @@ fn skills_page_shows_opencode_summary() {
         grok: false,
         opencode: true,
         hermes: false,
+        zcode: false,
     };
     data.skills.installed = vec![skill];
 
@@ -5996,6 +5999,7 @@ fn skills_page_shows_hermes_column_and_summary() {
         grok: false,
         opencode: false,
         hermes: true,
+        zcode: false,
     };
     data.skills.installed = vec![skill];
 
@@ -6026,6 +6030,7 @@ fn skill_detail_page_shows_opencode_enabled_state() {
         grok: false,
         opencode: true,
         hermes: false,
+        zcode: false,
     };
     data.skills.installed = vec![skill];
 
@@ -6057,6 +6062,7 @@ fn skill_detail_page_shows_hermes_enabled_state() {
         grok: false,
         opencode: false,
         hermes: true,
+        zcode: false,
     };
     data.skills.installed = vec![skill];
 

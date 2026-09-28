@@ -243,6 +243,14 @@ pub(crate) fn extract_provider_api_key(app_type: &AppType, provider: &Provider) 
             .or_else(|| provider.settings_config.get("api_key"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        // ZCode rule shape: key lives at config.access.apiKey.
+        AppType::Zcode => provider
+            .settings_config
+            .get("config")
+            .and_then(|c| c.get("access"))
+            .and_then(|a| a.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
     }?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -926,6 +934,39 @@ fn model_fetch_target(
             custom_user_agent,
             strategy: ProviderModelFetchStrategy::Bearer,
         }),
+        // ZCode rule shape: base url at config.api.baseUrl, key at
+        // config.access.apiKey; models come from an OpenAI-compatible
+        // chat-completions endpoint.
+        AppType::Zcode => Ok(ModelFetchTarget {
+            base_url: provider
+                .settings_config
+                .get("config")
+                .and_then(|c| c.get("api"))
+                .and_then(|a| a.get("baseUrl"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AppError::Message(format!("Missing base URL for provider '{}'", provider.id))
+                })?,
+            auth_value: Some(
+                provider
+                    .settings_config
+                    .get("config")
+                    .and_then(|c| c.get("access"))
+                    .and_then(|a| a.get("apiKey"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        AppError::Message(format!("Missing API key for provider '{}'", provider.id))
+                    })?,
+            ),
+            custom_user_agent,
+            strategy: ProviderModelFetchStrategy::Bearer,
+        }),
         AppType::OpenClaw | AppType::Pi | AppType::Grok => Ok(ModelFetchTarget {
             base_url,
             auth_value: Some(
@@ -981,7 +1022,8 @@ fn default_one_off_model_fetch_strategy(app_type: &AppType) -> ProviderModelFetc
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok => ProviderModelFetchStrategy::Bearer,
+        | AppType::Grok
+        | AppType::Zcode => ProviderModelFetchStrategy::Bearer,
     }
 }
 

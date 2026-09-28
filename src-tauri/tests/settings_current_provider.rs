@@ -15,6 +15,7 @@ mod app_config {
         Hermes,
         Pi,
         Grok,
+        Zcode,
     }
 
     impl AppType {
@@ -28,6 +29,7 @@ mod app_config {
                 AppType::Hermes => "hermes",
                 AppType::Pi => "pi",
                 AppType::Grok => "grok",
+                AppType::Zcode => "zcode",
             }
         }
     }

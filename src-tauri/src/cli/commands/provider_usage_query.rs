@@ -668,6 +668,20 @@ fn provider_comment_credentials<'a>(
                 .map(str::to_string),
             settings.get("apiKey").and_then(|value| value.as_str()),
         ),
+        // ZCode rule shape: config.api.baseUrl + config.access.apiKey.
+        AppType::Zcode => (
+            settings
+                .get("config")
+                .and_then(|c| c.get("api"))
+                .and_then(|a| a.get("baseUrl"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            settings
+                .get("config")
+                .and_then(|c| c.get("access"))
+                .and_then(|a| a.get("apiKey"))
+                .and_then(|value| value.as_str()),
+        ),
     }
 }
 

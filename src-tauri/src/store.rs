@@ -476,6 +476,7 @@ fn export_db_to_multi_app_config(db: &Database) -> Result<MultiAppConfig, AppErr
             AppType::OpenClaw => config.prompts.openclaw.prompts = prompts.into_iter().collect(),
             AppType::Pi => config.prompts.pi.prompts = prompts.into_iter().collect(),
             AppType::Grok => config.prompts.grok.prompts = prompts.into_iter().collect(),
+            AppType::Zcode => config.prompts.zcode.prompts = prompts.into_iter().collect(),
         }
 
         // common snippet

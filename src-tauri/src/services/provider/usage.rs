@@ -429,6 +429,22 @@ impl ProviderService {
                     )
                 })
                 .map(|s| s.to_string()),
+            // ZCode settings_config is a full provider rule; the key lives at
+            // config.access.apiKey.
+            AppType::Zcode => provider
+                .settings_config
+                .get("config")
+                .and_then(|c| c.get("access"))
+                .and_then(|a| a.get("apiKey"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AppError::localized(
+                        "provider.zcode.api_key.missing",
+                        "缺少 API Key",
+                        "API key is missing",
+                    )
+                })
+                .map(|s| s.to_string()),
         }
     }
 
@@ -518,6 +534,15 @@ impl ProviderService {
                 .settings_config
                 .get("baseUrl")
                 .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()),
+            // ZCode rule shape: base url lives at config.api.baseUrl.
+            AppType::Zcode => Ok(provider
+                .settings_config
+                .get("config")
+                .and_then(|c| c.get("api"))
+                .and_then(|a| a.get("baseUrl"))
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string()),
         }

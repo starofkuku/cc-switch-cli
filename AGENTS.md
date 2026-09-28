@@ -50,7 +50,7 @@ export RUST_TEST_THREADS=1
 
 ## Project overview
 
-CC-Switch CLI (v5.10.x) is a Rust TUI + CLI manager for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw, Pi, and Grok. It manages provider configurations, MCP servers, prompts, skills, WebDAV/S3 sync, local proxy routes, failover, daemon/start flows, deep-link imports, sessions, workspace memory files, and environment checks. It is a CLI fork of the upstream `farion1231/cc-switch` GUI project; WebDAV sync stays wire-compatible with upstream.
+CC-Switch CLI (v5.10.x) is a Rust TUI + CLI manager for Claude Code, Codex, Gemini, OpenCode, Hermes, OpenClaw, Pi, Grok, and ZCode. It manages provider configurations, MCP servers, prompts, skills, WebDAV/S3 sync, local proxy routes, failover, daemon/start flows, deep-link imports, sessions, workspace memory files, and environment checks. It is a CLI fork of the upstream `farion1231/cc-switch` GUI project; WebDAV sync stays wire-compatible with upstream.
 
 The main crate is `src-tauri/`; the repository root contains docs, assets, install/update scripts, packaging metadata, and Nix files.
 
@@ -67,7 +67,7 @@ Key Rust entry points:
 `PromptService::copy_live_prompt` (`prompts copy <from> <to> [--force]`) is the one prompt path that deliberately bypasses the preset database: it copies the live global file (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`) from one app to another without creating or activating a preset. It must keep routing its destination write through `sync_policy::should_sync_live` so an uninitialized app is never given a new config directory.
 - `src/session_manager/` scans and queries saved assistant sessions across app providers (manifest/cache/project scope) and backs `sessions list|show|messages|export`.
 - `src/database/` is the SQLite persistence layer. `Database` owns a mutex-wrapped rusqlite connection, schema creation/migration, backups, and DAO modules for providers, MCP, prompts, skills, settings, proxy state, stream checks, universal providers, and failover queues.
-- `src/app_config.rs`, `src/provider.rs`, and app-specific config modules (`claude_*`, `codex_config.rs`, `codex_state_db.rs`, `gemini_*`, `hermes_config.rs`, `opencode_config.rs`, `openclaw_config.rs`, `pi_config.rs`, `grok_config.rs`) define the shared configuration model and live-file adapters for supported apps.
+- `src/app_config.rs`, `src/provider.rs`, and app-specific config modules (`claude_*`, `codex_config.rs`, `codex_state_db.rs`, `gemini_*`, `hermes_config.rs`, `opencode_config.rs`, `openclaw_config.rs`, `pi_config.rs`, `grok_config.rs`, `zcode_config.rs`) define the shared configuration model and live-file adapters for supported apps.
 - `src/deeplink/` implements the `ccswitch://v1/import?...` import protocol for provider/MCP/prompt/skill resources and is exported through `lib.rs` for tests and callers.
 - `src/proxy/` implements the local multi-app proxy with Axum handlers, request forwarding, provider routing/failover, provider-specific transformations, response/stream handling, usage logging, model mapping, cache/thinking rectifiers, circuit breaking, and metrics.
 - `src/daemon/` implements the Unix supervisor daemon, IPC protocol, logging, pidfile, and restart support.
@@ -75,9 +75,9 @@ Key Rust entry points:
 
 ## Supported apps and their differences
 
-`AppType` lives in `src/app_config.rs` and is the single source of truth for app behavior. Its variants (`claude`, `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`, `grok`) carry three behavioral flags that decide how most command paths branch:
+`AppType` lives in `src/app_config.rs` and is the single source of truth for app behavior. Its variants (`claude`, `codex`, `gemini`, `opencode`, `hermes`, `openclaw`, `pi`, `grok`, `zcode`) carry three behavioral flags that decide how most command paths branch:
 
-- `is_additive_mode()` — true for OpenCode, Hermes, OpenClaw, Pi, Grok. These apps accumulate providers in live config instead of keeping one "current" provider, so provider workflows must not assume a switch replaces the previous entry.
+- `is_additive_mode()` — true for OpenCode, Hermes, OpenClaw, Pi, Grok, ZCode. These apps accumulate providers in live config instead of keeping one "current" provider, so provider workflows must not assume a switch replaces the previous entry.
 - `supports_failover()` — true for Claude, Codex, Gemini only. The proxy and `failover` command surface only these apps.
 - `should_sync_live()` in `src/sync_policy.rs` — per-app "is this app initialized?" predicate. When false, live config writes/deletes are skipped and no directories are created. Any new live-config writer must route through this policy rather than assuming the app is installed.
 
@@ -103,8 +103,9 @@ Live config files are separate from CC-Switch storage and are only synced or imp
 - OpenClaw: `~/.openclaw/openclaw.json`, `~/.openclaw/AGENTS.md`
 - Pi: `~/.pi/agent/models.json`, `~/.pi/agent/settings.json`, `~/.pi/agent/AGENTS.md` (or the directory selected by `PI_CODING_AGENT_DIR`)
 - Grok: `$GROK_HOME/config.toml`, default `~/.grok/config.toml`. Editing goes through `toml_edit` so unrelated sections and comments survive; each provider maps to one `[model.<id>]` table and switching sets `[models].default`.
+- ZCode: `$ZCODE_DATA_BASE_DIR/.zcode` (default `~/.zcode`). Providers live in `v2/provider_config.json` (schemaVersion 1, strict-decoded and polled every second by ZCode, so edits must be minimal-diff and atomic); the current selection lives in `config.defaultModelSelection` plus per-agent overrides in `v2/agents-state.json`. cc-switch manages **third-party providers only** (rules without `templateId` and with `access.type: "api-key"`); built-in template providers are passed through untouched. Prompts map to `~/.zcode/AGENTS.md`, skills to `~/.zcode/skills/`. ZCode skill enablement is persisted in the sidecar `~/.cc-switch/zcode-skill-apps.json` because the main skills table schema stays synced with upstream and must not gain columns.
 
-Environment overrides matter when testing or running commands: `CC_SWITCH_CONFIG_DIR` controls CC-Switch storage, `CLAUDE_CONFIG_DIR` controls Claude config directory, `CODEX_HOME` controls Codex config, `GROK_HOME` controls Grok config, and `PI_CODING_AGENT_DIR` controls Pi. Tests also commonly set `HOME`, `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, and `XDG_STATE_HOME`.
+Environment overrides matter when testing or running commands: `CC_SWITCH_CONFIG_DIR` controls CC-Switch storage, `CLAUDE_CONFIG_DIR` controls Claude config directory, `CODEX_HOME` controls Codex config, `GROK_HOME` controls Grok config, `PI_CODING_AGENT_DIR` controls Pi, and `ZCODE_DATA_BASE_DIR` controls the ZCode data root (ZCode appends `.zcode` to it itself). Tests also commonly set `HOME`, `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, and `XDG_STATE_HOME`.
 
 ## CLI architecture
 

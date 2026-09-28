@@ -494,6 +494,56 @@ fn merge_repos_from_lock(
 }
 
 // ============================================================================
+// ZCode skill enablement sidecar
+// ============================================================================
+
+/// 主库 `skills` 表的 schema 与上游项目同步（WebDAV 整库同步），本仓库
+/// 不得自行加列，因此 ZCode 的启用状态存独立 sidecar JSON：
+/// `~/.cc-switch/zcode-skill-apps.json`，键为 skill id。全量重写，不参与
+/// 任何同步；读取失败按"全部未启用"降级，不让 sidecar 故障阻断 skills。
+fn zcode_skill_apps_path() -> PathBuf {
+    crate::config::get_app_config_dir().join("zcode-skill-apps.json")
+}
+
+fn load_zcode_skill_apps() -> HashMap<String, bool> {
+    let path = zcode_skill_apps_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str::<HashMap<String, bool>>(&content).unwrap_or_default()
+}
+
+fn save_zcode_skill_apps(skills: &HashMap<String, InstalledSkill>) {
+    let map: HashMap<String, bool> = skills
+        .values()
+        .map(|skill| (skill.id.clone(), skill.apps.zcode))
+        .collect();
+    write_zcode_skill_apps(&map);
+}
+
+fn remove_zcode_skill_app(skill_id: &str) {
+    let mut map = load_zcode_skill_apps();
+    if map.remove(skill_id).is_some() {
+        write_zcode_skill_apps(&map);
+    }
+}
+
+fn write_zcode_skill_apps(map: &HashMap<String, bool>) {
+    let path = zcode_skill_apps_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match serde_json::to_string_pretty(map) {
+        Ok(content) => {
+            if let Err(e) = fs::write(&path, content) {
+                log::warn!("写入 ZCode skill 启用状态失败 {}: {e}", path.display());
+            }
+        }
+        Err(e) => log::warn!("序列化 ZCode skill 启用状态失败: {e}"),
+    }
+}
+
+// ============================================================================
 // SkillService
 // ============================================================================
 
@@ -513,6 +563,7 @@ impl SkillService {
             AppType::Gemini,
             AppType::OpenCode,
             AppType::Hermes,
+            AppType::Zcode,
         ]
         .into_iter()
     }
@@ -582,6 +633,7 @@ impl SkillService {
             }
             AppType::Pi => return Ok(crate::pi_config::get_pi_dir().join("skills")),
             AppType::Grok => return Ok(crate::grok_config::get_grok_dir().join("skills")),
+            AppType::Zcode => return Ok(crate::zcode_config::get_zcode_dir().join("skills")),
         }
 
         let home = dirs::home_dir().ok_or_else(|| {
@@ -601,6 +653,7 @@ impl SkillService {
             AppType::OpenClaw => home.join(".openclaw").join("skills"),
             AppType::Pi => crate::pi_config::get_pi_dir().join("skills"),
             AppType::Grok => crate::grok_config::get_grok_dir().join("skills"),
+            AppType::Zcode => crate::zcode_config::get_zcode_dir().join("skills"),
         })
     }
 
@@ -615,10 +668,16 @@ impl SkillService {
         let _ = db.init_default_skill_repos();
 
         let repos = db.get_skill_repos()?;
+        let zcode_apps = load_zcode_skill_apps();
         let installed = db.get_all_installed_skills()?;
         let skills: HashMap<String, InstalledSkill> = installed
             .into_values()
-            .map(|skill| (skill.directory.clone(), skill))
+            .map(|mut skill| {
+                if let Some(enabled) = zcode_apps.get(&skill.id) {
+                    skill.apps.zcode = *enabled;
+                }
+                (skill.directory.clone(), skill)
+            })
             .collect();
 
         let sync_method = crate::settings::get_skill_sync_method();
@@ -648,6 +707,7 @@ impl SkillService {
             db.save_skill(skill)?;
         }
 
+        save_zcode_skill_apps(&index.skills);
         Ok(())
     }
 
@@ -1118,6 +1178,7 @@ impl SkillService {
             AppType::Gemini,
             AppType::OpenCode,
             AppType::Hermes,
+            AppType::Zcode,
         ] {
             if let Err(e) = Self::remove_from_app(&dir, &app) {
                 log::warn!("从 {app:?} 删除 Skill {dir} 失败: {e}");
@@ -1133,6 +1194,7 @@ impl SkillService {
 
         let db = Database::init()?;
         let _ = db.delete_skill(&record.id)?;
+        remove_zcode_skill_app(&record.id);
         Ok(())
     }
 

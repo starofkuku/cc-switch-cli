@@ -32,6 +32,10 @@ pub(super) enum LiveSnapshot {
     OpenClaw {
         config_source: Option<String>,
     },
+    Zcode {
+        provider_config: Option<Value>,
+        agents_state: Option<Value>,
+    },
     Pi {
         models: Option<Value>,
     },
@@ -129,6 +133,23 @@ impl LiveSnapshot {
                     delete_file(&path)?;
                 }
             }
+            LiveSnapshot::Zcode {
+                provider_config,
+                agents_state,
+            } => {
+                let provider_path = crate::zcode_config::get_provider_config_path();
+                if let Some(value) = provider_config {
+                    crate::zcode_config::write_provider_config(value)?;
+                } else if provider_path.exists() {
+                    delete_file(&provider_path)?;
+                }
+                let state_path = crate::zcode_config::get_agents_state_path();
+                if let Some(value) = agents_state {
+                    crate::zcode_config::write_agents_state(value)?;
+                } else if state_path.exists() {
+                    delete_file(&state_path)?;
+                }
+            }
         }
         Ok(())
     }
@@ -208,6 +229,24 @@ pub(super) fn capture_live_snapshot(app_type: &AppType) -> Result<LiveSnapshot, 
         AppType::Grok => {
             let config_source = crate::grok_config::read_grok_config_source()?;
             Ok(LiveSnapshot::Grok { config_source })
+        }
+        AppType::Zcode => {
+            let provider_path = crate::zcode_config::get_provider_config_path();
+            let provider_config = if provider_path.exists() {
+                Some(crate::zcode_config::read_provider_config()?)
+            } else {
+                None
+            };
+            let state_path = crate::zcode_config::get_agents_state_path();
+            let agents_state = if state_path.exists() {
+                Some(crate::zcode_config::read_agents_state()?)
+            } else {
+                None
+            };
+            Ok(LiveSnapshot::Zcode {
+                provider_config,
+                agents_state,
+            })
         }
     }
 }
@@ -895,6 +934,64 @@ pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppErr
         }
         imported += 1;
         log::info!("Imported Grok provider from live config");
+    }
+
+    if imported > 0 {
+        state.save()?;
+    }
+    Ok(imported)
+}
+
+/// Import third-party ZCode providers from the live provider registry.
+///
+/// Built-in template providers (BigModel OAuth etc.) are filtered out by
+/// `zcode_config::get_third_party_rules` and never enter the database.
+pub fn import_zcode_providers_from_live(state: &AppState) -> Result<usize, AppError> {
+    let rules = crate::zcode_config::get_third_party_rules()?;
+    if rules.is_empty() {
+        return Ok(0);
+    }
+
+    let current = crate::zcode_config::current_selection()?;
+    let mut imported = 0usize;
+    let existing_ids = state.db.get_provider_ids("zcode")?;
+
+    for rule in rules {
+        let Some(id) = crate::zcode_config::rule_id(&rule).map(str::to_string) else {
+            continue;
+        };
+        if id.trim().is_empty() || existing_ids.contains(&id) || !rule.is_object() {
+            continue;
+        }
+        let display_name = rule
+            .get("providerName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(id.as_str())
+            .to_string();
+
+        let mut provider = Provider::with_id(id.clone(), display_name, rule, None);
+        provider.meta = Some(ProviderMeta {
+            live_config_managed: Some(true),
+            ..Default::default()
+        });
+        if let Err(err) = state.db.save_provider("zcode", &provider) {
+            log::warn!("Failed to import ZCode provider '{id}': {err}");
+            continue;
+        }
+        {
+            let mut config = state.config.write().map_err(AppError::from)?;
+            config.ensure_app(&AppType::Zcode);
+            if let Some(manager) = config.get_manager_mut(&AppType::Zcode) {
+                manager.providers.insert(id.clone(), provider);
+                if current.as_ref().is_some_and(|(pid, _)| pid == &id) {
+                    manager.current = id;
+                }
+            }
+        }
+        imported += 1;
+        log::info!("Imported ZCode provider from live config");
     }
 
     if imported > 0 {

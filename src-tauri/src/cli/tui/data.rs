@@ -324,7 +324,7 @@ impl ProxySnapshot {
             AppType::OpenCode => None,
             AppType::Hermes => None,
             AppType::OpenClaw => None,
-            AppType::Pi | AppType::Grok => None,
+            AppType::Pi | AppType::Grok | AppType::Zcode => None,
         }
     }
 
@@ -1505,6 +1505,13 @@ fn extract_api_url(settings_config: &Value, app_type: &AppType) -> Option<String
         AppType::OpenClaw | AppType::Pi | AppType::Grok => settings_config
             .get("baseUrl")
             .or_else(|| settings_config.get("base_url"))?
+            .as_str()
+            .map(|s| s.to_string()),
+        // ZCode rule shape: base url lives at config.api.baseUrl.
+        AppType::Zcode => settings_config
+            .get("config")?
+            .get("api")?
+            .get("baseUrl")?
             .as_str()
             .map(|s| s.to_string()),
     }

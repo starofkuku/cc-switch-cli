@@ -186,7 +186,8 @@ fn canonical_common_snippet(app_type: AppType, raw: &str) -> Result<Option<Strin
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok => {
+        | AppType::Grok
+        | AppType::Zcode => {
             let value: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
                 AppError::InvalidInput(texts::tui_toast_invalid_json(&e.to_string()))
             })?;

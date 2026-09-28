@@ -35,6 +35,7 @@ mod store;
 mod sync_policy;
 mod usage_events;
 mod usage_script;
+mod zcode_config;
 
 #[cfg(test)]
 pub(crate) mod test_support;

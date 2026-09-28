@@ -191,6 +191,7 @@ pub fn app_display_name(app: &AppType) -> &'static str {
         AppType::OpenClaw => "OpenClaw",
         AppType::Pi => "Pi",
         AppType::Grok => "Grok",
+        AppType::Zcode => "ZCode",
     }
 }
 

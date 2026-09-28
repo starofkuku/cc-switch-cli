@@ -144,6 +144,7 @@ fn build_provider_from_request(
         AppType::OpenClaw => build_openclaw_settings(request),
         AppType::Pi => build_openclaw_settings(request),
         AppType::Grok => build_grok_settings(request),
+        AppType::Zcode => build_zcode_settings(request),
     };
 
     let meta = build_provider_meta(request)?;
@@ -161,6 +162,33 @@ fn build_provider_from_request(
         icon: request.icon.clone(),
         icon_color: None,
         in_failover_queue: false,
+    })
+}
+
+/// ZCode deeplink settings: a bare provider-rule `config` object. The
+/// provider id/name wrapper is added when the rule is written to the live
+/// registry (`zcode_config::prepare_write`).
+fn build_zcode_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+    let endpoint = get_primary_endpoint(request);
+    let model = request
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("glm-4.7");
+    let models = vec![model.to_string()];
+    json!({
+        "group": "standard-personal",
+        "access": {
+            "type": "api-key",
+            "apiKey": request.api_key.clone().unwrap_or_default(),
+        },
+        "api": {
+            "type": "openai-chat-completions",
+            "baseUrl": endpoint.trim_end_matches('/'),
+        },
+        "personalModelIds": models,
+        "modelOrder": models,
     })
 }
 

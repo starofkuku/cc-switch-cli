@@ -41,6 +41,7 @@ pub(crate) struct TestEnvGuard {
     old_codex_home: Option<OsString>,
     old_pi_coding_agent_dir: Option<OsString>,
     old_grok_home: Option<OsString>,
+    old_zcode_data_base_dir: Option<OsString>,
     old_xdg_runtime_dir: Option<OsString>,
 }
 
@@ -54,6 +55,7 @@ impl TestEnvGuard {
         let old_codex_home = std::env::var_os("CODEX_HOME");
         let old_pi_coding_agent_dir = std::env::var_os("PI_CODING_AGENT_DIR");
         let old_grok_home = std::env::var_os("GROK_HOME");
+        let old_zcode_data_base_dir = std::env::var_os("ZCODE_DATA_BASE_DIR");
         let old_xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
 
         std::env::set_var("HOME", home);
@@ -63,6 +65,7 @@ impl TestEnvGuard {
         std::env::set_var("CODEX_HOME", home.join(".codex"));
         std::env::set_var("PI_CODING_AGENT_DIR", home.join(".pi").join("agent"));
         std::env::set_var("GROK_HOME", home.join(".grok"));
+        std::env::set_var("ZCODE_DATA_BASE_DIR", home);
         std::env::set_var("XDG_RUNTIME_DIR", home.join(".runtime"));
         set_test_home_override(Some(home));
         crate::settings::reload_test_settings();
@@ -77,6 +80,7 @@ impl TestEnvGuard {
             old_codex_home,
             old_pi_coding_agent_dir,
             old_grok_home,
+            old_zcode_data_base_dir,
             old_xdg_runtime_dir,
         }
     }
@@ -96,6 +100,7 @@ impl Drop for TestEnvGuard {
         restore_env("CODEX_HOME", &self.old_codex_home);
         restore_env("PI_CODING_AGENT_DIR", &self.old_pi_coding_agent_dir);
         restore_env("GROK_HOME", &self.old_grok_home);
+        restore_env("ZCODE_DATA_BASE_DIR", &self.old_zcode_data_base_dir);
         restore_env("XDG_RUNTIME_DIR", &self.old_xdg_runtime_dir);
         set_test_home_override(self.old_home.as_deref().map(Path::new));
         crate::settings::reload_test_settings();

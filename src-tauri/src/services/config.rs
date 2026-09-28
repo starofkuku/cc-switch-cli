@@ -292,7 +292,7 @@ impl ConfigService {
             AppType::OpenCode => {}
             AppType::Hermes => {}
             AppType::OpenClaw => {}
-            AppType::Pi | AppType::Grok => {}
+            AppType::Pi | AppType::Grok | AppType::Zcode => {}
         }
 
         Ok(())

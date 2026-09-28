@@ -42,7 +42,7 @@ mod tests {
         let csv = supported_apps_csv();
         assert_eq!(
             csv,
-            "claude, codex, gemini, open-code, hermes, open-claw, pi, grok"
+            "claude, codex, gemini, open-code, hermes, open-claw, pi, grok, zcode"
         );
     }
 
@@ -57,6 +57,7 @@ mod tests {
             "open-claw",
             "pi",
             "grok",
+            "zcode",
         ];
         let labels = supported_app_labels();
         for label in &labels {

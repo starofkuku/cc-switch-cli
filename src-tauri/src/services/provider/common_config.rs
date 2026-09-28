@@ -284,13 +284,16 @@ fn parse_json_object_snippet(
             format!("Gemini 通用配置片段不是有效的 JSON：{e}"),
             format!("Gemini common config snippet is not valid JSON: {e}"),
         ),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            AppError::localized(
-                "common_config.opencode.invalid_json",
-                format!("OpenCode 通用配置片段不是有效的 JSON：{e}"),
-                format!("OpenCode common config snippet is not valid JSON: {e}"),
-            )
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => AppError::localized(
+            "common_config.opencode.invalid_json",
+            format!("OpenCode 通用配置片段不是有效的 JSON：{e}"),
+            format!("OpenCode common config snippet is not valid JSON: {e}"),
+        ),
         AppType::Codex => AppError::Config(format!("Unexpected JSON common config parse: {e}")),
     })?;
 
@@ -310,7 +313,8 @@ fn parse_json_object_snippet(
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok => AppError::localized(
+            | AppType::Grok
+            | AppType::Zcode => AppError::localized(
                 "common_config.opencode.not_object",
                 "OpenCode 通用配置片段必须是 JSON 对象",
                 "OpenCode common config snippet must be a JSON object",
@@ -351,7 +355,8 @@ pub(super) fn validate_common_config_snippet(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok => {
+        | AppType::Grok
+        | AppType::Zcode => {
             parse_json_object_snippet(app_type, snippet, false)?;
         }
         AppType::Codex => {
@@ -407,9 +412,12 @@ pub(super) fn settings_contain_common_config(
             }
             _ => false,
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            false
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => false,
     }
 }
 
@@ -474,9 +482,12 @@ pub(super) fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            Ok(settings.clone())
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => Ok(settings.clone()),
     }
 }
 
@@ -525,9 +536,12 @@ pub(super) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            Ok(settings.clone())
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => Ok(settings.clone()),
     }
 }
 

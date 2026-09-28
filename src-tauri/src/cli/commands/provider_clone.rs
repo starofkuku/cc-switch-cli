@@ -291,6 +291,16 @@ fn extract_api_key(app_type: &AppType, provider: &Provider) -> Option<String> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        // ZCode rule shape: key lives at config.access.apiKey.
+        AppType::Zcode => provider
+            .settings_config
+            .get("config")
+            .and_then(|c| c.get("access"))
+            .and_then(|a| a.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
     }
 }
 
@@ -366,6 +376,19 @@ fn extract_model_ids(app_type: &AppType, provider: &Provider) -> Vec<String> {
                 }
             }
         }
+        // ZCode models live flat under config.modelOrder / personalModelIds.
+        AppType::Zcode => {
+            let config = provider.settings_config.get("config");
+            for key in ["modelOrder", "personalModelIds"] {
+                if let Some(models) = config.and_then(|c| c.get(key)).and_then(Value::as_array) {
+                    for entry in models {
+                        if let Some(id) = entry.as_str() {
+                            push(id);
+                        }
+                    }
+                }
+            }
+        }
         AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
             if let Some(models) = provider
                 .settings_config
@@ -433,6 +456,7 @@ pub(crate) fn build_provider_from_channel(
         AppType::OpenClaw | AppType::Pi | AppType::Grok => {
             build_openclaw_settings_from_channel(channel)?
         }
+        AppType::Zcode => build_zcode_settings_from_channel(channel),
     };
 
     let notes = match (
@@ -547,6 +571,25 @@ fn build_hermes_settings_from_channel(channel: &SharedChannel) -> Result<Value, 
         "api_key": channel.api_key,
         "models": models,
     }))
+}
+
+/// Cross-app clone target for ZCode: a bare provider-rule `config` object.
+fn build_zcode_settings_from_channel(channel: &SharedChannel) -> Value {
+    let models: Vec<String> = if channel.model_ids.is_empty() {
+        vec!["default".to_string()]
+    } else {
+        channel.model_ids.clone()
+    };
+    json!({
+        "group": "standard-personal",
+        "access": { "type": "api-key", "apiKey": channel.api_key },
+        "api": {
+            "type": "openai-chat-completions",
+            "baseUrl": channel.base_url.trim_end_matches('/'),
+        },
+        "personalModelIds": models,
+        "modelOrder": models,
+    })
 }
 
 fn build_openclaw_settings_from_channel(channel: &SharedChannel) -> Result<Value, AppError> {

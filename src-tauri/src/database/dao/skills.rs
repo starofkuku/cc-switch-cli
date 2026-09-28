@@ -52,6 +52,9 @@ impl Database {
                         opencode: row.get(11)?,
                         hermes: row.get(12)?,
                         grok: if has_grokbuild { row.get(13)? } else { false },
+                        // ZCode enablement lives in the skill service sidecar,
+                        // not in this upstream-synced table.
+                        zcode: false,
                     },
                     installed_at: row.get(installed_at_idx)?,
                 })
@@ -101,6 +104,8 @@ impl Database {
                     opencode: row.get(11)?,
                     hermes: row.get(12)?,
                     grok: if has_grokbuild { row.get(13)? } else { false },
+                    // ZCode enablement lives in the skill service sidecar.
+                    zcode: false,
                 },
                 installed_at: row.get(installed_at_idx)?,
             })

@@ -409,9 +409,12 @@ fn takeover_enabled_for(takeovers: &ProxyTakeoverStatus, app_type: &AppType) -> 
         AppType::Claude => takeovers.claude,
         AppType::Codex => takeovers.codex,
         AppType::Gemini => takeovers.gemini,
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            false
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => false,
     }
 }
 

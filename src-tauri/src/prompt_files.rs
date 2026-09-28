@@ -19,6 +19,7 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::OpenClaw => get_openclaw_override_dir().unwrap_or_else(default_openclaw_dir),
         AppType::Pi => crate::pi_config::get_pi_dir(),
         AppType::Grok => crate::grok_config::get_grok_dir(),
+        AppType::Zcode => crate::zcode_config::get_zcode_dir(),
     };
 
     let filename = match app {
@@ -30,6 +31,7 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::OpenClaw => "AGENTS.md",
         AppType::Pi => "AGENTS.md",
         AppType::Grok => "AGENTS.md",
+        AppType::Zcode => "AGENTS.md",
     };
 
     Ok(base_dir.join(filename))

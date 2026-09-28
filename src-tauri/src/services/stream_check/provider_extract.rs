@@ -22,6 +22,15 @@ impl StreamCheckService {
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
             AppType::Pi | AppType::Grok => Self::extract_openclaw_base_url(provider),
+            // ZCode rule shape: base url lives at config.api.baseUrl.
+            AppType::Zcode => Ok(provider
+                .settings_config
+                .get("config")
+                .and_then(|c| c.get("api"))
+                .and_then(|a| a.get("baseUrl"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()),
             AppType::Claude | AppType::Codex | AppType::Gemini => get_adapter(app_type)
                 .extract_base_url(provider)
                 .map(|url| url.trim().trim_end_matches('/').to_string())

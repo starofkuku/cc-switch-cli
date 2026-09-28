@@ -375,7 +375,8 @@ fn prompt_and_apply_provider_api_format(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok => Ok(()),
+        | AppType::Grok
+        | AppType::Zcode => Ok(()),
     }
 }
 
@@ -1231,9 +1232,12 @@ fn build_add_settings_config(
             }
             None => Ok(build_gemini_oauth_settings_config(current)),
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            Err(add_additive_requires_config_error(app_type))
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => Err(add_additive_requires_config_error(app_type)),
     }
 }
 
@@ -1307,7 +1311,8 @@ fn apply_add_provider_api_format(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok => {}
+        | AppType::Grok
+        | AppType::Zcode => {}
     }
     Ok(())
 }
@@ -1814,6 +1819,9 @@ fn set_provider_api_key(
             insert_trimmed(obj, "apiKey");
             obj.remove("api_key");
         }
+        // ZCode rule keeps its key at config.access.apiKey; nothing to trim
+        // at the top level.
+        AppType::Zcode => {}
     }
     Ok(())
 }
@@ -1858,6 +1866,10 @@ fn existing_provider_ids_for_duplicate(
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),
             AppType::Grok => crate::grok_config::get_providers()?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            AppType::Zcode => crate::zcode_config::third_party_rule_map()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),

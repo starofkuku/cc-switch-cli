@@ -32,7 +32,8 @@ impl McpApps {
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::Grok => self.grok,
-            AppType::OpenClaw | AppType::Pi => false,
+            // ZCode's MCP lives in its plugin system, not cc-switch-managed files.
+            AppType::OpenClaw | AppType::Pi | AppType::Zcode => false,
         }
     }
 
@@ -45,7 +46,7 @@ impl McpApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::Grok => self.grok = enabled,
-            AppType::OpenClaw | AppType::Pi => {}
+            AppType::OpenClaw | AppType::Pi | AppType::Zcode => {}
         }
     }
 
@@ -95,6 +96,8 @@ pub struct SkillApps {
     pub opencode: bool,
     #[serde(default)]
     pub hermes: bool,
+    #[serde(default)]
+    pub zcode: bool,
 }
 
 impl SkillApps {
@@ -106,6 +109,7 @@ impl SkillApps {
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::Grok => self.grok,
+            AppType::Zcode => self.zcode,
             AppType::OpenClaw | AppType::Pi => false,
         }
     }
@@ -118,12 +122,19 @@ impl SkillApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::Grok => self.grok = enabled,
+            AppType::Zcode => self.zcode = enabled,
             AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.grok && !self.opencode && !self.hermes
+        !self.claude
+            && !self.codex
+            && !self.gemini
+            && !self.grok
+            && !self.opencode
+            && !self.hermes
+            && !self.zcode
     }
 
     pub fn only(app: &AppType) -> Self {
@@ -257,6 +268,8 @@ pub struct McpRoot {
     pub pi: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub grok: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub zcode: McpConfig,
 }
 
 impl Default for McpRoot {
@@ -273,6 +286,7 @@ impl Default for McpRoot {
             openclaw: McpConfig::default(),
             pi: McpConfig::default(),
             grok: McpConfig::default(),
+            zcode: McpConfig::default(),
         }
     }
 }
@@ -303,6 +317,8 @@ pub struct PromptRoot {
     pub pi: PromptConfig,
     #[serde(default)]
     pub grok: PromptConfig,
+    #[serde(default)]
+    pub zcode: PromptConfig,
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -321,6 +337,7 @@ pub enum AppType {
     OpenClaw,
     Pi,
     Grok,
+    Zcode,
 }
 
 impl AppType {
@@ -334,13 +351,19 @@ impl AppType {
             AppType::OpenClaw => "openclaw",
             AppType::Pi => "pi",
             AppType::Grok => "grok",
+            AppType::Zcode => "zcode",
         }
     }
 
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok
+            AppType::OpenCode
+                | AppType::Hermes
+                | AppType::OpenClaw
+                | AppType::Pi
+                | AppType::Grok
+                | AppType::Zcode
         )
     }
 
@@ -358,6 +381,7 @@ impl AppType {
             AppType::OpenClaw,
             AppType::Pi,
             AppType::Grok,
+            AppType::Zcode,
         ]
         .into_iter()
     }
@@ -384,13 +408,14 @@ impl FromStr for AppType {
             "pi" => Ok(AppType::Pi),
             // "grokbuild" is the Win desktop (farion) schema / proxy_config app_type.
             "grok" | "grokbuild" | "grok-build" | "grok_build" => Ok(AppType::Grok),
+            "zcode" => Ok(AppType::Zcode),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(
-                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi, grok。"
+                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi, grok, zcode。"
                 ),
                 format!(
-                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi, grok."
+                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi, grok, zcode."
                 ),
             )),
         }
@@ -423,6 +448,9 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grok: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zcode: Option<String>,
 }
 
 impl CommonConfigSnippets {
@@ -437,6 +465,7 @@ impl CommonConfigSnippets {
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Pi => self.pi.as_ref(),
             AppType::Grok => self.grok.as_ref(),
+            AppType::Zcode => self.zcode.as_ref(),
         }
     }
 
@@ -451,6 +480,7 @@ impl CommonConfigSnippets {
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Pi => self.pi = snippet,
             AppType::Grok => self.grok = snippet,
+            AppType::Zcode => self.zcode = snippet,
         }
     }
 }
@@ -684,6 +714,7 @@ impl MultiAppConfig {
             AppType::OpenClaw => &self.mcp.openclaw,
             AppType::Pi => &self.mcp.pi,
             AppType::Grok => &self.mcp.grok,
+            AppType::Zcode => &self.mcp.zcode,
         }
     }
 
@@ -698,6 +729,7 @@ impl MultiAppConfig {
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::Pi => &mut self.mcp.pi,
             AppType::Grok => &mut self.mcp.grok,
+            AppType::Zcode => &mut self.mcp.zcode,
         }
     }
 
@@ -734,7 +766,7 @@ impl MultiAppConfig {
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::Hermes => &self.mcp.hermes.servers,
-                AppType::OpenClaw | AppType::Grok => continue,
+                AppType::OpenClaw | AppType::Grok | AppType::Zcode => continue,
                 AppType::Pi => &self.mcp.pi.servers,
             };
 

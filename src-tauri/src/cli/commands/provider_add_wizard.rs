@@ -554,6 +554,7 @@ mod tests {
                         | AppType::OpenClaw
                         | AppType::Pi
                         | AppType::Grok
+                        | AppType::Zcode
                 ));
             }
         }

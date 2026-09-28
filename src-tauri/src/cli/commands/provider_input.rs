@@ -140,9 +140,12 @@ pub fn common_snippet_has_effective_config(
             .ok()
             .and_then(|value| value.as_object().cloned())
             .is_some_and(|obj| !obj.is_empty()),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
-            false
-        }
+        AppType::OpenCode
+        | AppType::Hermes
+        | AppType::OpenClaw
+        | AppType::Pi
+        | AppType::Grok
+        | AppType::Zcode => false,
     }
 }
 
@@ -495,6 +498,7 @@ pub fn provider_add_template_choices(app_type: &AppType) -> &'static [ProviderAd
         AppType::OpenCode => &PROVIDER_TEMPLATE_CHOICES_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_CHOICES_HERMES,
         AppType::OpenClaw | AppType::Pi | AppType::Grok => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
+        AppType::Zcode => &[],
     }
 }
 
@@ -1055,6 +1059,9 @@ fn build_sponsor_template_settings_config(
                 )
             }
         }
+        AppType::Zcode => Err(AppError::Message(
+            "ZCode does not support sponsor provider templates".to_string(),
+        )),
         AppType::OpenClaw | AppType::Pi | AppType::Grok => {
             if preset.id == ProviderAddTemplate::Aicodemirror {
                 build_openclaw_settings_config(
@@ -3944,7 +3951,67 @@ pub fn prompt_settings_config(
         AppType::OpenClaw | AppType::Pi => {
             prompt_openclaw_config(current).map(SettingsConfigPromptResult::new)
         }
+        AppType::Zcode => prompt_zcode_config(current).map(SettingsConfigPromptResult::new),
     }
+}
+
+/// Interactive ZCode provider form: produces the bare rule `config` object;
+/// `zcode_config::prepare_write` wraps it with providerId/providerName when
+/// the rule is written to the live registry.
+fn prompt_zcode_config(current: Option<&Value>) -> Result<Value, AppError> {
+    println!("\n{}", "ZCode".bright_cyan().bold());
+
+    let config = current
+        .and_then(|v| v.get("config"))
+        .unwrap_or(&Value::Null);
+    let existing_model = config
+        .get("modelOrder")
+        .or_else(|| config.get("personalModelIds"))
+        .and_then(Value::as_array)
+        .and_then(|models| models.first())
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_base_url = config
+        .get("api")
+        .and_then(|api| api.get("baseUrl"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let existing_api_key = config
+        .get("access")
+        .and_then(|access| access.get("apiKey"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let model = prompt_model_text(
+        "Model",
+        "glm-4.7",
+        (!existing_model.is_empty()).then_some(existing_model),
+    )?
+    .unwrap_or_else(|| "glm-4.7".to_string());
+    let base_url = Text::new(texts::base_url_display_label())
+        .with_initial_value(existing_base_url)
+        .prompt()
+        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+    let api_key = Text::new(texts::api_key_label())
+        .with_initial_value(existing_api_key)
+        .with_help_message(texts::api_key_help())
+        .prompt()
+        .map_err(|e| AppError::Message(texts::input_failed_error(&e.to_string())))?;
+
+    if base_url.trim().is_empty() || api_key.trim().is_empty() {
+        return Err(AppError::Message(
+            "base url and API key are required for ZCode providers".to_string(),
+        ));
+    }
+
+    let models = vec![model.trim().to_string()];
+    Ok(json!({
+        "group": "standard-personal",
+        "access": { "type": "api-key", "apiKey": api_key.trim() },
+        "api": { "type": "openai-chat-completions", "baseUrl": base_url.trim() },
+        "personalModelIds": models,
+        "modelOrder": models,
+    }))
 }
 
 fn prompt_grok_config(current: Option<&Value>) -> Result<Value, AppError> {
@@ -4950,6 +5017,39 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
                 .and_then(|v| v.as_str())
             {
                 println!("  API backend: {backend}");
+            }
+        }
+        AppType::Zcode => {
+            let rule = &provider.settings_config;
+            if let Some(api_key) = rule
+                .get("config")
+                .and_then(|c| c.get("access"))
+                .and_then(|a| a.get("apiKey"))
+                .and_then(Value::as_str)
+            {
+                println!(
+                    "  {}: {}",
+                    texts::api_key_display_label(),
+                    mask_api_key(api_key)
+                );
+            }
+            if let Some(base_url) = rule
+                .get("config")
+                .and_then(|c| c.get("api"))
+                .and_then(|a| a.get("baseUrl"))
+                .and_then(Value::as_str)
+            {
+                println!("  {}: {}", texts::base_url_display_label(), base_url);
+            }
+            if let Some(models) = rule
+                .get("config")
+                .and_then(|c| c.get("modelOrder"))
+                .and_then(Value::as_array)
+            {
+                let ids: Vec<&str> = models.iter().filter_map(Value::as_str).collect();
+                if !ids.is_empty() {
+                    println!("  Models: {}", ids.join(", "));
+                }
             }
         }
         AppType::OpenClaw | AppType::Pi => {
