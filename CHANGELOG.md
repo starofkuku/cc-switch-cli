@@ -7,6 +7,15 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.18] - 2026-09-28
+
+### Added
+
+- **Apps / ZCode**: new `--app zcode` support. cc-switch manages **third-party providers only** in `~/.zcode/v2/provider_config.json` (rules without `templateId` using `access.type: "api-key"`); built-in providers (BigModel OAuth etc.) are passed through untouched and never listed. Switching updates `config.defaultModelSelection` plus every third-party agent override in `v2/agents-state.json` with minimal-diff atomic writes, so ZCode's strict schema and 1-second polling are never broken. `ZCODE_DATA_BASE_DIR` redirects the data root for sandboxes.
+- **Prompts / ZCode**: `~/.zcode/AGENTS.md` joins the live prompt files — `prompts copy <from> zcode` / `prompts copy zcode <to>` work like every other app, gated by `sync_policy` so an uninitialized app never receives a config directory.
+- **Skills / ZCode**: skills install to `~/.zcode/skills/`. ZCode enablement is persisted in the sidecar `~/.cc-switch/zcode-skill-apps.json` because the main skills table schema stays synced with upstream and must not gain columns.
+- **Provider tooling / ZCode**: add / update / switch / delete (with current-provider guard), live import filtering third-party rules, deeplink imports, interactive add form, TUI support, model inspection (`Bearer` strategy against `config.api.baseUrl`), stream checks, usage queries and quota extraction all understand the ZCode rule shape.
+
 ## [5.10.17] - 2026-09-22
 
 ### Added
