@@ -7,6 +7,15 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.22] - 2026-10-14
+
+### Fixed
+
+- **Server / WebDAV sync endpoints crashed the process** (`/api/sync/webdav/upload` and `/download`): the sync service builds its own tokio runtime and blocks on it, which panics with "cannot start a runtime from within a runtime" when invoked from an async worker thread — both endpoints could never return 200 and took the whole server (and every in-flight request) down. They now run on the blocking pool via `spawn_blocking`, including the post-download snapshot refresh and live replay.
+- **Server / model discovery endpoint crashed the process** (`GET /api/apps/{app}/providers/{id}/fetch-models`): same runtime-nesting defect in the model fetch path, same fix.
+- **Server / provider update masked-secret trap**: `GET` provider detail returns secrets masked as `***`; a client doing read-modify-write would overwrite the stored credentials with the mask on `PATCH`. Masked values are now restored from storage by path before saving (matching the existing settings-endpoint behavior).
+- Regression guards added for all three: dead-endpoint WebDAV/model fetches must return JSON errors (never a panic), and a masked round-trip must keep the stored key.
+
 ## [5.10.21] - 2026-10-13
 
 ### Changed
