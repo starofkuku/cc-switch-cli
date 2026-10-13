@@ -100,7 +100,7 @@ fn run_app_doctor(app_type: &AppType) -> Result<(), AppError> {
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => {
             println!(
                 "{}",

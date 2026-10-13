@@ -145,7 +145,7 @@ impl ProviderType {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => ProviderType::Codex,
         }
     }
@@ -198,7 +198,7 @@ pub fn get_adapter(app_type: &AppType) -> Box<dyn ProviderAdapter> {
         AppType::OpenCode => Box::new(CodexAdapter::new()),
         AppType::Hermes => Box::new(CodexAdapter::new()),
         AppType::OpenClaw => Box::new(CodexAdapter::new()),
-        AppType::Pi | AppType::Grok | AppType::Zcode => Box::new(CodexAdapter::new()),
+        AppType::Pi | AppType::GrokBuild | AppType::Zcode => Box::new(CodexAdapter::new()),
     }
 }
 

@@ -553,7 +553,7 @@ mod tests {
                         | AppType::Hermes
                         | AppType::OpenClaw
                         | AppType::Pi
-                        | AppType::Grok
+                        | AppType::GrokBuild
                         | AppType::Zcode
                 ));
             }

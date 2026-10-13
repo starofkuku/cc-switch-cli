@@ -226,7 +226,7 @@ pub(super) fn capture_live_snapshot(app_type: &AppType) -> Result<LiveSnapshot, 
             };
             Ok(LiveSnapshot::Pi { models })
         }
-        AppType::Grok => {
+        AppType::GrokBuild => {
             let config_source = crate::grok_config::read_grok_config_source()?;
             Ok(LiveSnapshot::Grok { config_source })
         }
@@ -881,7 +881,7 @@ pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppErr
     }
 
     let mut imported = 0usize;
-    let existing_ids = state.db.get_provider_ids("grok")?;
+    let existing_ids = state.db.get_provider_ids("grokbuild")?;
     let default_id = crate::grok_config::get_default_model()?;
 
     for (id, settings_config) in providers {
@@ -918,14 +918,14 @@ pub fn import_grok_providers_from_live(state: &AppState) -> Result<usize, AppErr
             live_config_managed: Some(true),
             ..Default::default()
         });
-        if let Err(err) = state.db.save_provider("grok", &provider) {
+        if let Err(err) = state.db.save_provider("grokbuild", &provider) {
             log::warn!("Failed to import Grok provider '{id}': {err}");
             continue;
         }
         {
             let mut config = state.config.write().map_err(AppError::from)?;
-            config.ensure_app(&AppType::Grok);
-            if let Some(manager) = config.get_manager_mut(&AppType::Grok) {
+            config.ensure_app(&AppType::GrokBuild);
+            if let Some(manager) = config.get_manager_mut(&AppType::GrokBuild) {
                 manager.providers.insert(id.clone(), provider);
                 if default_id.as_deref() == Some(id.as_str()) {
                     manager.current = id;

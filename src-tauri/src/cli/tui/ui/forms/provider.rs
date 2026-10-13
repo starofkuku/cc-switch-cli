@@ -239,7 +239,7 @@ fn common_json_preview_value(app_type: &AppType, common_snippet: &str) -> Option
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => None,
     }
     .filter(Value::is_object)

@@ -190,7 +190,7 @@ pub fn app_display_name(app: &AppType) -> &'static str {
         AppType::Hermes => "Hermes",
         AppType::OpenClaw => "OpenClaw",
         AppType::Pi => "Pi",
-        AppType::Grok => "Grok",
+        AppType::GrokBuild => "Grok",
         AppType::Zcode => "ZCode",
     }
 }
@@ -447,7 +447,7 @@ mod tests {
         // unreachable from this path, and Pi/Grok keep the TUI usable.
         assert_eq!(
             outcome.visible_apps.ordered_enabled(),
-            vec![AppType::Pi, AppType::Grok]
+            vec![AppType::Pi, AppType::GrokBuild]
         );
         assert!(!outcome.visible_apps.claude, "claude must stay hidden");
         assert!(!outcome.visible_apps.codex, "codex must stay hidden");

@@ -22,7 +22,7 @@ pub(super) fn populate_form_from_provider(
         AppType::Gemini => populate_gemini_form(form, provider),
         AppType::OpenCode => populate_opencode_form(form, provider),
         AppType::Hermes => populate_hermes_form(form, provider),
-        AppType::OpenClaw | AppType::Pi | AppType::Grok | AppType::Zcode => {
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild | AppType::Zcode => {
             populate_openclaw_form(form, provider)
         }
     }

@@ -419,7 +419,7 @@ impl ProviderAddFormState {
                     &self.hermes_rate_limit_delay.value,
                 );
             }
-            AppType::OpenClaw | AppType::Pi | AppType::Grok | AppType::Zcode => {
+            AppType::OpenClaw | AppType::Pi | AppType::GrokBuild | AppType::Zcode => {
                 settings_obj.remove("npm");
                 settings_obj.remove("options");
                 settings_obj.remove("api_key");
@@ -1009,7 +1009,7 @@ pub(crate) fn strip_common_config_from_settings(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => {}
         AppType::Codex => {
             *settings_value = ProviderService::remove_common_config_from_settings_for_preview(

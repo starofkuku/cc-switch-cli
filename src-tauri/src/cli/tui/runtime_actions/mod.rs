@@ -1571,7 +1571,7 @@ mod tests {
         assert!(!saved.opencode && !saved.hermes && !saved.openclaw);
         assert_eq!(
             saved.ordered_enabled(),
-            vec![AppType::Pi, AppType::Grok],
+            vec![AppType::Pi, AppType::GrokBuild],
             "Pi and Grok keep the visible set non-empty"
         );
         assert_eq!(

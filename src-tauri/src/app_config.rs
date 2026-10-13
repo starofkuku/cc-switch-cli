@@ -14,8 +14,8 @@ pub struct McpApps {
     #[serde(default)]
     pub gemini: bool,
     /// Maps to SQLite `enabled_grokbuild` (Win desktop / farion schema name).
-    #[serde(default, alias = "grokbuild")]
-    pub grok: bool,
+    #[serde(default, alias = "grok")]
+    pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
     #[serde(default)]
@@ -31,7 +31,7 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::Grok => self.grok,
+            AppType::GrokBuild => self.grokbuild,
             // ZCode's MCP lives in its plugin system, not cc-switch-managed files.
             AppType::OpenClaw | AppType::Pi | AppType::Zcode => false,
         }
@@ -45,7 +45,7 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::Grok => self.grok = enabled,
+            AppType::GrokBuild => self.grokbuild = enabled,
             AppType::OpenClaw | AppType::Pi | AppType::Zcode => {}
         }
     }
@@ -62,8 +62,8 @@ impl McpApps {
         if self.gemini {
             apps.push(AppType::Gemini);
         }
-        if self.grok {
-            apps.push(AppType::Grok);
+        if self.grokbuild {
+            apps.push(AppType::GrokBuild);
         }
         if self.opencode {
             apps.push(AppType::OpenCode);
@@ -76,7 +76,12 @@ impl McpApps {
 
     /// 检查是否所有应用都未启用
     pub fn is_empty(&self) -> bool {
-        !self.claude && !self.codex && !self.gemini && !self.grok && !self.opencode && !self.hermes
+        !self.claude
+            && !self.codex
+            && !self.gemini
+            && !self.grokbuild
+            && !self.opencode
+            && !self.hermes
     }
 }
 
@@ -90,8 +95,8 @@ pub struct SkillApps {
     #[serde(default)]
     pub gemini: bool,
     /// Maps to SQLite `enabled_grokbuild` (Win desktop / farion schema name).
-    #[serde(default, alias = "grokbuild")]
-    pub grok: bool,
+    #[serde(default, alias = "grok")]
+    pub grokbuild: bool,
     #[serde(default)]
     pub opencode: bool,
     #[serde(default)]
@@ -108,7 +113,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::Grok => self.grok,
+            AppType::GrokBuild => self.grokbuild,
             AppType::Zcode => self.zcode,
             AppType::OpenClaw | AppType::Pi => false,
         }
@@ -121,7 +126,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::Grok => self.grok = enabled,
+            AppType::GrokBuild => self.grokbuild = enabled,
             AppType::Zcode => self.zcode = enabled,
             AppType::OpenClaw | AppType::Pi => {}
         }
@@ -131,7 +136,7 @@ impl SkillApps {
         !self.claude
             && !self.codex
             && !self.gemini
-            && !self.grok
+            && !self.grokbuild
             && !self.opencode
             && !self.hermes
             && !self.zcode
@@ -157,7 +162,7 @@ impl SkillApps {
         self.claude |= other.claude;
         self.codex |= other.codex;
         self.gemini |= other.gemini;
-        self.grok |= other.grok;
+        self.grokbuild |= other.grokbuild;
         self.opencode |= other.opencode;
         self.hermes |= other.hermes;
     }
@@ -266,8 +271,8 @@ pub struct McpRoot {
     pub openclaw: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub pi: McpConfig,
-    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
-    pub grok: McpConfig,
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty", alias = "grok")]
+    pub grokbuild: McpConfig,
     #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub zcode: McpConfig,
 }
@@ -285,7 +290,7 @@ impl Default for McpRoot {
             hermes: McpConfig::default(),
             openclaw: McpConfig::default(),
             pi: McpConfig::default(),
-            grok: McpConfig::default(),
+            grokbuild: McpConfig::default(),
             zcode: McpConfig::default(),
         }
     }
@@ -315,8 +320,8 @@ pub struct PromptRoot {
     pub openclaw: PromptConfig,
     #[serde(default)]
     pub pi: PromptConfig,
-    #[serde(default)]
-    pub grok: PromptConfig,
+    #[serde(default, alias = "grok")]
+    pub grokbuild: PromptConfig,
     #[serde(default)]
     pub zcode: PromptConfig,
 }
@@ -336,7 +341,9 @@ pub enum AppType {
     Hermes,
     OpenClaw,
     Pi,
-    Grok,
+    /// Upstream storage name; `grok` stays accepted as a CLI/serde alias.
+    #[value(alias = "grok")]
+    GrokBuild,
     Zcode,
 }
 
@@ -350,7 +357,7 @@ impl AppType {
             AppType::Hermes => "hermes",
             AppType::OpenClaw => "openclaw",
             AppType::Pi => "pi",
-            AppType::Grok => "grok",
+            AppType::GrokBuild => "grokbuild",
             AppType::Zcode => "zcode",
         }
     }
@@ -362,7 +369,7 @@ impl AppType {
                 | AppType::Hermes
                 | AppType::OpenClaw
                 | AppType::Pi
-                | AppType::Grok
+                | AppType::GrokBuild
                 | AppType::Zcode
         )
     }
@@ -380,7 +387,7 @@ impl AppType {
             AppType::Hermes,
             AppType::OpenClaw,
             AppType::Pi,
-            AppType::Grok,
+            AppType::GrokBuild,
             AppType::Zcode,
         ]
         .into_iter()
@@ -407,15 +414,15 @@ impl FromStr for AppType {
             "openclaw" => Ok(AppType::OpenClaw),
             "pi" => Ok(AppType::Pi),
             // "grokbuild" is the Win desktop (farion) schema / proxy_config app_type.
-            "grok" | "grokbuild" | "grok-build" | "grok_build" => Ok(AppType::Grok),
+            "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
             "zcode" => Ok(AppType::Zcode),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(
-                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi, grok, zcode。"
+                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi, grokbuild(别名 grok), zcode。"
                 ),
                 format!(
-                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi, grok, zcode."
+                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi, grokbuild (alias grok), zcode."
                 ),
             )),
         }
@@ -446,8 +453,8 @@ pub struct CommonConfigSnippets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub grok: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "grok")]
+    pub grokbuild: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zcode: Option<String>,
@@ -464,7 +471,7 @@ impl CommonConfigSnippets {
             AppType::Hermes => self.hermes.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
             AppType::Pi => self.pi.as_ref(),
-            AppType::Grok => self.grok.as_ref(),
+            AppType::GrokBuild => self.grokbuild.as_ref(),
             AppType::Zcode => self.zcode.as_ref(),
         }
     }
@@ -479,7 +486,7 @@ impl CommonConfigSnippets {
             AppType::Hermes => self.hermes = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
             AppType::Pi => self.pi = snippet,
-            AppType::Grok => self.grok = snippet,
+            AppType::GrokBuild => self.grokbuild = snippet,
             AppType::Zcode => self.zcode = snippet,
         }
     }
@@ -524,7 +531,7 @@ impl Default for MultiAppConfig {
         apps.insert("hermes".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("pi".to_string(), ProviderManager::default());
-        apps.insert("grok".to_string(), ProviderManager::default());
+        apps.insert("grokbuild".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -639,10 +646,10 @@ impl MultiAppConfig {
             updated = true;
         }
 
-        if !config.apps.contains_key("grok") {
+        if !config.apps.contains_key("grokbuild") {
             config
                 .apps
-                .insert("grok".to_string(), ProviderManager::default());
+                .insert("grokbuild".to_string(), ProviderManager::default());
             updated = true;
         }
 
@@ -713,7 +720,7 @@ impl MultiAppConfig {
             AppType::Hermes => &self.mcp.hermes,
             AppType::OpenClaw => &self.mcp.openclaw,
             AppType::Pi => &self.mcp.pi,
-            AppType::Grok => &self.mcp.grok,
+            AppType::GrokBuild => &self.mcp.grokbuild,
             AppType::Zcode => &self.mcp.zcode,
         }
     }
@@ -728,7 +735,7 @@ impl MultiAppConfig {
             AppType::Hermes => &mut self.mcp.hermes,
             AppType::OpenClaw => &mut self.mcp.openclaw,
             AppType::Pi => &mut self.mcp.pi,
-            AppType::Grok => &mut self.mcp.grok,
+            AppType::GrokBuild => &mut self.mcp.grokbuild,
             AppType::Zcode => &mut self.mcp.zcode,
         }
     }
@@ -766,7 +773,7 @@ impl MultiAppConfig {
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::Hermes => &self.mcp.hermes.servers,
-                AppType::OpenClaw | AppType::Grok | AppType::Zcode => continue,
+                AppType::OpenClaw | AppType::GrokBuild | AppType::Zcode => continue,
                 AppType::Pi => &self.mcp.pi.servers,
             };
 

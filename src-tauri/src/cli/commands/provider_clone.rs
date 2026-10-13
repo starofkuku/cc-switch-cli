@@ -283,7 +283,7 @@ fn extract_api_key(app_type: &AppType, provider: &Provider) -> Option<String> {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => provider
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => provider
             .settings_config
             .get("apiKey")
             .or_else(|| provider.settings_config.get("api_key"))
@@ -389,7 +389,7 @@ fn extract_model_ids(app_type: &AppType, provider: &Provider) -> Vec<String> {
                 }
             }
         }
-        AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+        AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => {
             if let Some(models) = provider
                 .settings_config
                 .get("models")
@@ -453,7 +453,7 @@ pub(crate) fn build_provider_from_channel(
         ),
         AppType::OpenCode => build_opencode_settings_from_channel(channel, &primary),
         AppType::Hermes => build_hermes_settings_from_channel(channel)?,
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => {
             build_openclaw_settings_from_channel(channel)?
         }
         AppType::Zcode => build_zcode_settings_from_channel(channel),

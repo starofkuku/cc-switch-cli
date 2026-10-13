@@ -422,7 +422,7 @@ pub(super) fn provider_builtin_template_defs(app_type: &AppType) -> &'static [Pr
         AppType::Gemini => &PROVIDER_TEMPLATE_DEFS_GEMINI,
         AppType::OpenCode => &PROVIDER_TEMPLATE_DEFS_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_DEFS_HERMES,
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => &PROVIDER_TEMPLATE_DEFS_OPENCLAW,
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => &PROVIDER_TEMPLATE_DEFS_OPENCLAW,
         AppType::Zcode => &[],
     }
 }
@@ -434,7 +434,7 @@ pub(super) fn provider_sponsor_presets(app_type: &AppType) -> &'static [SponsorP
         AppType::Gemini => &SPONSOR_PROVIDER_PRESETS_GEMINI,
         AppType::OpenCode => &SPONSOR_PROVIDER_PRESETS_OPENCODE,
         AppType::Hermes => &SPONSOR_PROVIDER_PRESETS_HERMES,
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => &SPONSOR_PROVIDER_PRESETS_OPENCLAW,
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => &SPONSOR_PROVIDER_PRESETS_OPENCLAW,
         AppType::Zcode => &[],
     }
 }
@@ -450,7 +450,7 @@ pub(super) fn provider_after_sponsor_template_defs(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => &[],
     }
 }
@@ -915,7 +915,7 @@ impl ProviderAddFormState {
                 self.hermes_base_url.set(preset.hermes_base_url);
                 self.hermes_rate_limit_delay.set("");
             }
-            AppType::OpenClaw | AppType::Pi | AppType::Grok | AppType::Zcode => {
+            AppType::OpenClaw | AppType::Pi | AppType::GrokBuild | AppType::Zcode => {
                 if preset.id == "aicodemirror" {
                     self.opencode_api_key.set("");
                     self.opencode_base_url.set(preset.claude_base_url);

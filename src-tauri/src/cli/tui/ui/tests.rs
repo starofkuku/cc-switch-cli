@@ -3508,7 +3508,7 @@ fn installed_skill(directory: &str, name: &str) -> InstalledSkill {
             claude: true,
             codex: false,
             gemini: false,
-            grok: false,
+            grokbuild: false,
             opencode: false,
             hermes: false,
             zcode: false,
@@ -4440,8 +4440,8 @@ fn header_centers_tabs_when_room_allows() {
         .expect("claude tab should render");
     // Pi and Grok are always visible, so Grok is the last tab in the header.
     let last_label_end = lane
-        .rfind(AppType::Grok.as_str())
-        .map(|idx| idx + AppType::Grok.as_str().len())
+        .rfind(AppType::GrokBuild.as_str())
+        .map(|idx| idx + AppType::GrokBuild.as_str().len())
         .expect("grok tab should render");
     let left_gap = first_label;
     let right_gap = lane.len().saturating_sub(last_label_end);
@@ -4978,7 +4978,7 @@ fn home_connection_card_labels_mcp_and_skills_with_active_counts() {
                 claude: true,
                 codex: false,
                 gemini: false,
-                grok: false,
+                grokbuild: false,
                 opencode: false,
                 hermes: false,
                 zcode: false,
@@ -5968,7 +5968,7 @@ fn skills_page_shows_opencode_summary() {
         claude: false,
         codex: false,
         gemini: false,
-        grok: false,
+        grokbuild: false,
         opencode: true,
         hermes: false,
         zcode: false,
@@ -5996,7 +5996,7 @@ fn skills_page_shows_hermes_column_and_summary() {
         claude: false,
         codex: false,
         gemini: false,
-        grok: false,
+        grokbuild: false,
         opencode: false,
         hermes: true,
         zcode: false,
@@ -6027,7 +6027,7 @@ fn skill_detail_page_shows_opencode_enabled_state() {
         claude: false,
         codex: false,
         gemini: false,
-        grok: false,
+        grokbuild: false,
         opencode: true,
         hermes: false,
         zcode: false,
@@ -6059,7 +6059,7 @@ fn skill_detail_page_shows_hermes_enabled_state() {
         claude: false,
         codex: false,
         gemini: false,
-        grok: false,
+        grokbuild: false,
         opencode: false,
         hermes: true,
         zcode: false,
@@ -6124,7 +6124,7 @@ fn mcp_page_renders_opencode_column() {
                 claude: false,
                 codex: false,
                 gemini: false,
-                grok: false,
+                grokbuild: false,
                 opencode: true,
                 hermes: false,
             },
@@ -6162,7 +6162,7 @@ fn mcp_page_renders_hermes_column() {
                 claude: false,
                 codex: false,
                 gemini: false,
-                grok: false,
+                grokbuild: false,
                 opencode: false,
                 hermes: true,
             },
@@ -6219,7 +6219,7 @@ fn mcp_page_uses_space_toggle_key() {
                 claude: true,
                 codex: false,
                 gemini: false,
-                grok: false,
+                grokbuild: false,
                 opencode: false,
                 hermes: false,
             },
@@ -6517,7 +6517,7 @@ fn mcp_page_shows_summary_bar() {
                     claude: true,
                     codex: false,
                     gemini: false,
-                    grok: false,
+                    grokbuild: false,
                     opencode: true,
                     hermes: false,
                 },
@@ -6538,7 +6538,7 @@ fn mcp_page_shows_summary_bar() {
                     claude: false,
                     codex: true,
                     gemini: false,
-                    grok: false,
+                    grokbuild: false,
                     opencode: false,
                     hermes: false,
                 },

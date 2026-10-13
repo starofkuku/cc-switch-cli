@@ -375,7 +375,7 @@ fn prompt_and_apply_provider_api_format(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => Ok(()),
     }
 }
@@ -1236,7 +1236,7 @@ fn build_add_settings_config(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => Err(add_additive_requires_config_error(app_type)),
     }
 }
@@ -1311,7 +1311,7 @@ fn apply_add_provider_api_format(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => {}
     }
     Ok(())
@@ -1815,7 +1815,7 @@ fn set_provider_api_key(
                 options.insert("apiKey".to_string(), serde_json::json!(api_key.trim()));
             }
         }
-        AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+        AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => {
             insert_trimmed(obj, "apiKey");
             obj.remove("api_key");
         }
@@ -1865,7 +1865,7 @@ fn existing_provider_ids_for_duplicate(
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),
-            AppType::Grok => crate::grok_config::get_providers()?
+            AppType::GrokBuild => crate::grok_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect::<Vec<_>>(),

@@ -237,7 +237,7 @@ pub(crate) fn extract_provider_api_key(app_type: &AppType, provider: &Provider) 
             .or_else(|| provider.settings_config.get("api_key"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => provider
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => provider
             .settings_config
             .get("apiKey")
             .or_else(|| provider.settings_config.get("api_key"))
@@ -967,7 +967,7 @@ fn model_fetch_target(
             custom_user_agent,
             strategy: ProviderModelFetchStrategy::Bearer,
         }),
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => Ok(ModelFetchTarget {
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => Ok(ModelFetchTarget {
             base_url,
             auth_value: Some(
                 provider
@@ -1022,7 +1022,7 @@ fn default_one_off_model_fetch_strategy(app_type: &AppType) -> ProviderModelFetc
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => ProviderModelFetchStrategy::Bearer,
     }
 }

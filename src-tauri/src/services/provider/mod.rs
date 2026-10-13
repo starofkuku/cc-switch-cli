@@ -218,7 +218,7 @@ impl ProviderService {
     pub fn is_provider_key_app(app_type: &AppType) -> bool {
         matches!(
             app_type,
-            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::Grok | AppType::Zcode
+            AppType::OpenClaw | AppType::Hermes | AppType::Pi | AppType::GrokBuild | AppType::Zcode
         )
     }
 
@@ -334,7 +334,7 @@ impl ProviderService {
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect(),
-            AppType::Grok => crate::grok_config::get_providers()?
+            AppType::GrokBuild => crate::grok_config::get_providers()?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect(),
@@ -634,7 +634,7 @@ impl ProviderService {
                 .map(|ids| ids.is_some_and(|ids| ids.contains(provider_id))),
             AppType::Pi => crate::pi_config::get_providers()
                 .map(|providers| providers.contains_key(provider_id)),
-            AppType::Grok => crate::grok_config::get_providers()
+            AppType::GrokBuild => crate::grok_config::get_providers()
                 .map(|providers| providers.contains_key(provider_id)),
             AppType::Zcode => crate::zcode_config::third_party_rule_map()
                 .map(|providers| providers.contains_key(provider_id)),
@@ -856,7 +856,7 @@ impl ProviderService {
                                 &prepared.action.provider.settings_config,
                             )?;
                         }
-                        AppType::Grok => {
+                        AppType::GrokBuild => {
                             // Default model is already set in prepare_switch_document.
                         }
                         _ => {}
@@ -1271,7 +1271,7 @@ impl ProviderService {
                 drop(guard);
                 state.save()?;
             }
-            AppType::Grok => {
+            AppType::GrokBuild => {
                 let providers = crate::grok_config::get_providers()?;
                 let live_after = providers.get(provider_id).cloned().ok_or_else(|| {
                     AppError::localized(
@@ -1368,7 +1368,7 @@ impl ProviderService {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => Ok(()),
         };
 
@@ -1495,7 +1495,7 @@ impl ProviderService {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => false,
         }
     }
@@ -1632,7 +1632,7 @@ impl ProviderService {
             AppType::Hermes => Self::extract_opencode_common_config(settings_config),
             AppType::OpenClaw => Self::extract_openclaw_common_config(settings_config),
             AppType::Pi => Self::extract_openclaw_common_config(settings_config),
-            AppType::Grok | AppType::Zcode => Ok(String::new()),
+            AppType::GrokBuild | AppType::Zcode => Ok(String::new()),
         }
     }
 
@@ -2013,7 +2013,7 @@ impl ProviderService {
             return crate::hermes_config::get_current_provider_id()
                 .map(|opt| opt.unwrap_or_default());
         }
-        if matches!(app_type, AppType::Grok) {
+        if matches!(app_type, AppType::GrokBuild) {
             return crate::grok_config::get_default_model().map(|opt| opt.unwrap_or_default());
         }
         if matches!(app_type, AppType::Zcode) {
@@ -2346,7 +2346,7 @@ impl ProviderService {
             AppType::Hermes => unreachable!("additive mode apps are handled earlier"),
             AppType::OpenClaw => unreachable!("additive mode apps are handled earlier"),
             AppType::Pi => unreachable!("additive mode apps are handled earlier"),
-            AppType::Grok => unreachable!("additive mode apps are handled earlier"),
+            AppType::GrokBuild => unreachable!("additive mode apps are handled earlier"),
             AppType::Zcode => unreachable!("additive mode apps are handled earlier"),
         };
 
@@ -2498,7 +2498,7 @@ impl ProviderService {
                 }
                 crate::pi_config::read_pi_models()
             }
-            AppType::Grok => {
+            AppType::GrokBuild => {
                 let path = crate::grok_config::get_grok_config_path();
                 if !path.exists() {
                     return Err(AppError::localized(
@@ -2608,7 +2608,7 @@ impl ProviderService {
                     crate::pi_config::remove_provider(provider_id)?;
                 }
             }
-            AppType::Grok => {
+            AppType::GrokBuild => {
                 if crate::grok_config::get_grok_dir().exists() {
                     crate::grok_config::remove_model(provider_id)?;
                 }
@@ -2667,7 +2667,7 @@ impl ProviderService {
             AppType::OpenClaw => Self::import_openclaw_providers_from_live(state),
             AppType::Hermes => Self::import_hermes_providers_from_live(state),
             AppType::Pi => live::import_pi_providers_from_live(state),
-            AppType::Grok => live::import_grok_providers_from_live(state),
+            AppType::GrokBuild => live::import_grok_providers_from_live(state),
             AppType::Zcode => live::import_zcode_providers_from_live(state),
             _ => Self::import_default_config(state, app_type).map(usize::from),
         }
@@ -2764,8 +2764,8 @@ impl ProviderService {
                 })?;
                 crate::pi_config::set_default_model(provider_id, model_id)
             }
-            AppType::Grok => {
-                Self::switch(state, AppType::Grok, provider_id)?;
+            AppType::GrokBuild => {
+                Self::switch(state, AppType::GrokBuild, provider_id)?;
                 Ok(provider_id.to_string())
             }
             AppType::Zcode => {
@@ -2837,17 +2837,6 @@ impl ProviderService {
         Ok(primary)
     }
 
-    fn openclaw_default_model_references_provider(provider_id: &str) -> Result<bool, AppError> {
-        Ok(
-            crate::openclaw_config::get_default_model()?.is_some_and(|model| {
-                model
-                    .primary
-                    .split_once('/')
-                    .is_some_and(|(default_provider_id, _)| default_provider_id == provider_id)
-            }),
-        )
-    }
-
     fn guard_additive_default_provider_removal(
         app_type: &AppType,
         provider_id: &str,
@@ -2863,14 +2852,7 @@ impl ProviderService {
                     "Cannot remove the current default Hermes provider from config",
                 ))
             }
-            AppType::OpenClaw if Self::openclaw_default_model_references_provider(provider_id)? => {
-                Err(AppError::localized(
-                    "provider.remove_from_config.openclaw_default",
-                    "不能从配置中移除被当前默认模型引用的 OpenClaw 供应商",
-                    "Cannot remove the OpenClaw provider referenced by the current default model from config",
-                ))
-            }
-            AppType::Grok
+            AppType::GrokBuild
                 if crate::grok_config::get_default_model()?.as_deref() == Some(provider_id) =>
             {
                 Err(AppError::localized(
@@ -3029,7 +3011,7 @@ impl ProviderService {
                 sync_proxy_live: false,
                 activate_provider: matches!(
                     app_type,
-                    AppType::Hermes | AppType::Grok | AppType::Zcode
+                    AppType::Hermes | AppType::GrokBuild | AppType::Zcode
                 ),
             });
         }
@@ -3057,7 +3039,7 @@ impl ProviderService {
             AppType::Hermes => unreachable!("additive mode handled above"),
             AppType::OpenClaw => unreachable!("additive mode handled above"),
             AppType::Pi => unreachable!("additive mode handled above"),
-            AppType::Grok => unreachable!("additive mode handled above"),
+            AppType::GrokBuild => unreachable!("additive mode handled above"),
             AppType::Zcode => unreachable!("additive mode handled above"),
         };
 
@@ -3281,7 +3263,7 @@ impl ProviderService {
                 )?;
                 Ok(PreparedLiveWrite::Pi { models })
             }
-            AppType::Grok => {
+            AppType::GrokBuild => {
                 let document = crate::grok_config::prepare_switch_document(
                     &provider.id,
                     &provider.settings_config,
@@ -3542,7 +3524,7 @@ impl ProviderService {
             AppType::Pi => Err(AppError::Config(
                 "Pi does not support proxy takeover backups".into(),
             )),
-            AppType::Grok => Err(AppError::Config(
+            AppType::GrokBuild => Err(AppError::Config(
                 "Grok does not support proxy takeover backups".into(),
             )),
             AppType::Zcode => Err(AppError::Config(
@@ -3700,7 +3682,7 @@ impl ProviderService {
                     }
                 }
             }
-            AppType::Grok => {
+            AppType::GrokBuild => {
                 crate::grok_config::validate_settings(&provider.settings_config)?;
             }
             AppType::Zcode => {
@@ -3860,7 +3842,7 @@ impl ProviderService {
                         crate::pi_config::remove_provider(provider_id)?;
                     }
                 }
-                AppType::Grok => {
+                AppType::GrokBuild => {
                     if crate::grok_config::get_grok_dir().exists() {
                         crate::grok_config::remove_model(provider_id)?;
                     }
@@ -3914,7 +3896,7 @@ impl ProviderService {
             AppType::Pi => {
                 let _ = provider_snapshot;
             }
-            AppType::Grok | AppType::Zcode => {
+            AppType::GrokBuild | AppType::Zcode => {
                 let _ = provider_snapshot;
             }
         }

@@ -56,7 +56,7 @@ impl Database {
                             claude: enabled_claude,
                             codex: enabled_codex,
                             gemini: enabled_gemini,
-                            grok: enabled_grok,
+                            grokbuild: enabled_grok,
                             opencode: enabled_opencode,
                             hermes: enabled_hermes,
                         },
@@ -117,7 +117,7 @@ impl Database {
                     server.apps.gemini,
                     server.apps.opencode,
                     server.apps.hermes,
-                    server.apps.grok,
+                    server.apps.grokbuild,
                 ],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;

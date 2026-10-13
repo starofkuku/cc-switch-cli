@@ -116,7 +116,7 @@ impl LocalTool {
             AppType::Hermes => LocalTool::Hermes,
             AppType::OpenClaw => LocalTool::OpenClaw,
             AppType::Pi => LocalTool::Pi,
-            AppType::Grok => LocalTool::Grok,
+            AppType::GrokBuild => LocalTool::Grok,
             AppType::Zcode => LocalTool::Zcode,
         }
     }

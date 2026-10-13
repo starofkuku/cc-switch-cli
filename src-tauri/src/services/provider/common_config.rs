@@ -288,7 +288,7 @@ fn parse_json_object_snippet(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => AppError::localized(
             "common_config.opencode.invalid_json",
             format!("OpenCode 通用配置片段不是有效的 JSON：{e}"),
@@ -313,7 +313,7 @@ fn parse_json_object_snippet(
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => AppError::localized(
                 "common_config.opencode.not_object",
                 "OpenCode 通用配置片段必须是 JSON 对象",
@@ -355,7 +355,7 @@ pub(super) fn validate_common_config_snippet(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => {
             parse_json_object_snippet(app_type, snippet, false)?;
         }
@@ -416,7 +416,7 @@ pub(super) fn settings_contain_common_config(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => false,
     }
 }
@@ -486,7 +486,7 @@ pub(super) fn apply_common_config_to_settings(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => Ok(settings.clone()),
     }
 }
@@ -540,7 +540,7 @@ pub(super) fn remove_common_config_from_settings(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => Ok(settings.clone()),
     }
 }

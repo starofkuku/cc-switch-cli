@@ -736,12 +736,20 @@ fn resolve_session_from_list(
 fn supports_session_export(provider_id: &str) -> bool {
     matches!(
         provider_id,
-        "claude" | "codex" | "gemini" | "opencode" | "openclaw" | "hermes" | "grok" | "pi"
+        "claude"
+            | "codex"
+            | "gemini"
+            | "opencode"
+            | "openclaw"
+            | "hermes"
+            | "grokbuild"
+            | "grok"
+            | "pi"
     )
 }
 
 fn export_supported_apps_hint() -> &'static str {
-    "claude, codex, gemini, opencode, openclaw, hermes, grok, pi"
+    "claude, codex, gemini, opencode, openclaw, hermes, grokbuild, pi"
 }
 
 fn default_export_path(app: &str, session_id: &str) -> PathBuf {

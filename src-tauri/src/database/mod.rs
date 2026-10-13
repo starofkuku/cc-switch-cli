@@ -66,6 +66,60 @@ static DATABASE_PERMISSION_CHECK: Once = Once::new();
 /// （如 session_manager::scan_cache_store）。
 pub(crate) const SCHEMA_VERSION: i32 = 16;
 
+impl Database {
+    /// One-time data repair (no schema change): the CLI fork used to store the
+    /// Grok Build app under `app_type = 'grok'`; upstream and every synced
+    /// artifact use `'grokbuild'`. Idempotent — runs at startup, writes only
+    /// when legacy rows exist.
+    pub fn migrate_legacy_grok_app_rows(&self) -> Result<(), AppError> {
+        use rusqlite::params;
+        let conn = lock_conn!(self.conn);
+        let tables = [
+            "providers",
+            "prompts",
+            "stream_check_logs",
+            "usage_daily_rollups",
+            "provider_endpoints",
+            "provider_health",
+            "proxy_live_backup",
+            "proxy_failover_live_snapshots",
+        ];
+        let mut changed = 0usize;
+        for table in tables {
+            if !Self::table_exists(&conn, table)? {
+                continue;
+            }
+            let updated = conn
+                .execute(
+                    &format!("UPDATE {table} SET app_type = 'grokbuild' WHERE app_type = 'grok'"),
+                    params![],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            changed += updated;
+        }
+        // Common-config snippet keys live in the settings table.
+        for (from, to) in [
+            ("common_config_grok", "common_config_grokbuild"),
+            (
+                "common_config_grok_cleared",
+                "common_config_grokbuild_cleared",
+            ),
+        ] {
+            let updated = conn
+                .execute(
+                    "UPDATE settings SET key = ?1 WHERE key = ?2 AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?1)",
+                    params![to, from],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            changed += updated;
+        }
+        if changed > 0 {
+            log::info!("migrated {changed} legacy 'grok' app rows to 'grokbuild'");
+        }
+        Ok(())
+    }
+}
+
 fn database_open_flags() -> OpenFlags {
     OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE

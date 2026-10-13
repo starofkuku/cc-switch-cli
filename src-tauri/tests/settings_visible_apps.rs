@@ -17,7 +17,7 @@ mod app_config {
         OpenClaw,
         Hermes,
         Pi,
-        Grok,
+        GrokBuild,
         Zcode,
     }
 
@@ -31,7 +31,7 @@ mod app_config {
                 AppType::OpenClaw => "openclaw",
                 AppType::Hermes => "hermes",
                 AppType::Pi => "pi",
-                AppType::Grok => "grok",
+                AppType::GrokBuild => "grok",
                 AppType::Zcode => "zcode",
             }
         }
@@ -377,7 +377,7 @@ fn default_visible_apps_hide_gemini() {
             AppType::OpenClaw,
             // Pi and Grok are always visible.
             AppType::Pi,
-            AppType::Grok,
+            AppType::GrokBuild,
         ]
     );
     assert!(!visible.is_enabled_for(&AppType::Gemini));
@@ -457,7 +457,7 @@ fn load_reads_valid_non_default_visible_apps_from_settings_json() {
             AppType::Hermes,
             // Pi and Grok are always visible.
             AppType::Pi,
-            AppType::Grok,
+            AppType::GrokBuild,
         ]
     );
 }
@@ -568,7 +568,7 @@ fn set_visible_apps_accepts_zero_togglable_selection_while_pi_and_grok_remain() 
 
     assert_eq!(
         get_visible_apps().ordered_enabled(),
-        vec![AppType::Pi, AppType::Grok]
+        vec![AppType::Pi, AppType::GrokBuild]
     );
 }
 
@@ -594,7 +594,7 @@ fn update_settings_accepts_all_false_visible_apps_while_pi_and_grok_remain() {
 
     assert_eq!(
         get_visible_apps().ordered_enabled(),
-        vec![AppType::Pi, AppType::Grok]
+        vec![AppType::Pi, AppType::GrokBuild]
     );
 }
 
@@ -660,7 +660,7 @@ fn load_keeps_all_false_togglable_apps_because_pi_and_grok_are_always_visible() 
     );
     assert_eq!(
         settings.visible_apps.ordered_enabled(),
-        vec![AppType::Pi, AppType::Grok]
+        vec![AppType::Pi, AppType::GrokBuild]
     );
     assert_eq!(get_visible_apps(), settings.visible_apps);
 }
@@ -716,7 +716,7 @@ fn next_visible_app_wraps_and_skips_hidden_entries() {
     // Wrapping backwards from Claude passes the hidden apps and lands on Grok.
     assert_eq!(
         next_visible_app(&visible, &AppType::Claude, -1),
-        Some(AppType::Grok)
+        Some(AppType::GrokBuild)
     );
     assert_eq!(
         next_visible_app(&visible, &AppType::Hermes, -1),

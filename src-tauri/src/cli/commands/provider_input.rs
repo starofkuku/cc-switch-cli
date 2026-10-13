@@ -144,7 +144,7 @@ pub fn common_snippet_has_effective_config(
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => false,
     }
 }
@@ -497,7 +497,7 @@ pub fn provider_add_template_choices(app_type: &AppType) -> &'static [ProviderAd
         AppType::Gemini => &PROVIDER_TEMPLATE_CHOICES_GEMINI,
         AppType::OpenCode => &PROVIDER_TEMPLATE_CHOICES_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_CHOICES_HERMES,
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
         AppType::Zcode => &[],
     }
 }
@@ -1062,7 +1062,7 @@ fn build_sponsor_template_settings_config(
         AppType::Zcode => Err(AppError::Message(
             "ZCode does not support sponsor provider templates".to_string(),
         )),
-        AppType::OpenClaw | AppType::Pi | AppType::Grok => {
+        AppType::OpenClaw | AppType::Pi | AppType::GrokBuild => {
             if preset.id == ProviderAddTemplate::Aicodemirror {
                 build_openclaw_settings_config(
                     None,
@@ -3947,7 +3947,7 @@ pub fn prompt_settings_config(
         AppType::Gemini => prompt_gemini_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenCode => prompt_opencode_config(current).map(SettingsConfigPromptResult::new),
         AppType::Hermes => prompt_hermes_config(current).map(SettingsConfigPromptResult::new),
-        AppType::Grok => prompt_grok_config(current).map(SettingsConfigPromptResult::new),
+        AppType::GrokBuild => prompt_grok_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenClaw | AppType::Pi => {
             prompt_openclaw_config(current).map(SettingsConfigPromptResult::new)
         }
@@ -4985,7 +4985,7 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
                 println!("  {}: {}", texts::model_label(), models.len());
             }
         }
-        AppType::Grok => {
+        AppType::GrokBuild => {
             if let Some(api_key) = provider
                 .settings_config
                 .get("api_key")

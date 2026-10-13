@@ -54,11 +54,11 @@ api_key = "old-key"
     let state = AppState::try_new().expect("state");
     ProviderService::add(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         grok_provider("relay", "grok-4.5", "https://relay.example/v1", "sk-relay"),
     )
     .expect("add");
-    ProviderService::switch(&state, AppType::Grok, "relay").expect("switch");
+    ProviderService::switch(&state, AppType::GrokBuild, "relay").expect("switch");
 
     let text = fs::read_to_string(home.join(".grok").join("config.toml")).expect("read live");
     assert!(text.contains("# keep comment"), "{text}");
@@ -70,7 +70,7 @@ api_key = "old-key"
         "{text}"
     );
     assert_eq!(
-        ProviderService::current(&state, AppType::Grok).expect("current"),
+        ProviderService::current(&state, AppType::GrokBuild).expect("current"),
         "relay"
     );
 }
@@ -96,13 +96,14 @@ api_key = "sk-relay"
     let state = AppState::try_new().expect("state");
     ProviderService::add(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         grok_provider("relay", "grok-4.5", "https://relay.example/v1", "sk-relay"),
     )
     .expect("add");
-    ProviderService::switch(&state, AppType::Grok, "relay").expect("switch");
+    ProviderService::switch(&state, AppType::GrokBuild, "relay").expect("switch");
 
-    let err = ProviderService::delete(&state, AppType::Grok, "relay").expect_err("reject current");
+    let err =
+        ProviderService::delete(&state, AppType::GrokBuild, "relay").expect_err("reject current");
     let msg = err.to_string();
     assert!(
         msg.contains("当前") || msg.to_lowercase().contains("current"),
@@ -136,19 +137,19 @@ api_key = "b"
     let state = AppState::try_new().expect("state");
     ProviderService::add(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         grok_provider("keep", "a", "https://a.example/v1", "a"),
     )
     .expect("add keep");
     ProviderService::add(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         grok_provider("drop", "b", "https://b.example/v1", "b"),
     )
     .expect("add drop");
-    ProviderService::switch(&state, AppType::Grok, "keep").expect("switch keep");
+    ProviderService::switch(&state, AppType::GrokBuild, "keep").expect("switch keep");
 
-    ProviderService::delete(&state, AppType::Grok, "drop").expect("delete drop");
+    ProviderService::delete(&state, AppType::GrokBuild, "drop").expect("delete drop");
 
     let text = fs::read_to_string(home.join(".grok").join("config.toml")).expect("read live");
     assert!(text.contains("[model.keep]"), "{text}");
@@ -176,7 +177,7 @@ name = "Imported Relay"
     );
 
     let state = AppState::try_new_with_startup_recovery().expect("startup state");
-    let providers = ProviderService::list(&state, AppType::Grok).expect("list");
+    let providers = ProviderService::list(&state, AppType::GrokBuild).expect("list");
     assert!(
         providers.contains_key("imported"),
         "expected imported provider, got {:?}",

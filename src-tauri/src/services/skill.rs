@@ -632,7 +632,7 @@ impl SkillService {
                 }
             }
             AppType::Pi => return Ok(crate::pi_config::get_pi_dir().join("skills")),
-            AppType::Grok => return Ok(crate::grok_config::get_grok_dir().join("skills")),
+            AppType::GrokBuild => return Ok(crate::grok_config::get_grok_dir().join("skills")),
             AppType::Zcode => return Ok(crate::zcode_config::get_zcode_dir().join("skills")),
         }
 
@@ -652,7 +652,7 @@ impl SkillService {
             AppType::Hermes => home.join(".hermes").join("skills"),
             AppType::OpenClaw => home.join(".openclaw").join("skills"),
             AppType::Pi => crate::pi_config::get_pi_dir().join("skills"),
-            AppType::Grok => crate::grok_config::get_grok_dir().join("skills"),
+            AppType::GrokBuild => crate::grok_config::get_grok_dir().join("skills"),
             AppType::Zcode => crate::zcode_config::get_zcode_dir().join("skills"),
         })
     }

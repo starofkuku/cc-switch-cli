@@ -2189,7 +2189,7 @@ mod tests {
 
     #[test]
     #[serial(home_settings)]
-    fn openclaw_remove_from_config_rejects_default_provider_even_without_ui_guard() {
+    fn openclaw_remove_from_config_allows_default_provider_dangling() {
         let temp_home = TempDir::new().expect("create temp home");
         let _env = EnvGuard::set_home(temp_home.path());
         let _settings = SettingsGuard::with_openclaw_dir(temp_home.path());
@@ -2208,6 +2208,17 @@ mod tests {
             extra: HashMap::new(),
         })
         .expect("seed default model");
+
+        // remove_from_live_config resolves the provider from the database, so
+        // import the seeded live provider first.
+        {
+            let state = crate::AppState::try_new().expect("create state");
+            crate::services::provider::ProviderService::import_live_config(
+                &state,
+                AppType::OpenClaw,
+            )
+            .expect("import live openclaw providers");
+        }
 
         let mut terminal = TuiTerminal::new_for_test().expect("create terminal");
         let mut app = App::new(Some(AppType::OpenClaw));
@@ -2234,16 +2245,18 @@ mod tests {
             managed_auth_req_tx: None,
         };
 
-        let err = remove_from_config(&mut ctx, "p1".to_string())
-            .expect_err("default provider should not be removable from live config");
-        match err {
-            AppError::Localized { zh, .. } => assert!(zh.contains("默认")),
-            AppError::Config(msg) => assert!(msg.contains("默认")),
-            other => panic!("unexpected error: {other:?}"),
-        }
-        assert!(crate::openclaw_config::get_providers()
-            .expect("read providers after failed remove")
+        // Upstream semantics: deleting a provider the default model still
+        // references is allowed and leaves the default dangling (8db0dff2
+        // aligned provider removal with upstream).
+        remove_from_config(&mut ctx, "p1".to_string())
+            .expect("default-referenced provider should be removable (dangling default)");
+        assert!(!crate::openclaw_config::get_providers()
+            .expect("read providers after remove")
             .contains_key("p1"));
+        let default = crate::openclaw_config::get_default_model()
+            .expect("read default after remove")
+            .expect("default should remain, dangling");
+        assert_eq!(default.primary, "p1/model-primary");
     }
 
     #[test]

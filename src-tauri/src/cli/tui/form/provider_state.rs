@@ -341,7 +341,7 @@ impl ProviderAddFormState {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => false,
         }
     }
@@ -400,7 +400,7 @@ impl ProviderAddFormState {
 
         if matches!(
             self.app_type,
-            AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::Grok | AppType::Zcode
+            AppType::Hermes | AppType::OpenClaw | AppType::Pi | AppType::GrokBuild | AppType::Zcode
         ) && self.copy_source_id.is_none()
         {
             fields.insert(0, ProviderAddField::Id);
@@ -467,7 +467,7 @@ impl ProviderAddFormState {
                 fields.push(ProviderAddField::HermesAdvancedDivider);
                 fields.push(ProviderAddField::HermesRateLimitDelay);
             }
-            AppType::OpenClaw | AppType::Pi | AppType::Grok | AppType::Zcode => {
+            AppType::OpenClaw | AppType::Pi | AppType::GrokBuild | AppType::Zcode => {
                 fields.push(ProviderAddField::OpenClawApiProtocol);
                 fields.push(ProviderAddField::OpenCodeApiKey);
                 fields.push(ProviderAddField::OpenCodeBaseUrl);
@@ -1022,7 +1022,7 @@ impl ProviderAddFormState {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => false,
         }
     }
@@ -1729,7 +1729,7 @@ impl ProviderAddFormState {
             AppType::OpenCode
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => self.opencode_base_url.value.clone(),
         }
     }
@@ -1750,7 +1750,7 @@ impl ProviderAddFormState {
             AppType::OpenCode
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => (&self.opencode_api_key.value, &self.opencode_base_url.value),
         };
         (

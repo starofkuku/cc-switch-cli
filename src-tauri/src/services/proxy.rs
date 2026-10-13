@@ -2238,7 +2238,7 @@ impl ProxyService {
             | AppType::Hermes
             | AppType::OpenClaw
             | AppType::Pi
-            | AppType::Grok
+            | AppType::GrokBuild
             | AppType::Zcode => Ok(backup_snapshot),
         }
     }

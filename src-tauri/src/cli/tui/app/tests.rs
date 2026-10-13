@@ -1082,7 +1082,7 @@ mod tests {
         // order and wrapping backwards from Claude lands on Grok rather than OpenClaw.
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::SetAppType(AppType::Grok)
+            Action::SetAppType(AppType::GrokBuild)
         ));
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('【')), &data()),
-            Action::SetAppType(AppType::Grok)
+            Action::SetAppType(AppType::GrokBuild)
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('］')), &data()),
@@ -1115,7 +1115,7 @@ mod tests {
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('［')), &data()),
-            Action::SetAppType(AppType::Grok)
+            Action::SetAppType(AppType::GrokBuild)
         ));
     }
 
@@ -1208,7 +1208,7 @@ mod tests {
         ));
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::SetAppType(AppType::Grok)
+            Action::SetAppType(AppType::GrokBuild)
         ));
     }
 
@@ -1232,7 +1232,7 @@ mod tests {
         // Wrapping backwards past the hidden apps reaches Grok, the last always-visible app.
         assert!(matches!(
             app.on_key(key(KeyCode::Char('[')), &data()),
-            Action::SetAppType(AppType::Grok)
+            Action::SetAppType(AppType::GrokBuild)
         ));
     }
 

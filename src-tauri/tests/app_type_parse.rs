@@ -40,10 +40,10 @@ fn hermes_is_listed_and_uses_additive_mode() {
 
 #[test]
 fn grok_is_listed_and_uses_additive_mode() {
-    assert!(matches!(AppType::from_str("grok"), Ok(AppType::Grok)));
-    assert!(AppType::all().any(|app| app == AppType::Grok));
-    assert!(AppType::Grok.is_additive_mode());
-    assert_eq!(AppType::Grok.as_str(), "grok");
+    assert!(matches!(AppType::from_str("grok"), Ok(AppType::GrokBuild)));
+    assert!(AppType::all().any(|app| app == AppType::GrokBuild));
+    assert!(AppType::GrokBuild.is_additive_mode());
+    assert_eq!(AppType::GrokBuild.as_str(), "grok");
 }
 
 #[test]

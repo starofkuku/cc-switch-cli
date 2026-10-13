@@ -21,7 +21,7 @@ impl StreamCheckService {
             }
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
-            AppType::Pi | AppType::Grok => Self::extract_openclaw_base_url(provider),
+            AppType::Pi | AppType::GrokBuild => Self::extract_openclaw_base_url(provider),
             // ZCode rule shape: base url lives at config.api.baseUrl.
             AppType::Zcode => Ok(provider
                 .settings_config

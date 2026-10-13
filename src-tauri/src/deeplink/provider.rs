@@ -143,7 +143,7 @@ fn build_provider_from_request(
         AppType::Hermes => build_hermes_settings(request),
         AppType::OpenClaw => build_openclaw_settings(request),
         AppType::Pi => build_openclaw_settings(request),
-        AppType::Grok => build_grok_settings(request),
+        AppType::GrokBuild => build_grok_settings(request),
         AppType::Zcode => build_zcode_settings(request),
     };
 

@@ -413,7 +413,7 @@ fn takeover_enabled_for(takeovers: &ProxyTakeoverStatus, app_type: &AppType) -> 
         | AppType::Hermes
         | AppType::OpenClaw
         | AppType::Pi
-        | AppType::Grok
+        | AppType::GrokBuild
         | AppType::Zcode => false,
     }
 }

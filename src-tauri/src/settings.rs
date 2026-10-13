@@ -122,7 +122,7 @@ impl VisibleApps {
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => self.openclaw,
-            AppType::Pi | AppType::Grok | AppType::Zcode => true,
+            AppType::Pi | AppType::GrokBuild | AppType::Zcode => true,
         }
     }
 
@@ -134,7 +134,7 @@ impl VisibleApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => self.openclaw = enabled,
-            AppType::Pi | AppType::Grok | AppType::Zcode => {
+            AppType::Pi | AppType::GrokBuild | AppType::Zcode => {
                 let _ = enabled;
             }
         }
@@ -166,7 +166,7 @@ fn app_order() -> [AppType; 8] {
         AppType::Hermes,
         AppType::OpenClaw,
         AppType::Pi,
-        AppType::Grok,
+        AppType::GrokBuild,
     ]
 }
 
@@ -1075,7 +1075,7 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
-        AppType::Pi | AppType::Grok | AppType::Zcode => None,
+        AppType::Pi | AppType::GrokBuild | AppType::Zcode => None,
     }
 }
 
@@ -1089,7 +1089,7 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::OpenCode => settings.current_provider_opencode = id.map(|value| value.to_string()),
         AppType::Hermes => settings.current_provider_hermes = id.map(|value| value.to_string()),
         AppType::OpenClaw => settings.current_provider_openclaw = id.map(|value| value.to_string()),
-        AppType::Pi | AppType::Grok | AppType::Zcode => {}
+        AppType::Pi | AppType::GrokBuild | AppType::Zcode => {}
     }
 
     update_settings(settings)

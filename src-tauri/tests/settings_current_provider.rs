@@ -14,7 +14,7 @@ mod app_config {
         OpenClaw,
         Hermes,
         Pi,
-        Grok,
+        GrokBuild,
         Zcode,
     }
 
@@ -28,7 +28,7 @@ mod app_config {
                 AppType::OpenClaw => "openclaw",
                 AppType::Hermes => "hermes",
                 AppType::Pi => "pi",
-                AppType::Grok => "grok",
+                AppType::GrokBuild => "grok",
                 AppType::Zcode => "zcode",
             }
         }

@@ -22,6 +22,7 @@ impl AppState {
 
         if db_path.exists() {
             let db = Arc::new(Database::init()?);
+            db.migrate_legacy_grok_app_rows()?;
             let mut config = export_db_to_multi_app_config(&db)?;
             migrate_legacy_codex_configs(&db, &mut config);
             crate::services::provider::ProviderService::migrate_common_config_upstream_semantics_if_needed(
@@ -457,7 +458,7 @@ fn export_db_to_multi_app_config(db: &Database) -> Result<MultiAppConfig, AppErr
         AppType::Hermes,
         AppType::OpenClaw,
         AppType::Pi,
-        AppType::Grok,
+        AppType::GrokBuild,
     ] {
         let app_key = app.as_str();
         let providers = db.get_all_providers(app_key)?;
@@ -475,7 +476,7 @@ fn export_db_to_multi_app_config(db: &Database) -> Result<MultiAppConfig, AppErr
             AppType::Hermes => config.prompts.hermes.prompts = prompts.into_iter().collect(),
             AppType::OpenClaw => config.prompts.openclaw.prompts = prompts.into_iter().collect(),
             AppType::Pi => config.prompts.pi.prompts = prompts.into_iter().collect(),
-            AppType::Grok => config.prompts.grok.prompts = prompts.into_iter().collect(),
+            AppType::GrokBuild => config.prompts.grokbuild.prompts = prompts.into_iter().collect(),
             AppType::Zcode => config.prompts.zcode.prompts = prompts.into_iter().collect(),
         }
 
@@ -515,7 +516,7 @@ fn persist_multi_app_config_to_db_preserving_current_providers(
         AppType::Hermes,
         AppType::OpenClaw,
         AppType::Pi,
-        AppType::Grok,
+        AppType::GrokBuild,
     ] {
         let app_key = app.as_str();
         let manager = config.get_manager(&app);

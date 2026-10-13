@@ -51,7 +51,7 @@ impl Database {
                         gemini: row.get(10)?,
                         opencode: row.get(11)?,
                         hermes: row.get(12)?,
-                        grok: if has_grokbuild { row.get(13)? } else { false },
+                        grokbuild: if has_grokbuild { row.get(13)? } else { false },
                         // ZCode enablement lives in the skill service sidecar,
                         // not in this upstream-synced table.
                         zcode: false,
@@ -103,7 +103,7 @@ impl Database {
                     gemini: row.get(10)?,
                     opencode: row.get(11)?,
                     hermes: row.get(12)?,
-                    grok: if has_grokbuild { row.get(13)? } else { false },
+                    grokbuild: if has_grokbuild { row.get(13)? } else { false },
                     // ZCode enablement lives in the skill service sidecar.
                     zcode: false,
                 },
@@ -142,7 +142,7 @@ impl Database {
                     skill.apps.gemini,
                     skill.apps.opencode,
                     skill.apps.hermes,
-                    skill.apps.grok,
+                    skill.apps.grokbuild,
                     skill.installed_at,
                 ],
             )
@@ -205,7 +205,7 @@ impl Database {
                     apps.gemini,
                     apps.opencode,
                     apps.hermes,
-                    apps.grok,
+                    apps.grokbuild,
                     id
                 ],
             )

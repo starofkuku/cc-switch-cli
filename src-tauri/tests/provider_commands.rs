@@ -1439,7 +1439,7 @@ command = "echo"
                 claude: false,
                 codex: true,
                 gemini: false,
-                grok: false,
+                grokbuild: false,
                 opencode: false,
                 hermes: false,
             },
@@ -2910,7 +2910,7 @@ fn provider_add_model_rejects_unknown_provider_and_non_pi() {
 
     let err = ProviderService::add_models_to_provider(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         "whatever",
         &["m1".to_string()],
         false,
@@ -2986,7 +2986,7 @@ fn provider_export_live_rejects_non_pi_apps() {
     let state = AppState::try_new().expect("state");
     let err = ProviderService::export_live_config_with_options(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         LiveExportOptions { prune: false },
     )
     .expect_err("non-pi apps must be rejected");
@@ -3038,7 +3038,7 @@ fn provider_import_live_options_reject_non_pi_apps() {
     let state = AppState::try_new().expect("state");
     let err = ProviderService::import_live_config_with_options(
         &state,
-        AppType::Grok,
+        AppType::GrokBuild,
         LiveImportOptions {
             update: true,
             prune: false,
