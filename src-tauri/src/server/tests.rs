@@ -111,6 +111,45 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cors_preflight_succeeds_without_token() {
+    let (addr, ()) = spawn_test_server().await;
+    // Browser preflight: no Authorization header, must not be 401.
+    let preflight = client()
+        .request(reqwest::Method::OPTIONS, format!("http://{addr}/api/apps"))
+        .header("Origin", "http://localhost:5173")
+        .header("Access-Control-Request-Method", "GET")
+        .header("Access-Control-Request-Headers", "authorization")
+        .send()
+        .await
+        .expect("preflight request");
+    assert_eq!(preflight.status().as_u16(), 200);
+    assert_eq!(
+        preflight
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+
+    // A normal authenticated request also carries the CORS header.
+    let response = client()
+        .get(format!("http://{addr}/api/apps"))
+        .header("Origin", "http://localhost:5173")
+        .header("Authorization", "Bearer test-token-0123456789abcdef")
+        .send()
+        .await
+        .expect("cors request");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_crud_roundtrip_for_zcode() {
     let (addr, ()) = spawn_test_server().await;
     let base = format!("http://{addr}");

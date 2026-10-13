@@ -17,6 +17,7 @@ use std::sync::Arc;
 use axum::routing::{get, patch, post};
 use axum::Router;
 use tokio::net::TcpListener;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::AppState;
 use error::{ApiError, ApiResult};
@@ -129,12 +130,24 @@ pub fn router(state: ServerState) -> Router {
             auth::auth_middleware,
         ));
 
+    // CORS is deliberately open (`*`): the security boundary is the bearer
+    // token, not the origin — no cookies or ambient credentials are used, so
+    // cross-origin pages can only ever receive 401 without the token. The
+    // layer must sit OUTSIDE the auth middleware: browser preflights carry no
+    // Authorization header and would otherwise be rejected before CORS can
+    // answer them.
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         // Health and the OpenAPI document stay reachable without a token so
         // that probes and tooling can discover the API before authenticating.
         .route("/api/health", get(routes::health))
         .route("/api/openapi.json", get(routes::docs::openapi_json))
         .merge(protected)
+        .layer(cors)
         .with_state(state)
 }
 
