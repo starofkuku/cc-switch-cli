@@ -329,6 +329,7 @@ pub(crate) async fn fetch_models(
         .clone();
     // `fetch_live_model_ids` builds its own tokio runtime internally, which
     // would panic on an async worker thread — run it on the blocking pool.
+
     let models = tokio::task::spawn_blocking(move || {
         crate::cli::commands::provider_inspect::fetch_live_model_ids(&app, &provider)
     })
@@ -352,4 +353,60 @@ fn unmask_settings(incoming: &mut Value, stored: &Value) {
             }
         }
     }
+}
+
+#[derive(Deserialize, Default, ToSchema)]
+pub(crate) struct ImportLiveRequest {
+    /// Overwrite existing providers with the live content instead of skipping
+    /// them. Currently supported for Pi only; other apps reject the flag.
+    #[serde(default)]
+    pub update: bool,
+    /// Additionally delete managed providers that no longer exist in the live
+    /// config (rows created purely inside cc-switch are never destroyed).
+    /// Currently supported for Pi only.
+    #[serde(default)]
+    pub prune: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/apps/{app}/providers/import-live",
+    request_body = ImportLiveRequest,
+    params(("app" = String, Path, description = "App id: claude | codex | gemini | opencode | hermes | openclaw | pi | grokbuild (alias grok) | zcode")),
+    security(("bearer_token" = [])),
+    responses(
+        (status = 200, description = "Import summary: providers imported from the live config into the database. `{}` = add-only, `{\"update\": true}` overwrites existing entries, `{\"prune\": true}` also removes managed entries missing from live (Pi only for both flags)"),
+        (status = 401, description = "Missing or invalid bearer token", body = ErrorBody),
+        (status = 409, description = "Live config missing/unreadable, or --update/--prune requested for an app other than pi", body = ErrorBody),
+    )
+)]
+pub(crate) async fn import_live(
+    AxPath(app_raw): AxPath<String>,
+    State(state): State<ServerState>,
+    body: Option<Json<ImportLiveRequest>>,
+) -> ApiResult<Json<Value>> {
+    let app = super::super::parse_app(&app_raw)?;
+    let request = body.map(|Json(body)| body).unwrap_or_default();
+    let summary = crate::services::provider::ProviderService::import_live_config_with_options(
+        &state.app,
+        app.clone(),
+        crate::services::provider::LiveImportOptions {
+            update: request.update,
+            prune: request.prune,
+        },
+    )?;
+    state.events.emit(
+        "provider_imported_live",
+        Some(app.as_str()),
+        json!({
+            "added": summary.added,
+            "updated": summary.updated,
+            "pruned": summary.pruned,
+        }),
+    );
+    Ok(Json(json!({
+        "added": summary.added,
+        "updated": summary.updated,
+        "pruned": summary.pruned,
+    })))
 }

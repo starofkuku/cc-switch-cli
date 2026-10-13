@@ -113,6 +113,84 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn import_live_add_only_and_flag_rejection() {
+    init_test_env();
+    let home = crate::config::home_dir().expect("home");
+    let zcode_v2 = home.join(".zcode").join("v2");
+    std::fs::create_dir_all(&zcode_v2).expect("create zcode v2 dir");
+    // Live has one third-party provider the database has never seen.
+    std::fs::write(
+        zcode_v2.join("provider_config.json"),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "config": {
+                "providerOrder": ["manual-relay"],
+                "providerConfigRules": { "providerRules": [
+                    {
+                        "providerId": "manual-relay",
+                        "providerName": "Manual",
+                        "config": {
+                            "access": { "type": "api-key", "apiKey": "sk-manual" },
+                            "api": { "type": "openai-chat-completions", "baseUrl": "https://manual.example/v1" },
+                            "personalModelIds": ["m1"],
+                            "modelOrder": ["m1"]
+                        }
+                    }
+                ]},
+                "modelConfigRules": {
+                    "providerModelRules": [],
+                    "manualProviderModelRules": []
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("seed zcode live");
+
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+
+    // Add-only import (empty body) picks the live provider up.
+    let imported = client()
+        .post(format!(
+            "http://{addr}/api/apps/zcode/providers/import-live"
+        ))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("import request");
+    let status = imported.status();
+    let body: serde_json::Value = imported.json().await.expect("import body");
+    assert_eq!(status, 200, "import: {body}");
+    assert_eq!(body["added"], 1, "one provider imported: {body}");
+
+    let listed = client()
+        .get(format!("http://{addr}/api/apps/zcode/providers"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("list request")
+        .json::<serde_json::Value>()
+        .await
+        .expect("list json");
+    assert!(listed["providers"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|p| p["id"] == "manual-relay")));
+
+    // --update is Pi-only; other apps must reject it instead of ignoring it.
+    let rejected = client()
+        .post(format!(
+            "http://{addr}/api/apps/zcode/providers/import-live"
+        ))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "update": true }))
+        .send()
+        .await
+        .expect("flag rejection request");
+    assert_eq!(rejected.status(), 409);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn webdav_upload_returns_error_instead_of_panicking() {
     // Regression guard: the sync service builds its own tokio runtime, which
     // used to panic the whole server ("cannot start a runtime from within a

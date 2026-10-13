@@ -87,6 +87,10 @@ pub fn router(state: ServerState) -> Router {
             get(routes::apps::fetch_models),
         )
         .route(
+            "/api/apps/:app/providers/import-live",
+            post(routes::apps::import_live),
+        )
+        .route(
             "/api/apps/:app/prompts",
             get(routes::prompts::list_prompts).post(routes::prompts::create_prompt),
         )
