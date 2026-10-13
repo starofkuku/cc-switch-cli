@@ -7,6 +7,19 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.19] - 2026-10-13
+
+### Added
+
+- **Server / local HTTP management API**: new `cc-switch server [--port] [--host] [--token]` runs a token-guarded REST API on `127.0.0.1:7861` by default — providers CRUD/switch/model discovery, MCP registry, prompts presets (incl. activate), skills enablement, WebDAV upload/download triggers, proxy status and settings, all routed through the existing services layer (the server never touches the database or live files directly). `cc-switch server token` prints the access token (stored 0600 at `~/.cc-switch/server-token`). Responses mask secrets with `***`; settings PATCH keeps stored values for masked fields. `GET /api/openapi.json` serves a fully annotated OpenAPI 3 document (utoipa, compile-time): bearer security scheme, per-endpoint 4xx responses with a shared `ErrorBody` schema, path/field descriptions — third parties can develop against this single document (Swagger UI try-it-out works after Authorize). `GET /api/events` streams write events over SSE (server-handled writes only; clients poll as fallback).
+
+### Changed
+
+- **Apps / Grok Build naming**: the app is now stored as `grokbuild` everywhere, matching upstream (`--app` label `grok-build`, with `grok` kept as a CLI/serde/`AppType::from_str` alias so existing commands and old config files keep working). A startup migration rewrites legacy `app_type='grok'` rows across eight tables plus two settings keys, making WebDAV snapshots and CSV/deeplink app ids upstream-compatible.
+
+### Fixed
+
+- **Provider deletion / OpenClaw**: removed the dangling-default removal guard so deleting a provider the default model still references succeeds and leaves the default dangling — aligning with upstream semantics and un-breaking the previously contradictory `provider_service`/TUI test pair.
 ## [5.10.18] - 2026-09-28
 
 ### Added
