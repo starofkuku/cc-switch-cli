@@ -1,6 +1,7 @@
 //! In-crate server tests: auth, provider CRUD, OpenAPI document.
 
 use super::*;
+use crate::app_config::AppType;
 
 thread_local! {
     static TEST_ENV: std::cell::RefCell<Option<(tempfile::TempDir, crate::test_support::TestEnvGuard)>> =
@@ -22,7 +23,7 @@ fn init_test_env() {
     });
 }
 
-async fn spawn_test_server() -> (std::net::SocketAddr, ()) {
+async fn spawn_test_server() -> (std::net::SocketAddr, ServerState) {
     init_test_env();
     let state = build_state(&ServerConfig {
         token: Some("test-token-0123456789abcdef".to_string()),
@@ -33,10 +34,11 @@ async fn spawn_test_server() -> (std::net::SocketAddr, ()) {
         .await
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
+    let serve_state = state.clone();
     tokio::spawn(async move {
-        let _ = serve(listener, state).await;
+        let _ = serve(listener, serve_state).await;
     });
-    (addr, ())
+    (addr, state)
 }
 
 fn client() -> reqwest::Client {
@@ -45,7 +47,7 @@ fn client() -> reqwest::Client {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_is_public_and_reports_apps() {
-    let (addr, ()) = spawn_test_server().await;
+    let (addr, _state) = spawn_test_server().await;
     let body: serde_json::Value = client()
         .get(format!("http://{addr}/api/health"))
         .send()
@@ -60,7 +62,7 @@ async fn health_is_public_and_reports_apps() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn protected_routes_reject_missing_or_wrong_token() {
-    let (addr, ()) = spawn_test_server().await;
+    let (addr, _state) = spawn_test_server().await;
     let base = format!("http://{addr}");
 
     let missing = client()
@@ -89,7 +91,7 @@ async fn protected_routes_reject_missing_or_wrong_token() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn openapi_document_lists_core_paths() {
-    let (addr, ()) = spawn_test_server().await;
+    let (addr, _state) = spawn_test_server().await;
     let body: serde_json::Value = client()
         .get(format!("http://{addr}/api/openapi.json"))
         .send()
@@ -111,8 +113,96 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn webdav_upload_returns_error_instead_of_panicking() {
+    // Regression guard: the sync service builds its own tokio runtime, which
+    // used to panic the whole server ("cannot start a runtime from within a
+    // runtime") before the spawn_blocking fix. Pointing at a dead local port
+    // must yield a JSON error, never a crash.
+    init_test_env();
+    crate::settings::set_webdav_sync_settings(Some(crate::settings::WebDavSyncSettings {
+        enabled: true,
+        base_url: "http://127.0.0.1:9/dav".to_string(),
+        remote_root: "cc-switch-test".to_string(),
+        profile: "default".to_string(),
+        username: "u".to_string(),
+        password: "p".to_string(),
+        auto_sync: false,
+        status: Default::default(),
+    }))
+    .expect("configure webdav");
+
+    let (addr, _state) = spawn_test_server().await;
+    let response = client()
+        .post(format!("http://{addr}/api/sync/webdav/upload"))
+        .header("Authorization", "Bearer test-token-0123456789abcdef")
+        .send()
+        .await
+        .expect("upload request must not panic the server");
+    assert_eq!(response.status(), 409);
+    let body: serde_json::Value = response.json().await.expect("error body");
+    assert!(body["error"]
+        .as_str()
+        .is_some_and(|message| !message.is_empty()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_models_returns_error_instead_of_panicking() {
+    // Same runtime-nesting guard for the model discovery endpoint.
+    init_test_env();
+    let home = crate::config::home_dir().expect("home");
+    let zcode_v2 = home.join(".zcode").join("v2");
+    std::fs::create_dir_all(&zcode_v2).expect("create zcode v2 dir");
+    std::fs::write(
+        zcode_v2.join("provider_config.json"),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "config": {
+                "providerOrder": [],
+                "providerConfigRules": { "providerRules": [] },
+                "modelConfigRules": {
+                    "providerModelRules": [],
+                    "manualProviderModelRules": []
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("seed zcode config");
+
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+    let create = client()
+        .post(format!("http://{addr}/api/apps/zcode/providers"))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({
+            "id": "dead-endpoint",
+            "name": "Dead",
+            "settingsConfig": {
+                "access": { "type": "api-key", "apiKey": "sk-dead" },
+                "api": { "type": "openai-chat-completions", "baseUrl": "http://127.0.0.1:9/v1" },
+                "personalModelIds": ["m1"],
+                "modelOrder": ["m1"]
+            }
+        }))
+        .send()
+        .await
+        .expect("create request");
+    assert_eq!(create.status(), 200);
+
+    let response = client()
+        .get(format!(
+            "http://{addr}/api/apps/zcode/providers/dead-endpoint/fetch-models"
+        ))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("fetch-models must not panic the server");
+    assert_eq!(response.status(), 409);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cors_preflight_succeeds_without_token() {
-    let (addr, ()) = spawn_test_server().await;
+    let (addr, _state) = spawn_test_server().await;
     // Browser preflight: no Authorization header, must not be 401.
     let preflight = client()
         .request(reqwest::Method::OPTIONS, format!("http://{addr}/api/apps"))
@@ -159,7 +249,7 @@ async fn cors_preflight_succeeds_without_token() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_crud_roundtrip_for_zcode() {
-    let (addr, ()) = spawn_test_server().await;
+    let (addr, _state) = spawn_test_server().await;
     let base = format!("http://{addr}");
     let auth = "Bearer test-token-0123456789abcdef";
 
@@ -249,6 +339,43 @@ async fn provider_crud_roundtrip_for_zcode() {
         .await
         .expect("second create request");
     assert_eq!(second.status(), 200);
+
+    // Masked read-modify-write: PATCH the *** mask back with another field
+    // changed; the stored apiKey must survive.
+    let patched = client()
+        .patch(format!("{base}/api/apps/zcode/providers/relay-backup"))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({
+            "settingsConfig": {
+                "access": { "type": "api-key", "apiKey": "***" },
+                "api": { "type": "openai-chat-completions", "baseUrl": "https://backup2.example/v1" },
+                "personalModelIds": ["backup-model"],
+                "modelOrder": ["backup-model"]
+            }
+        }))
+        .send()
+        .await
+        .expect("patch request");
+    assert_eq!(patched.status(), 200, "patch: {:?}", patched.text().await);
+
+    {
+        let providers =
+            crate::services::provider::ProviderService::list(&_state.app, AppType::Zcode)
+                .expect("list stored providers");
+        let stored = providers
+            .get("relay-backup")
+            .expect("relay-backup stored")
+            .settings_config
+            .clone();
+        assert_eq!(
+            stored["access"]["apiKey"], "sk-backup",
+            "mask must keep stored key"
+        );
+        assert_eq!(
+            stored["api"]["baseUrl"], "https://backup2.example/v1",
+            "non-masked fields update normally"
+        );
+    }
 
     let deleted = client()
         .delete(format!("{base}/api/apps/zcode/providers/relay-demo"))

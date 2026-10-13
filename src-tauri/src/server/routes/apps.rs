@@ -234,7 +234,10 @@ pub(crate) async fn update_provider(
     if let Some(name) = body.name {
         provider.name = name;
     }
-    if let Some(settings) = body.settings_config {
+    if let Some(mut settings) = body.settings_config {
+        // GET responses mask secrets as `***`; a client doing read-modify-write
+        // would otherwise overwrite the stored credentials with the mask.
+        unmask_settings(&mut settings, &provider.settings_config);
         provider.settings_config = settings;
     }
     if let Some(website_url) = body.website_url {
@@ -322,7 +325,31 @@ pub(crate) async fn fetch_models(
     let providers = ProviderService::list(&state.app, app.clone())?;
     let provider = providers
         .get(&id)
-        .ok_or_else(|| ApiError::not_found(format!("provider '{id}' not found")))?;
-    let models = crate::cli::commands::provider_inspect::fetch_live_model_ids(&app, provider)?;
+        .ok_or_else(|| ApiError::not_found(format!("provider '{id}' not found")))?
+        .clone();
+    // `fetch_live_model_ids` builds its own tokio runtime internally, which
+    // would panic on an async worker thread — run it on the blocking pool.
+    let models = tokio::task::spawn_blocking(move || {
+        crate::cli::commands::provider_inspect::fetch_live_model_ids(&app, &provider)
+    })
+    .await
+    .map_err(|_| ApiError::bad_request("model fetch task panicked"))?
+    .map_err(ApiError::from)?;
     Ok(Json(json!({ "models": models })))
+}
+
+/// Replace `"***"` leaves in `incoming` with the value at the same path in
+/// `stored`, so masked read-modify-write PATCHes never erase credentials.
+fn unmask_settings(incoming: &mut Value, stored: &Value) {
+    if let (Value::Object(incoming_map), Value::Object(stored_map)) = (incoming, stored) {
+        for (key, stored_value) in stored_map {
+            match incoming_map.get_mut(key) {
+                Some(Value::String(masked)) if masked == "***" => {
+                    incoming_map.insert(key.clone(), stored_value.clone());
+                }
+                Some(incoming_value) => unmask_settings(incoming_value, stored_value),
+                None => {}
+            }
+        }
+    }
 }

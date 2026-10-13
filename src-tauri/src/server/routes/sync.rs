@@ -5,11 +5,19 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use crate::app_config::AppType;
-use crate::services::webdav_sync::WebDavSyncService;
+use crate::services::webdav_sync::{WebDavSyncService, WebDavSyncSummary};
 
-use super::super::error::ApiResult;
+use super::super::error::{ApiError, ApiResult};
 use super::super::ServerState;
 use super::docs::ErrorBody;
+
+/// The sync service internally builds its own tokio runtime and blocks on it,
+/// which panics ("cannot start a runtime from within a runtime") when called
+/// from an async worker thread. Every blocking entry point below therefore
+/// runs on the dedicated blocking pool via `spawn_blocking`.
+fn join_error(where_: &str) -> ApiError {
+    ApiError::bad_request(format!("sync task panicked ({where_})"))
+}
 
 #[utoipa::path(
     post,
@@ -22,7 +30,10 @@ use super::docs::ErrorBody;
     )
 )]
 pub(crate) async fn webdav_upload(State(state): State<ServerState>) -> ApiResult<Json<Value>> {
-    let summary = WebDavSyncService::upload()?;
+    let summary: WebDavSyncSummary = tokio::task::spawn_blocking(WebDavSyncService::upload)
+        .await
+        .map_err(|_| join_error("upload"))?
+        .map_err(ApiError::from)?;
     state.events.emit("webdav_upload", None, json!({}));
     Ok(Json(
         json!({ "decision": format!("{:?}", summary.decision), "message": summary.message }),
@@ -40,11 +51,20 @@ pub(crate) async fn webdav_upload(State(state): State<ServerState>) -> ApiResult
     )
 )]
 pub(crate) async fn webdav_download(State(state): State<ServerState>) -> ApiResult<Json<Value>> {
-    let summary = WebDavSyncService::download()?;
-    // The database was replaced underneath the in-memory snapshot — reload it
-    // and replay providers into live configs, mirroring the CLI download flow.
-    state.app.refresh_config_from_db()?;
-    crate::services::ProviderService::sync_current_to_live(&state.app)?;
+    let app_state = state.app.clone();
+    let summary: WebDavSyncSummary = tokio::task::spawn_blocking(
+        move || -> Result<WebDavSyncSummary, crate::error::AppError> {
+            let summary = WebDavSyncService::download()?;
+            // The database was replaced underneath the in-memory snapshot — reload
+            // it and replay providers into live configs, mirroring the CLI flow.
+            app_state.refresh_config_from_db()?;
+            crate::services::ProviderService::sync_current_to_live(&app_state)?;
+            Ok(summary)
+        },
+    )
+    .await
+    .map_err(|_| join_error("download"))?
+    .map_err(ApiError::from)?;
     state.events.emit("webdav_download", None, json!({}));
     Ok(Json(
         json!({ "decision": format!("{:?}", summary.decision), "message": summary.message }),
