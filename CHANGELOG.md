@@ -7,6 +7,13 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.21] - 2026-10-13
+
+### Changed
+
+- **Server / CORS preflight cache**: responses now carry `Access-Control-Max-Age: 600`, letting browsers cache the preflight for 10 minutes instead of re-issuing an `OPTIONS` request before every call.
+- **Server / remote binding**: `--host 0.0.0.0` (or any non-loopback address) is documented and guarded — the startup banner echoes the effective bind address, and binding beyond localhost prints an explicit warning that API keys and provider control become network-reachable. The OpenAPI hint line now follows the actual host/port instead of the hardcoded default.
+
 ## [5.10.20] - 2026-10-13
 
 ### Added
