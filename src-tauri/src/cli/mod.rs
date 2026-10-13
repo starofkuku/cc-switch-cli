@@ -118,6 +118,9 @@ pub enum Commands {
     #[command(alias = "ui")]
     Interactive,
 
+    /// Run the local HTTP management API
+    Server(commands::server::ServerCommand),
+
     /// Generate, install, inspect, or uninstall shell completions
     Completions(commands::completions::CompletionsCommand),
 

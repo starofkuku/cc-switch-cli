@@ -37,6 +37,9 @@ mod usage_events;
 mod usage_script;
 mod zcode_config;
 
+/// Local HTTP management API (`cc-switch server`).
+pub mod server;
+
 #[cfg(test)]
 pub(crate) mod test_support;
 

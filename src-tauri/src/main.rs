@@ -85,6 +85,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
         Some(Commands::Deeplink(cmd)) => {
             cc_switch_lib::cli::commands::deeplink::execute(cmd, cli.app)
         }
+        Some(Commands::Server(cmd)) => cc_switch_lib::cli::commands::server::execute(cmd),
         Some(Commands::Update(cmd)) => cc_switch_lib::cli::commands::update::execute(cmd),
         Some(Commands::Completions(cmd)) => cc_switch_lib::cli::commands::completions::execute(cmd),
         Some(Commands::Internal(cmd)) => cc_switch_lib::cli::commands::internal::execute(cmd),
@@ -99,6 +100,7 @@ fn command_requires_startup_state(command: &Option<Commands>) -> bool {
 
     match command {
         Some(Commands::Completions(_))
+        | Some(Commands::Server(_))
         | Some(Commands::Apps(_))
         | Some(Commands::Auth(_))
         | Some(Commands::Update(_))

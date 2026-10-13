@@ -23,6 +23,7 @@ pub mod provider_input;
 pub(crate) mod provider_inspect;
 pub mod provider_usage_query;
 pub mod proxy;
+pub mod server;
 pub mod sessions;
 pub mod settings;
 pub mod skills;

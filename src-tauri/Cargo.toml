@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "5.10.18"
+version = "5.10.19"
 description = "All-in-One Assistant for Claude Code, Codex, Gemini, OpenCode & OpenClaw"
 authors = ["Jason Young", "saladday"]
 license = "MIT"
@@ -68,6 +68,7 @@ futures = "0.3"
 async-stream = "0.3"
 bytes = "1.5"
 axum = "0.7"
+utoipa = { version = "5", features = ["axum_extras"] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["cors"] }
 hyper = { version = "1.0", features = ["full"] }
