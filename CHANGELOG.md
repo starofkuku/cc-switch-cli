@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.20] - 2026-10-13
+
+### Added
+
+- **Server / CORS**: the management API now answers cross-origin requests. A browser preflight (`OPTIONS`) is served by the CORS layer **before** the bearer-token middleware — preflights carry no `Authorization` header, so answering them from inside the auth layer would break every cross-origin call. Any origin/method/header is allowed deliberately: the security boundary is the token, not the origin (no cookies or ambient credentials are involved, so a cross-origin page without the token only ever receives 401).
+
 ## [5.10.19] - 2026-10-13
 
 ### Added
