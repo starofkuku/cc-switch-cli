@@ -7,6 +7,13 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.23] - 2026-10-14
+
+### Added
+
+- **Server / import-live endpoint**: `POST /api/apps/{app}/providers/import-live` with optional `{"update": bool, "prune": bool}` body — `{}` imports live entries the database has never seen (marking them managed), `update` additionally overwrites existing entries with live content while preserving cc-switch metadata, `prune` also removes managed entries missing from live. Mirrors the CLI `provider import-live` tiers exactly, including the Pi-only restriction for both flags (other apps reject them with 409). Responds with `{added, updated, pruned}` and emits a `provider_imported_live` SSE event.
+- **Server / active prompt edits replay live**: `PATCH /api/apps/{app}/prompts/{id}` now rewrites the live prompt file automatically when the edited preset is the active one, so read-modify-write edits take effect immediately without re-activating. Inactive presets keep draft semantics. Responses and SSE events carry an `active` flag; live replay failures degrade to a warning instead of failing the request.
+
 ## [5.10.22] - 2026-10-14
 
 ### Fixed
