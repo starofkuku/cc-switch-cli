@@ -113,6 +113,62 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn updating_active_prompt_replays_live_file() {
+    init_test_env();
+    let home = crate::config::home_dir().expect("home");
+    let zcode_dir = home.join(".zcode");
+    std::fs::create_dir_all(zcode_dir.join("v2")).expect("create zcode dirs");
+
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+    let base = format!("http://{addr}/api/apps/zcode/prompts");
+
+    let created: serde_json::Value = client()
+        .post(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "name": "Guide", "content": "# guide v1" }))
+        .send()
+        .await
+        .expect("create prompt")
+        .json()
+        .await
+        .expect("create body");
+    let id = created["id"].as_str().expect("id").to_string();
+
+    // Activate writes the live file.
+    let activated = client()
+        .post(format!("{base}/{id}/activate"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("activate");
+    assert_eq!(activated.status(), 200);
+    let live_path = zcode_dir.join("AGENTS.md");
+    assert_eq!(
+        std::fs::read_to_string(&live_path)
+            .expect("live after activate")
+            .trim(),
+        "# guide v1"
+    );
+
+    // Editing the ACTIVE preset must replay the new content into the live file.
+    let patched = client()
+        .patch(format!("{base}/{id}"))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "# guide v2" }))
+        .send()
+        .await
+        .expect("patch prompt");
+    assert_eq!(patched.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&live_path)
+            .expect("live after patch")
+            .trim(),
+        "# guide v2"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn import_live_add_only_and_flag_rejection() {
     init_test_env();
     let home = crate::config::home_dir().expect("home");

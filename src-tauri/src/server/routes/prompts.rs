@@ -161,10 +161,25 @@ pub(crate) async fn update_prompt(
         prompt.description = Some(description);
     }
     PromptService::upsert_prompt(&state.app, app.clone(), &id, prompt)?;
-    state
-        .events
-        .emit("prompt_updated", Some(app.as_str()), json!({ "id": id }));
-    Ok(Json(json!({ "id": id })))
+
+    // When the updated preset is the active one, replay it into the live
+    // prompt file so read-modify-write edits land immediately (mirrors what
+    // `activate` does, without the client having to re-activate).
+    let still_active = PromptService::get_prompts(&state.app, app.clone())?
+        .get(&id)
+        .is_some_and(|prompt| prompt.enabled);
+    if still_active {
+        if let Err(err) = PromptService::sync_all_active_to_live_best_effort(&state.app) {
+            log::warn!("replaying active prompt '{id}' to live failed: {err}");
+        }
+    }
+
+    state.events.emit(
+        "prompt_updated",
+        Some(app.as_str()),
+        json!({ "id": id, "active": still_active }),
+    );
+    Ok(Json(json!({ "id": id, "active": still_active })))
 }
 
 #[utoipa::path(
