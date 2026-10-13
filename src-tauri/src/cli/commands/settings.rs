@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(settings.visible_apps_settings.mode, VisibleAppsMode::Manual);
         assert_eq!(
             settings.visible_apps.ordered_enabled(),
-            vec![AppType::Pi, AppType::Grok]
+            vec![AppType::Pi, AppType::GrokBuild]
         );
     }
 }
