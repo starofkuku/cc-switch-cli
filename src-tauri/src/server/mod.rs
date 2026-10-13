@@ -13,6 +13,7 @@ pub(crate) mod routes;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::routing::{get, patch, post};
 use axum::Router;
@@ -135,11 +136,13 @@ pub fn router(state: ServerState) -> Router {
     // cross-origin pages can only ever receive 401 without the token. The
     // layer must sit OUTSIDE the auth middleware: browser preflights carry no
     // Authorization header and would otherwise be rejected before CORS can
-    // answer them.
+    // answer them. `max_age` lets the browser cache the preflight for 10
+    // minutes instead of re-asking before every request.
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .max_age(Duration::from_secs(600));
 
     Router::new()
         // Health and the OpenAPI document stay reachable without a token so

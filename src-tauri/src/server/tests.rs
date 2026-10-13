@@ -130,6 +130,14 @@ async fn cors_preflight_succeeds_without_token() {
             .and_then(|v| v.to_str().ok()),
         Some("*")
     );
+    // Browsers cache the preflight for 10 minutes.
+    assert_eq!(
+        preflight
+            .headers()
+            .get("access-control-max-age")
+            .and_then(|v| v.to_str().ok()),
+        Some("600")
+    );
 
     // A normal authenticated request also carries the CORS header.
     let response = client()

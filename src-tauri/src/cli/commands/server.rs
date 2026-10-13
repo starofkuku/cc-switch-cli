@@ -7,8 +7,9 @@ use crate::server;
 
 #[derive(Args, Debug)]
 pub struct ServerCommand {
-    /// Bind address (default 127.0.0.1; anything else exposes API keys
-    /// and provider control to the network).
+    /// Bind address (default 127.0.0.1). Use 0.0.0.0 to expose the API on
+    /// every interface — that publishes API keys and provider control to the
+    /// network, so only do it behind a firewall you control.
     #[arg(long)]
     pub host: Option<String>,
     /// Bind port (default 7861).
@@ -43,9 +44,11 @@ pub fn execute(cmd: ServerCommand) -> Result<(), AppError> {
             if config.host != "127.0.0.1" && config.host != "localhost" {
                 eprintln!(
                     "{}",
-                    crate::cli::ui::warning(
-                        "WARNING: binding beyond localhost exposes API keys and provider control."
-                    )
+                    crate::cli::ui::warning(&format!(
+                        "WARNING: binding {} exposes API keys and provider control beyond localhost; \
+use the bearer token and a trusted network only.",
+                        config.host
+                    ))
                 );
             }
             let token = match &config.token {
@@ -55,8 +58,8 @@ pub fn execute(cmd: ServerCommand) -> Result<(), AppError> {
             println!(
                 "{}",
                 crate::cli::ui::success(&format!(
-                    "cc-switch server listening on http://{}:{}",
-                    config.host, config.port
+                    "cc-switch server listening on {}:{} (http://{}:{})",
+                    config.host, config.port, config.host, config.port
                 ))
             );
             println!(
@@ -65,9 +68,10 @@ pub fn execute(cmd: ServerCommand) -> Result<(), AppError> {
             );
             println!(
                 "{}",
-                crate::cli::ui::info(
-                    "OpenAPI: http://127.0.0.1:7861/api/openapi.json (Ctrl+C to stop)"
-                )
+                crate::cli::ui::info(&format!(
+                    "OpenAPI: http://{}:{}/api/openapi.json (Ctrl+C to stop)",
+                    config.host, config.port
+                ))
             );
             server::run(config)
         }
