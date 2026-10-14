@@ -113,6 +113,68 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zcode_provider_list_works_on_empty_database_and_survives_restart() {
+    // Regression guard: the seed tables (MultiAppConfig::default, the db
+    // export and the db persist loops) used to stop at grokbuild, so a fresh
+    // deployment listed zcode in /api/health but every /api/apps/zcode
+    // provider call answered 409 "App type not found", and zcode rows added
+    // through the snapshot path never persisted to the database.
+    init_test_env();
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+    let base = format!("http://{addr}/api/apps/zcode/providers");
+
+    // Empty database: list must be 200 with an empty list, not 409.
+    let empty = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("list on empty db");
+    let status = empty.status();
+    let body: serde_json::Value = empty.json().await.expect("empty list body");
+    assert_eq!(status, 200, "empty list must not 409: {body}");
+    assert!(body["providers"].as_array().is_some_and(Vec::is_empty));
+
+    // Create through the API, then rebuild AppState from disk (simulating a
+    // process restart) — the row must have been persisted to the database.
+    let home = crate::config::home_dir().expect("home");
+    std::fs::create_dir_all(home.join(".zcode").join("v2")).expect("zcode dirs");
+    let created = client()
+        .post(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({
+            "id": "persist-relay",
+            "name": "Persist",
+            "settingsConfig": {
+                "access": { "type": "api-key", "apiKey": "sk-p" },
+                "api": { "type": "openai-chat-completions", "baseUrl": "https://p.example/v1" },
+                "personalModelIds": ["m1"],
+                "modelOrder": ["m1"]
+            }
+        }))
+        .send()
+        .await
+        .expect("create");
+    let create_status = created.status();
+    let create_body = created.text().await.expect("create body");
+    assert_eq!(create_status, 200, "create: {create_body}");
+
+    {
+        let state = crate::AppState::try_new().expect("fresh state from disk");
+        let providers = crate::services::provider::ProviderService::list(
+            &state,
+            crate::app_config::AppType::Zcode,
+        )
+        .expect("list after restart");
+        assert!(
+            providers.contains_key("persist-relay"),
+            "zcode provider must survive a restart (persisted to db): {providers:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn updating_active_prompt_replays_live_file() {
     init_test_env();
     let home = crate::config::home_dir().expect("home");

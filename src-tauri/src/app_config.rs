@@ -532,6 +532,7 @@ impl Default for MultiAppConfig {
         apps.insert("openclaw".to_string(), ProviderManager::default());
         apps.insert("pi".to_string(), ProviderManager::default());
         apps.insert("grokbuild".to_string(), ProviderManager::default());
+        apps.insert("zcode".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
