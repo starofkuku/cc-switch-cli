@@ -237,7 +237,11 @@ impl PromptService {
         let target_path = prompt_file_path(&app)?;
 
         if target_path.exists() {
-            if let Ok(live_content) = std::fs::read_to_string(&target_path) {
+            if let Ok(raw_live) = std::fs::read_to_string(&target_path) {
+                // Backfill only the app-private part: the managed common
+                // preamble lives in the marker section and must not leak
+                // into presets.
+                let live_content = crate::services::prompt_common::strip_common_section(&raw_live);
                 if !live_content.trim().is_empty() {
                     let mut prompts = state.db.get_prompts(app_key)?;
 
@@ -286,7 +290,8 @@ impl PromptService {
             return Err(AppError::InvalidInput(format!("提示词 {id} 不存在")));
         };
         prompt.enabled = true;
-        write_text_file(&target_path, &prompt.content)?;
+        let rendered = crate::services::prompt_common::render_live(&state.db, &prompt.content)?;
+        write_text_file(&target_path, &rendered)?;
 
         for prompt in prompts.values() {
             state.db.save_prompt(app_key, prompt)?;
@@ -311,7 +316,10 @@ impl PromptService {
 
         if !prompts.values().any(|prompt| prompt.enabled) {
             let target_path = prompt_file_path(&app)?;
-            write_text_file(&target_path, "")?;
+            // Keep the common preamble (if active); only the private part is
+            // cleared.
+            let rendered = crate::services::prompt_common::render_live(&state.db, "")?;
+            write_text_file(&target_path, &rendered)?;
         }
 
         Ok(())
@@ -324,8 +332,10 @@ impl PromptService {
             return Err(AppError::Message("提示词文件不存在".to_string()));
         }
 
-        let content =
-            std::fs::read_to_string(&file_path).map_err(|e| AppError::io(&file_path, e))?;
+        let raw = std::fs::read_to_string(&file_path).map_err(|e| AppError::io(&file_path, e))?;
+        // Import only the app-private part; the managed common preamble must
+        // not be baked into presets.
+        let content = crate::services::prompt_common::strip_common_section(&raw);
         let timestamp = get_unix_timestamp()?;
 
         let id = format!("imported-{timestamp}");
@@ -416,8 +426,13 @@ impl PromptService {
             ));
         }
 
-        let content = std::fs::read_to_string(&source).map_err(|e| AppError::io(&source, e))?;
-        write_text_file(&destination, &content)?;
+        let raw = std::fs::read_to_string(&source).map_err(|e| AppError::io(&source, e))?;
+        // Copy only the private part; the destination gets its own render of
+        // the active common preamble so common content never duplicates.
+        let private = crate::services::prompt_common::strip_common_section(&raw);
+        let db = crate::database::Database::init()?;
+        let rendered = crate::services::prompt_common::render_live(&db, &private)?;
+        write_text_file(&destination, &rendered)?;
         Ok(destination)
     }
 
@@ -444,7 +459,14 @@ impl PromptService {
                 }
             };
 
-            if let Err(err) = write_text_file(&target_path, &content) {
+            let rendered = match crate::services::prompt_common::render_live(&state.db, &content) {
+                Ok(rendered) => rendered,
+                Err(err) => {
+                    log::warn!("渲染 {app} 公共提示词前缀失败: {err}");
+                    content.clone()
+                }
+            };
+            if let Err(err) = write_text_file(&target_path, &rendered) {
                 log::warn!("同步 {app} 提示词到 live 文件失败: {err}");
             }
         }

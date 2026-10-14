@@ -105,6 +105,27 @@ pub fn router(state: ServerState) -> Router {
             post(routes::prompts::activate_prompt),
         )
         .route(
+            "/api/prompts/common",
+            get(routes::prompts_common::list_common).post(routes::prompts_common::create_common),
+        )
+        .route(
+            "/api/prompts/common/off",
+            post(routes::prompts_common::off_common),
+        )
+        .route(
+            "/api/prompts/common/reapply",
+            post(routes::prompts_common::reapply_common),
+        )
+        .route(
+            "/api/prompts/common/:id",
+            patch(routes::prompts_common::update_common)
+                .delete(routes::prompts_common::delete_common),
+        )
+        .route(
+            "/api/prompts/common/:id/use",
+            post(routes::prompts_common::use_common),
+        )
+        .route(
             "/api/mcp",
             get(routes::mcp::list_servers).post(routes::mcp::upsert_server),
         )

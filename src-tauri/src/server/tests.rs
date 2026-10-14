@@ -113,6 +113,130 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn common_prompt_preset_lifecycle_across_apps() {
+    init_test_env();
+    let home = crate::config::home_dir().expect("home");
+    let zcode_agents = home.join(".zcode").join("AGENTS.md");
+    let codex_agents = home.join(".codex").join("AGENTS.md");
+    for (dir, file) in [
+        (zcode_agents.parent().unwrap(), &zcode_agents),
+        (codex_agents.parent().unwrap(), &codex_agents),
+    ] {
+        std::fs::create_dir_all(dir).expect("app dir");
+        std::fs::write(file, "# private notes\n").expect("seed live file");
+    }
+
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+    let base = format!("http://{addr}/api/prompts/common");
+    let marker = |content: &str| {
+        format!(
+            "<!-- cc-switch common start -->\n{content}\n<!-- cc-switch common end -->\n\n# private notes\n"
+        )
+    };
+
+    // Create two presets.
+    for (id, content) in [("strict", "# strict rules"), ("relaxed", "# relaxed rules")] {
+        let created = client()
+            .post(&base)
+            .header("Authorization", auth)
+            .json(&serde_json::json!({ "id": id, "content": content }))
+            .send()
+            .await
+            .expect("create common");
+        assert_eq!(created.status(), 200);
+    }
+
+    // Use "strict" → both live files get the preamble, private part intact.
+    let used = client()
+        .post(format!("{base}/strict/use"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("use strict");
+    assert_eq!(used.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&zcode_agents).expect("zcode live"),
+        marker("# strict rules")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&codex_agents).expect("codex live"),
+        marker("# strict rules")
+    );
+
+    // Editing the ACTIVE preset repaints live files.
+    let patched = client()
+        .patch(format!("{base}/strict"))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "# strict v2" }))
+        .send()
+        .await
+        .expect("patch active preset");
+    assert_eq!(patched.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&zcode_agents).expect("zcode live after patch"),
+        marker("# strict v2")
+    );
+
+    // Switch to "relaxed" — single active, preamble swapped.
+    let switched = client()
+        .post(format!("{base}/relaxed/use"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("use relaxed");
+    assert_eq!(switched.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&codex_agents).expect("codex live after switch"),
+        marker("# relaxed rules")
+    );
+
+    // Per-app preset activation must keep the preamble and only replace the
+    // private part.
+    let preset: serde_json::Value = client()
+        .post(format!("http://{addr}/api/apps/zcode/prompts"))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "name": "Guide", "content": "# guide private" }))
+        .send()
+        .await
+        .expect("create app preset")
+        .json()
+        .await
+        .expect("preset body");
+    let preset_id = preset["id"].as_str().expect("preset id").to_string();
+    let activated = client()
+        .post(format!(
+            "http://{addr}/api/apps/zcode/prompts/{preset_id}/activate"
+        ))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("activate app preset");
+    assert_eq!(activated.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&zcode_agents).expect("zcode live after activate"),
+        marker("# relaxed rules").replace("# private notes\n", "# guide private")
+    );
+
+    // Off removes the marker section entirely; private content survives.
+    let off = client()
+        .post(format!("{base}/off"))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("off");
+    assert_eq!(off.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(&codex_agents).expect("codex live after off"),
+        "# private notes\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&zcode_agents).expect("zcode live after off"),
+        "# guide private"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zcode_provider_list_works_on_empty_database_and_survives_restart() {
     // Regression guard: the seed tables (MultiAppConfig::default, the db
     // export and the db persist loops) used to stop at grokbuild, so a fresh

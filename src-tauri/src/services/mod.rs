@@ -15,6 +15,7 @@ pub mod model_enrichment;
 pub mod model_fetch;
 pub mod models_dev;
 pub mod prompt;
+pub mod prompt_common;
 pub mod provider;
 pub mod proxy;
 pub(crate) mod s3;

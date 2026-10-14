@@ -1,3 +1,5 @@
+mod commands_common;
+
 use clap::{ArgAction, Subcommand};
 
 use crate::app_config::AppType;
@@ -8,6 +10,9 @@ use crate::store::AppState;
 
 #[derive(Subcommand)]
 pub enum PromptsCommand {
+    /// Manage the global common preamble shared across all apps
+    #[command(subcommand)]
+    Common(commands_common::CommonPromptCommand),
     /// List all prompt presets
     List,
     /// Show current active prompt
@@ -84,6 +89,7 @@ pub fn execute(cmd: PromptsCommand, app: Option<AppType>) -> Result<(), AppError
     let app_type = app.unwrap_or(AppType::Claude);
 
     match cmd {
+        PromptsCommand::Common(cmd) => return commands_common::execute(cmd),
         PromptsCommand::List => list_prompts(app_type),
         PromptsCommand::Current => show_current(app_type),
         PromptsCommand::Live => show_live_prompt(app_type),

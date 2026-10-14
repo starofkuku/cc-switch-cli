@@ -4,6 +4,7 @@ pub(crate) mod apps;
 pub(crate) mod docs;
 pub(crate) mod mcp;
 pub(crate) mod prompts;
+pub(crate) mod prompts_common;
 pub(crate) mod settings;
 pub(crate) mod skills;
 pub(crate) mod sync;
