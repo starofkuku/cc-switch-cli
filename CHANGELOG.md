@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.25] - 2026-10-15
+
+### Added
+
+- **Global common prompt preamble**: a library of shared-constraint presets with a single active entry whose content is rendered into the top of every app's live prompt file (`CLAUDE.md` / `AGENTS.md` / `GEMINI.md`) inside `<!-- cc-switch common start/end -->` markers — edit once, every agent inherits. `cc-switch prompts common list|show|set|delete|use|off|reapply` manages it; the HTTP API mirrors it (`/api/prompts/common`, `POST …/{id}/use`, `…/off`, `…/reapply`) with SSE events. Switching, editing the active preset, deleting it or turning it off repaints every existing live file (marker section only, idempotent); inactive = no markers = previous behavior. Storage is one settings key (rides WebDAV db sync, zero schema impact). Per-app write paths are preamble-aware: `prompts activate` keeps the preamble and replaces only the private part, live backfill/import strip the section so presets stay private-only, and `prompts copy` strips on the source and re-renders on the destination so common content never duplicates.
+
 ## [5.10.24] - 2026-10-14
 
 ### Fixed
