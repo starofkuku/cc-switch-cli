@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.24] - 2026-10-14
+
+### Fixed
+
+- **ZCode provider endpoints answered 409 on fresh deployments**: three fixed app lists (the `MultiAppConfig::default` seed table, the db→snapshot export loop and the snapshot→db persist loop) all stopped at `grokbuild` and missed `zcode`. Beyond the 409 ("App type not found") on every `/api/apps/zcode/providers*` call, the persist-loop gap meant zcode providers added through the snapshot path never reached the database and vanished on restart. All three lists now seed `zcode`; regression test covers empty-database listing (200, not 409) and cross-restart persistence.
+
 ## [5.10.23] - 2026-10-14
 
 ### Added
