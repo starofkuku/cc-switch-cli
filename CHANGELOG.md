@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.26] - 2026-10-15
+
+### Added
+
+- **Sync / Codex model catalog rides along**: `cc-switch-model-catalog.json` is now an optional snapshot artifact. Upload packs it (with sha256/size in the manifest) whenever `~/.codex/cc-switch-model-catalog.json` exists; download fetches it only when the snapshot advertises it — older snapshots stay fully compatible (no protocol bump). Restore happens after the database import succeeds, never creates a missing `~/.codex` directory, and degrades to a warning instead of failing the sync. Priority rule (documented in code): when the snapshot's current Codex provider carries `modelCatalog` material, the post-download live replay regenerates the file from that material and overwrites the restore — material stays the generator; without material the restored file is kept verbatim. Both WebDAV and S3 channels implement it.
+
 ## [5.10.25] - 2026-10-15
 
 ### Added
