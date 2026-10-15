@@ -23,7 +23,8 @@ use super::sync_protocol::{
     apply_snapshot_with_restore_guard, build_local_snapshot, localized, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES,
-    PROTOCOL_FORMAT, PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    PROTOCOL_FORMAT, PROTOCOL_VERSION, REMOTE_CODEX_CATALOG, REMOTE_DB_SQL, REMOTE_MANIFEST,
+    REMOTE_SKILLS_ZIP,
 };
 
 #[cfg(test)]
@@ -130,6 +131,12 @@ async fn upload() -> Result<WebDavSyncSummary, AppError> {
     let skills_url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_SKILLS_ZIP)?;
     webdav::put_bytes(&skills_url, &auth, snapshot.skills_zip, "application/zip").await?;
 
+    if let Some(catalog) = snapshot.codex_catalog {
+        let catalog_url =
+            build_artifact_url(&settings, RemoteLayout::Current, REMOTE_CODEX_CATALOG)?;
+        webdav::put_bytes(&catalog_url, &auth, catalog, "application/json").await?;
+    }
+
     // 上传 manifest（最后上传，确保 artifacts 已就绪）
     let manifest_url = build_artifact_url(&settings, RemoteLayout::Current, REMOTE_MANIFEST)?;
     webdav::put_bytes(
@@ -181,8 +188,17 @@ async fn download() -> Result<WebDavSyncSummary, AppError> {
             &snapshot.manifest.artifacts,
         )
         .await?;
+        // Optional artifact: only fetched when the snapshot advertises it.
+        let codex_catalog = download_optional_artifact(
+            &settings,
+            &auth,
+            snapshot.layout,
+            REMOTE_CODEX_CATALOG,
+            &snapshot.manifest.artifacts,
+        )
+        .await?;
 
-        apply_snapshot_with_restore_guard(&db_sql, &skills_zip).await?;
+        apply_snapshot_with_restore_guard(&db_sql, &skills_zip, codex_catalog.as_deref()).await?;
         persist_sync_success_best_effort(&mut settings, &manifest_hash, snapshot.manifest_etag);
         cleanup_v1_remote(&settings, &auth).await;
 
@@ -457,6 +473,24 @@ async fn detect_v1_manifest(
     }
 }
 
+/// Download an artifact that may legitimately be absent: returns `None` when
+/// the manifest does not list it (older snapshots, or no catalog locally at
+/// upload time). Present entries are verified like any other artifact.
+async fn download_optional_artifact(
+    settings: &WebDavSyncSettings,
+    auth: &webdav::WebDavAuth,
+    layout: RemoteLayout,
+    file_name: &str,
+    artifacts: &std::collections::BTreeMap<String, ArtifactMeta>,
+) -> Result<Option<Vec<u8>>, AppError> {
+    if !artifacts.contains_key(file_name) {
+        return Ok(None);
+    }
+    download_and_verify(settings, auth, layout, file_name, artifacts)
+        .await
+        .map(Some)
+}
+
 /// 下载 V1 artifact 并校验
 async fn download_v1_artifact(
     settings: &WebDavSyncSettings,
@@ -550,7 +584,7 @@ async fn migrate_v1_to_v2() -> Result<WebDavSyncSummary, AppError> {
     .await?;
 
     // 3. 应用到本地
-    apply_snapshot_with_restore_guard(&db_sql, &skills_zip).await?;
+    apply_snapshot_with_restore_guard(&db_sql, &skills_zip, None).await?;
 
     // 4. 重新上传为 V2 格式（upload 内部会 best-effort 清理 V1 远端数据）
     upload().await?;
@@ -831,7 +865,8 @@ mod tests {
         }
         let skills_zip = std::fs::read(&zip_path).expect("read remote skills zip");
 
-        apply_snapshot(db_sql.as_bytes(), &skills_zip).expect("apply current-schema snapshot");
+        apply_snapshot(db_sql.as_bytes(), &skills_zip, None)
+            .expect("apply current-schema snapshot");
 
         let local_db = Database::init().expect("open local db");
         let conn = crate::database::lock_conn!(local_db.conn);
@@ -889,7 +924,7 @@ mod tests {
             SCHEMA_VERSION + 1
         );
 
-        apply_snapshot(sql.as_bytes(), &skills_zip)
+        apply_snapshot(sql.as_bytes(), &skills_zip, None)
             .expect_err("future schema should be rejected before restoring skills");
 
         assert_eq!(
@@ -946,6 +981,7 @@ mod tests {
         apply_snapshot(
             b"-- CC Switch SQLite export\nPRAGMA user_version=0;\n",
             &skills_zip,
+            None,
         )
         .expect_err("db init failure should fail the restore");
 
@@ -1000,6 +1036,7 @@ mod tests {
         let err = apply_snapshot(
             b"-- CC Switch SQLite export\nPRAGMA user_version=0;\n",
             &skills_zip,
+            None,
         )
         .expect_err("symlink parent config dir should fail before restoring skills");
 

@@ -17,7 +17,7 @@ use super::sync_protocol::{
     apply_snapshot_with_restore_guard, build_local_snapshot, localized, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES,
-    PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    PROTOCOL_VERSION, REMOTE_CODEX_CATALOG, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
 };
 use super::webdav_sync::SyncDecision;
 
@@ -114,6 +114,11 @@ async fn upload() -> Result<S3SyncSummary, AppError> {
     )
     .await?;
 
+    if let Some(catalog) = snapshot.codex_catalog {
+        let catalog_key = s3_key(&settings, REMOTE_CODEX_CATALOG);
+        s3::put_object(&credentials, &catalog_key, catalog, "application/json").await?;
+    }
+
     // The manifest is the commit marker and must be uploaded last.
     let manifest_key = s3_key(&settings, REMOTE_MANIFEST);
     s3::put_object(
@@ -169,8 +174,21 @@ async fn download() -> Result<S3SyncSummary, AppError> {
         &manifest.artifacts,
     )
     .await?;
+    let codex_catalog = if manifest.artifacts.contains_key(REMOTE_CODEX_CATALOG) {
+        Some(
+            download_and_verify(
+                &settings,
+                &credentials,
+                REMOTE_CODEX_CATALOG,
+                &manifest.artifacts,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
-    apply_snapshot_with_restore_guard(&database, &skills).await?;
+    apply_snapshot_with_restore_guard(&database, &skills, codex_catalog.as_deref()).await?;
 
     let manifest_hash = sha256_hex(&manifest_bytes);
     persist_sync_success_best_effort(&mut settings, &manifest_hash, etag);

@@ -22,6 +22,9 @@ pub(crate) const LEGACY_DB_COMPAT_VERSION: u32 = 5;
 pub(crate) const REMOTE_DB_SQL: &str = "db.sql";
 pub(crate) const REMOTE_SKILLS_ZIP: &str = "skills.zip";
 pub(crate) const REMOTE_MANIFEST: &str = "manifest.json";
+/// Optional artifact: the cc-switch-managed Codex model catalog file
+/// (`~/.codex/cc-switch-model-catalog.json`). Travels only when it exists.
+pub(crate) const REMOTE_CODEX_CATALOG: &str = "codex-catalog.json";
 pub(crate) const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_SYNC_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -71,6 +74,8 @@ pub(crate) struct ArtifactMeta {
 pub(crate) struct LocalSnapshot {
     pub db_sql: Vec<u8>,
     pub skills_zip: Vec<u8>,
+    /// Present only when `~/.codex/cc-switch-model-catalog.json` exists locally.
+    pub codex_catalog: Option<Vec<u8>>,
     pub manifest_bytes: Vec<u8>,
     pub manifest_hash: String,
 }
@@ -106,6 +111,18 @@ pub(crate) fn build_local_snapshot() -> Result<LocalSnapshot, AppError> {
     let skills_zip =
         std::fs::read(&skills_zip_path).map_err(|error| AppError::io(&skills_zip_path, error))?;
 
+    // Optional: the Codex model catalog file rides along when it exists.
+    // Absence is normal (providers without modelCatalog material never
+    // generate it) and the manifest simply omits the artifact in that case.
+    let codex_catalog = {
+        let path = crate::codex_config::get_codex_model_catalog_path();
+        if path.is_file() {
+            Some(std::fs::read(&path).map_err(|error| AppError::io(&path, error))?)
+        } else {
+            None
+        }
+    };
+
     let mut artifacts = BTreeMap::new();
     artifacts.insert(
         REMOTE_DB_SQL.to_string(),
@@ -121,6 +138,15 @@ pub(crate) fn build_local_snapshot() -> Result<LocalSnapshot, AppError> {
             size: skills_zip.len() as u64,
         },
     );
+    if let Some(catalog) = &codex_catalog {
+        artifacts.insert(
+            REMOTE_CODEX_CATALOG.to_string(),
+            ArtifactMeta {
+                sha256: sha256_hex(catalog),
+                size: catalog.len() as u64,
+            },
+        );
+    }
 
     let manifest = SyncManifest {
         format: PROTOCOL_FORMAT.to_string(),
@@ -138,6 +164,7 @@ pub(crate) fn build_local_snapshot() -> Result<LocalSnapshot, AppError> {
     Ok(LocalSnapshot {
         db_sql,
         skills_zip,
+        codex_catalog,
         manifest_bytes,
         manifest_hash,
     })
@@ -270,7 +297,36 @@ pub(crate) fn verify_artifact(
 
 /// Apply a verified snapshot while preserving the local WebDAV implementation's
 /// future-schema preflight and Skills rollback guarantees.
-pub(crate) fn apply_snapshot(db_sql: &[u8], skills_zip: &[u8]) -> Result<(), AppError> {
+/// Restore the optional Codex model catalog artifact.
+///
+/// Skipped (with a warning) when the Codex config directory does not exist:
+/// creating it would flip `should_sync_live(Codex)` and start managing a Codex
+/// install that is not there. Write failures are warned, not fatal — the
+/// catalog is a derived artifact and must not fail an otherwise-complete
+/// restore.
+fn restore_codex_catalog(bytes: &[u8]) {
+    let path = crate::codex_config::get_codex_model_catalog_path();
+    let Some(parent) = path.parent() else {
+        log::warn!("Codex 模型目录路径无父目录,跳过恢复: {}", path.display());
+        return;
+    };
+    if !parent.is_dir() {
+        log::warn!(
+            "Codex 目录不存在,跳过模型目录恢复(不创建配置目录): {}",
+            parent.display()
+        );
+        return;
+    }
+    if let Err(err) = crate::config::atomic_write(&path, bytes) {
+        log::warn!("恢复 Codex 模型目录文件失败(不影响本次同步): {err}");
+    }
+}
+
+pub(crate) fn apply_snapshot(
+    db_sql: &[u8],
+    skills_zip: &[u8],
+    codex_catalog: Option<&[u8]>,
+) -> Result<(), AppError> {
     let sql = std::str::from_utf8(db_sql).map_err(|error| {
         localized(
             "sync.sql_not_utf8",
@@ -296,18 +352,28 @@ pub(crate) fn apply_snapshot(db_sql: &[u8], skills_zip: &[u8]) -> Result<(), App
         return Err(db_error);
     }
 
+    // Optional artifact, restored last: only after the database import
+    // succeeded does the snapshot's catalog belong on disk. Note the priority
+    // rule: if the snapshot's current Codex provider carries modelCatalog
+    // material, the caller's subsequent live replay regenerates the file from
+    // that material and overwrites this restore — material is the generator.
+    if let Some(catalog) = codex_catalog {
+        restore_codex_catalog(catalog);
+    }
+
     Ok(())
 }
 
 pub(crate) async fn apply_snapshot_with_restore_guard(
     db_sql: &[u8],
     skills_zip: &[u8],
+    codex_catalog: Option<&[u8]>,
 ) -> Result<(), AppError> {
     let _guard = super::state_coordination::acquire_restore_mutation_guard()
         .await
         .map_err(AppError::Message)?;
     ensure_restore_allowed().await?;
-    apply_snapshot(db_sql, skills_zip)
+    apply_snapshot(db_sql, skills_zip, codex_catalog)
 }
 
 async fn ensure_restore_allowed() -> Result<(), AppError> {
@@ -496,5 +562,92 @@ mod tests {
         };
         assert!(verify_artifact(bytes, "db.sql", &metadata).is_ok());
         assert!(verify_artifact(b"changed", "db.sql", &metadata).is_err());
+    }
+}
+
+#[cfg(test)]
+mod codex_catalog_tests {
+    use super::*;
+    use crate::test_support::TestEnvGuard;
+
+    #[test]
+    fn catalog_artifact_only_present_when_file_exists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _env = TestEnvGuard::isolated(temp.path());
+
+        // Absent: manifest carries only the two standard artifacts.
+        let snapshot = build_local_snapshot().expect("snapshot without catalog");
+        assert!(snapshot.codex_catalog.is_none());
+        let manifest: SyncManifest =
+            serde_json::from_slice(&snapshot.manifest_bytes).expect("manifest json");
+        assert!(!manifest.artifacts.contains_key(REMOTE_CODEX_CATALOG));
+
+        // Present: the artifact joins the manifest with matching hash/size.
+        let codex_dir = temp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("codex dir");
+        let payload = br#"{"models":[{"slug":"demo"}]}"#;
+        std::fs::write(codex_dir.join("cc-switch-model-catalog.json"), payload)
+            .expect("seed catalog");
+
+        let snapshot = build_local_snapshot().expect("snapshot with catalog");
+        assert_eq!(snapshot.codex_catalog.as_deref(), Some(payload.as_slice()));
+        let manifest: SyncManifest =
+            serde_json::from_slice(&snapshot.manifest_bytes).expect("manifest json");
+        let meta = manifest
+            .artifacts
+            .get(REMOTE_CODEX_CATALOG)
+            .expect("catalog artifact present");
+        assert_eq!(meta.size, payload.len() as u64);
+        assert_eq!(meta.sha256, sha256_hex(payload));
+    }
+
+    #[test]
+    fn apply_snapshot_restores_catalog_file_when_codex_dir_exists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _env = TestEnvGuard::isolated(temp.path());
+        let codex_dir = temp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("codex dir");
+
+        // The SQL import validates that the snapshot carries provider data, so
+        // seed one provider before exporting.
+        let db = Database::init().expect("db");
+        let provider = crate::provider::Provider::with_id(
+            "seed".to_string(),
+            "Seed".to_string(),
+            serde_json::json!({ "env": {} }),
+            None,
+        );
+        db.save_provider("claude", &provider)
+            .expect("seed provider");
+        let db_sql = db.export_sql_string_for_sync().expect("export");
+        let skills_zip = build_minimal_skills_zip();
+        let catalog = br#"{"models":[{"slug":"restored"}]}"#;
+
+        apply_snapshot(db_sql.as_bytes(), &skills_zip, Some(catalog)).expect("apply");
+        let restored = std::fs::read(codex_dir.join("cc-switch-model-catalog.json"))
+            .expect("catalog restored");
+        assert_eq!(restored, catalog);
+
+        // The restore must not create a Codex directory that is not there.
+        std::fs::remove_dir_all(&codex_dir).expect("remove codex dir");
+        apply_snapshot(db_sql.as_bytes(), &skills_zip, Some(catalog)).expect("apply again");
+        assert!(
+            !codex_dir.exists(),
+            "restore must not create the Codex config directory"
+        );
+    }
+
+    fn build_minimal_skills_zip() -> Vec<u8> {
+        use std::io::Write;
+        let mut buffer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+            writer
+                .start_file("skills/.keep", zip::write::SimpleFileOptions::default())
+                .expect("start entry");
+            writer.write_all(b"").expect("write entry");
+            writer.finish().expect("finish zip");
+        }
+        buffer
     }
 }
