@@ -7,6 +7,16 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.27] - 2026-10-17
+
+### Added
+
+- **Server / Codex model catalog endpoints**: `GET /api/apps/codex/model-catalog` returns the file content plus whether config.toml references it (`referenced: false` means Codex is not loading it); `PUT` writes the file atomically (JSON-object validation, refuses to create a missing `~/.codex`) and ensures the `model_catalog_json` reference key so the edit takes effect, reporting `keyAdded`. Fires a `codex_model_catalog_updated` SSE event.
+
+### Changed
+
+- **Codex / catalog reference key survives switches**: when no provider carries `modelCatalog` material, a provider switch used to strip the `model_catalog_json` key from config.toml — killing hand-maintained catalogs on every switch. The file's on-disk presence is now the signal: while it exists the key is kept (and ensured); once the file is gone the old strip behavior applies, so setups without the file are unaffected. In the no-material regime the file is user-owned: cc-switch transports it (sync) and passes edits through, never regenerating it.
+
 ## [5.10.26] - 2026-10-15
 
 ### Added
