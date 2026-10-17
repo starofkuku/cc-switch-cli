@@ -67,6 +67,8 @@ sending a masked value back in a settings PATCH keeps the stored value."
         super::apps::switch_provider,
         super::apps::fetch_models,
         super::apps::import_live,
+        super::codex_catalog::get_catalog,
+        super::codex_catalog::put_catalog,
         super::prompts::list_prompts,
         super::prompts::get_prompt,
         super::prompts::create_prompt,

@@ -1,6 +1,7 @@
 //! Route handlers. Each module maps one resource to services-layer calls.
 
 pub(crate) mod apps;
+pub(crate) mod codex_catalog;
 pub(crate) mod docs;
 pub(crate) mod mcp;
 pub(crate) mod prompts;

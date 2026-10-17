@@ -113,6 +113,65 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_model_catalog_edit_endpoints() {
+    init_test_env();
+    let home = crate::config::home_dir().expect("home");
+    let codex_dir = home.join(".codex");
+    std::fs::create_dir_all(&codex_dir).expect("codex dir");
+    std::fs::write(codex_dir.join("config.toml"), "model = \"gpt-5\"\n").expect("seed config.toml");
+
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+    let base = format!("http://{addr}/api/apps/codex/model-catalog");
+
+    // No file yet → 404.
+    let missing = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("get missing");
+    assert_eq!(missing.status(), 404);
+
+    // PUT writes the file and ensures the config.toml reference key.
+    let put = client()
+        .put(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "models": [{ "slug": "demo" }] }))
+        .send()
+        .await
+        .expect("put catalog");
+    let status = put.status();
+    let body: serde_json::Value = put.json().await.expect("put body");
+    assert_eq!(status, 200, "put: {body}");
+    assert_eq!(
+        body["keyAdded"], true,
+        "reference key must be added: {body}"
+    );
+    assert_eq!(body["referenced"], true);
+
+    let config_text = std::fs::read_to_string(codex_dir.join("config.toml")).expect("config");
+    assert!(config_text.contains("model_catalog_json"));
+    assert!(
+        config_text.contains("model = \"gpt-5\""),
+        "unrelated keys survive: {config_text}"
+    );
+
+    // GET returns the content plus the reference state.
+    let got = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("get catalog")
+        .json::<serde_json::Value>()
+        .await
+        .expect("get body");
+    assert_eq!(got["content"]["models"][0]["slug"], "demo");
+    assert_eq!(got["referenced"], true);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn common_prompt_preset_lifecycle_across_apps() {
     init_test_env();
     let home = crate::config::home_dir().expect("home");

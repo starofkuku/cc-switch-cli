@@ -105,6 +105,10 @@ pub fn router(state: ServerState) -> Router {
             post(routes::prompts::activate_prompt),
         )
         .route(
+            "/api/apps/codex/model-catalog",
+            get(routes::codex_catalog::get_catalog).put(routes::codex_catalog::put_catalog),
+        )
+        .route(
             "/api/prompts/common",
             get(routes::prompts_common::list_common).post(routes::prompts_common::create_common),
         )

@@ -679,17 +679,27 @@ fn set_codex_model_catalog_json_field(
             doc["model_catalog_json"] = toml_edit::value(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME);
         }
         None => {
-            let should_remove = doc
-                .get("model_catalog_json")
-                .and_then(|item| item.as_str())
-                .map(|path| {
-                    path == generated_path.to_string_lossy().as_ref()
-                        || Path::new(path).file_name().and_then(|name| name.to_str())
-                            == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
-                })
-                .unwrap_or(false);
-            if should_remove {
-                doc.as_table_mut().remove("model_catalog_json");
+            // The catalog file's on-disk presence is the user's signal that the
+            // mechanism is in use (e.g. a hand-maintained catalog edited via
+            // the server API): keep — and ensure — the reference key so those
+            // edits survive provider switches. Only strip the key when the
+            // file is gone, so it never dangles.
+            if generated_path.is_file() {
+                doc["model_catalog_json"] =
+                    toml_edit::value(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME);
+            } else {
+                let should_remove = doc
+                    .get("model_catalog_json")
+                    .and_then(|item| item.as_str())
+                    .map(|path| {
+                        path == generated_path.to_string_lossy().as_ref()
+                            || Path::new(path).file_name().and_then(|name| name.to_str())
+                                == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+                    })
+                    .unwrap_or(false);
+                if should_remove {
+                    doc.as_table_mut().remove("model_catalog_json");
+                }
             }
         }
     }
@@ -731,6 +741,67 @@ pub fn write_prepared_codex_model_catalog(
         write_json_file(&get_codex_model_catalog_path(), catalog)?;
     }
     Ok(())
+}
+
+/// Read the on-disk model catalog file; `None` when it does not exist.
+pub fn read_codex_model_catalog_file() -> Result<Option<Value>, AppError> {
+    let path = get_codex_model_catalog_path();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
+    let value: Value = serde_json::from_str(&content).map_err(|e| AppError::json(&path, e))?;
+    Ok(Some(value))
+}
+
+/// Overwrite the model catalog file with `content`.
+///
+/// The file is treated as user-owned when no provider carries `modelCatalog`
+/// material: cc-switch only transports it (sync) and never regenerates it.
+/// Fails instead of creating a missing `~/.codex` directory.
+pub fn write_codex_model_catalog_file(content: &Value) -> Result<(), AppError> {
+    let path = get_codex_model_catalog_path();
+    if let Some(parent) = path.parent() {
+        if !parent.is_dir() {
+            return Err(AppError::localized(
+                "codex.catalog.dir_missing",
+                "Codex 配置目录不存在,拒绝创建",
+                "The Codex config directory does not exist; refusing to create it",
+            ));
+        }
+    }
+    write_json_file(&path, content)
+}
+
+/// Ensure config.toml references the catalog file (idempotent, minimal diff).
+/// Returns whether the key was added. No-op when config.toml does not exist.
+pub fn ensure_codex_catalog_reference_in_config() -> Result<bool, AppError> {
+    let config_path = get_codex_config_path();
+    if !config_path.is_file() {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&config_path).map_err(|e| AppError::io(&config_path, e))?;
+    let updated = set_codex_model_catalog_json_field(&text, Some(&get_codex_model_catalog_path()))?;
+    if updated == text {
+        return Ok(false);
+    }
+    write_text_file(&config_path, &updated)?;
+    Ok(true)
+}
+
+/// Whether config.toml currently references the managed catalog file.
+pub fn codex_catalog_referenced_in_config() -> bool {
+    let Ok(text) = std::fs::read_to_string(get_codex_config_path()) else {
+        return false;
+    };
+    text.parse::<DocumentMut>()
+        .ok()
+        .and_then(|doc| {
+            doc.get("model_catalog_json")
+                .and_then(|v| v.as_str())
+                .map(|_| ())
+        })
+        .is_some()
 }
 
 pub fn prepare_codex_config_text_with_model_catalog(
@@ -1640,6 +1711,52 @@ fn non_empty(value: &str) -> Option<&str> {
         None
     } else {
         Some(trimmed)
+    }
+}
+
+#[cfg(test)]
+mod catalog_key_tests {
+    use super::*;
+    use crate::test_support::TestEnvGuard;
+
+    #[test]
+    fn catalog_key_kept_while_file_exists_and_stripped_when_gone() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _env = TestEnvGuard::isolated(temp.path());
+        let catalog_path = get_codex_model_catalog_path();
+        std::fs::create_dir_all(catalog_path.parent().unwrap()).expect("dir");
+
+        // File present: the None branch (provider without material) must keep
+        // — and ensure — the key so hand-maintained catalogs survive switches.
+        std::fs::write(&catalog_path, "{}").expect("seed file");
+        let text = set_codex_model_catalog_json_field(
+            "model_catalog_json = \"cc-switch-model-catalog.json\"\n",
+            None,
+        )
+        .expect("keep key");
+        assert!(
+            text.contains("model_catalog_json"),
+            "key must survive: {text}"
+        );
+        // And ensure it when the snapshot text lacks it.
+        let added =
+            set_codex_model_catalog_json_field("model = \"gpt-5\"\n", None).expect("ensure key");
+        assert!(
+            added.contains("model_catalog_json"),
+            "key must be ensured: {added}"
+        );
+
+        // File gone: the key is stripped again (no dangling reference).
+        std::fs::remove_file(&catalog_path).expect("remove file");
+        let stripped = set_codex_model_catalog_json_field(
+            "model_catalog_json = \"cc-switch-model-catalog.json\"\n",
+            None,
+        )
+        .expect("strip key");
+        assert!(
+            !stripped.contains("model_catalog_json"),
+            "key must be stripped: {stripped}"
+        );
     }
 }
 
