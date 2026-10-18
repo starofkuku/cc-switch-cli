@@ -105,6 +105,11 @@ pub fn router(state: ServerState) -> Router {
             post(routes::prompts::activate_prompt),
         )
         .route(
+            "/api/apps/:app/common-config",
+            get(routes::common_config::get_common_config)
+                .put(routes::common_config::put_common_config),
+        )
+        .route(
             "/api/apps/codex/model-catalog",
             get(routes::codex_catalog::get_catalog).put(routes::codex_catalog::put_catalog),
         )

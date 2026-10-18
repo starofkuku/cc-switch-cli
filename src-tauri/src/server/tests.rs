@@ -113,6 +113,100 @@ async fn openapi_document_lists_core_paths() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn common_config_read_write_and_clear() {
+    init_test_env();
+    let (addr, _state) = spawn_test_server().await;
+    let auth = "Bearer test-token-0123456789abcdef";
+
+    // Unset → null content with the json format hint.
+    let base = format!("http://{addr}/api/apps/claude/common-config");
+    let empty = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("get empty")
+        .json::<serde_json::Value>()
+        .await
+        .expect("empty body");
+    assert_eq!(empty["content"], serde_json::Value::Null);
+    assert_eq!(empty["format"], "json");
+
+    // PUT canonicalizes JSON (pretty-printed, object required).
+    let put = client()
+        .put(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "{\"b\":1,\"a\":2}" }))
+        .send()
+        .await
+        .expect("put json");
+    assert_eq!(put.status(), 200);
+    let got = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("get after put")
+        .json::<serde_json::Value>()
+        .await
+        .expect("body");
+    let content = got["content"].as_str().expect("content");
+    assert!(content.contains("\n"), "must be pretty-printed: {content}");
+
+    // Invalid JSON → 400.
+    let bad = client()
+        .put(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "not-json" }))
+        .send()
+        .await
+        .expect("bad put");
+    assert_eq!(bad.status(), 400);
+
+    // Codex speaks TOML.
+    let codex_base = format!("http://{addr}/api/apps/codex/common-config");
+    let meta = client()
+        .get(&codex_base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("codex get")
+        .json::<serde_json::Value>()
+        .await
+        .expect("codex body");
+    assert_eq!(meta["format"], "toml");
+    let toml_put = client()
+        .put(&codex_base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "[a]\nb = 1\n" }))
+        .send()
+        .await
+        .expect("toml put");
+    assert_eq!(toml_put.status(), 200, "{:?}", toml_put.text().await);
+
+    // Empty string clears.
+    let clear = client()
+        .put(&base)
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "content": "" }))
+        .send()
+        .await
+        .expect("clear");
+    let clear_body: serde_json::Value = clear.json().await.expect("clear body");
+    assert_eq!(clear_body["cleared"], true);
+    let after = client()
+        .get(&base)
+        .header("Authorization", auth)
+        .send()
+        .await
+        .expect("get after clear")
+        .json::<serde_json::Value>()
+        .await
+        .expect("body");
+    assert_eq!(after["content"], serde_json::Value::Null);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_model_catalog_edit_endpoints() {
     init_test_env();
     let home = crate::config::home_dir().expect("home");

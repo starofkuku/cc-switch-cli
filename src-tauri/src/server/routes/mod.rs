@@ -2,6 +2,7 @@
 
 pub(crate) mod apps;
 pub(crate) mod codex_catalog;
+pub(crate) mod common_config;
 pub(crate) mod docs;
 pub(crate) mod mcp;
 pub(crate) mod prompts;

@@ -173,7 +173,10 @@ fn read_required_text(
     }
 }
 
-fn canonical_common_snippet(app_type: AppType, raw: &str) -> Result<Option<String>, AppError> {
+pub(crate) fn canonical_common_snippet(
+    app_type: AppType,
+    raw: &str,
+) -> Result<Option<String>, AppError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
