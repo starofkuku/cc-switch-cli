@@ -7,6 +7,12 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.28] - 2026-10-17
+
+### Added
+
+- **Server / per-app common config endpoints**: `GET /api/apps/{app}/common-config` returns the raw snippet text (`content: null` when unset) plus a `format` hint (json everywhere, toml for codex); `PUT` stores raw text canonicalized exactly like the CLI `config common set` (pretty-printed JSON object / normalized TOML — the very same function is reused, so the two paths can never drift), with an empty string clearing the snippet. Same transactional guarantees as the CLI: validation against the current provider, the cleared-marker that blocks re-seeding, and the live rewrite when the current provider uses the snippet. Parse errors map to 400, business conflicts to 409; a `common_config_updated` SSE event fires on every write.
+
 ## [5.10.27] - 2026-10-17
 
 ### Added
