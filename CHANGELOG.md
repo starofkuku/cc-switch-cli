@@ -7,6 +7,13 @@ All notable changes to CC Switch CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.29] - 2026-10-20
+
+### Fixed
+
+- **Server / reads match the CLI after external writes**: the long-lived `cc-switch server` built its in-memory config snapshot and settings cache once at startup, so providers/prompts/MCP/common-config reads kept serving stale data after another process (CLI, TUI, GUI, or a WebDAV download from a different binary) changed the database or `settings.json`. Every authenticated `GET` now reloads both from disk before dispatching, so API responses match a freshly started CLI process. Mutations are excluded — the services that handle them already keep memory and database in step, and reloading underneath a concurrent write could discard an in-flight in-memory change.
+- **Server / `current` provider uses the same source as the CLI**: `GET /api/apps/{app}/providers` and `GET /api/apps/{app}/providers/{id}` resolved `current` from the database's `is_current` column only, while the CLI — and the code that actually writes the live config — prefers `settings.json`'s `currentProviderCodex`/`currentProviderClaude`/… and falls back to the database. After a WebDAV download the two disagreed: the API reported the snapshot's provider, the CLI (and the live config) the local one. Both endpoints now call `ProviderService::current`, so the API reports the locally effective provider.
+
 ## [5.10.28] - 2026-10-17
 
 ### Added
