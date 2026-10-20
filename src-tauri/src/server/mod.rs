@@ -15,6 +15,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::State;
+use axum::middleware::Next;
 use axum::routing::{get, patch, post};
 use axum::Router;
 use tokio::net::TcpListener;
@@ -63,6 +65,30 @@ pub fn build_state(config: &ServerConfig) -> Result<ServerState, crate::error::A
         events: EventBus::new(),
         started_at: std::time::Instant::now(),
     })
+}
+
+/// The server is long-lived, while the CLI/GUI/TUI are short-lived writers that
+/// each build a fresh `AppState` from disk. Refresh the in-memory snapshot and
+/// the settings cache before every authenticated read so responses report the
+/// same state a freshly started CLI process would.
+///
+/// Only reads are refreshed: mutation handlers go through services that keep
+/// memory and the database in step themselves, and reloading underneath a
+/// concurrent write could discard an in-flight in-memory change.
+async fn refresh_state_middleware(
+    State(state): State<ServerState>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if request.method() == axum::http::Method::GET {
+        if let Err(err) = state.app.reload_config_snapshot_from_db() {
+            log::warn!("server: failed to reload config snapshot from database: {err}");
+        }
+        if let Err(err) = crate::settings::reload_settings() {
+            log::warn!("server: failed to reload settings.json: {err}");
+        }
+    }
+    next.run(request).await
 }
 
 pub fn router(state: ServerState) -> Router {
@@ -160,6 +186,10 @@ pub fn router(state: ServerState) -> Router {
             get(routes::settings::get_settings).patch(routes::settings::update_settings),
         )
         .route("/api/events", get(routes::events_route))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            refresh_state_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,

@@ -41,18 +41,13 @@ fn summary(id: &str, provider: &Provider, current: &str) -> ProviderSummary {
     }
 }
 
+/// Resolve the active provider exactly like `ProviderService::current` does for
+/// the CLI: `settings.json` wins when it names a provider that still exists,
+/// falling back to the database's `is_current` column. Reading the in-memory
+/// snapshot here would report the last synced value instead of the locally
+/// effective one, which is what actually gets written to the live config.
 fn current_of(state: &ServerState, app: &crate::app_config::AppType) -> String {
-    state
-        .app
-        .config
-        .read()
-        .ok()
-        .and_then(|config| {
-            config
-                .get_manager(app)
-                .map(|manager| manager.current.clone())
-        })
-        .unwrap_or_default()
+    crate::services::ProviderService::current(&state.app, app.clone()).unwrap_or_default()
 }
 
 #[utoipa::path(
